@@ -5,12 +5,14 @@ import DownloadManager from './components/DownloadManager';
 import SettingsPage from './components/Settings';
 import Player from './components/Player';
 import Browse from './components/Browse';
+import Quchong from './components/Quchong';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
   { id: 'download', label: '搜索与下载', icon: Search },
   { id: 'player', label: '我的剧库', icon: Play },
   { id: 'manager', label: '下载管理', icon: Download },
+  { id: 'quchong', label: '视频处理', icon: Film },
   { id: 'settings', label: '设置', icon: Settings },
 ];
 
@@ -55,6 +57,8 @@ export default function App() {
         return <Player active={page === id} target={playerTarget} onNavigate={navigate} />;
       case 'manager':
         return <DownloadManager active={page === id} onNavigate={navigate} />;
+      case 'quchong':
+        return <Quchong active={page === id} />;
       case 'settings':
         return <SettingsPage active={page === id} />;
       case 'download':

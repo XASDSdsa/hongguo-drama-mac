@@ -19,6 +19,7 @@ const { randomUUID, createHash } = require('node:crypto');
 
 const hongguo = require('./src/native/hongguo');
 const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
+const quchong = require('./src/native/quchong');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
@@ -1083,6 +1084,191 @@ function findFileRecursive(dir, fileName, depth) {
   }
   return null;
 }
+
+// ===== 视频处理（quchong_app 逻辑的 Node/FFmpeg 实现） =====
+// 处理任务独立于下载任务，避免把长时间转码误显示成下载进度。
+const quchongBatches = new Map();
+
+function quchongPathKey(file) {
+  const resolved = path.resolve(file);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function allocateQuchongDestinations(sources, outputDir) {
+  const reserved = new Set(sources.map(quchongPathKey));
+  return sources.map((source) => {
+    const parsed = path.parse(source);
+    const base = `${parsed.name}_去重`;
+    let index = 0;
+    let candidate;
+    do {
+      candidate = path.join(outputDir, `${base}${index ? `_${index}` : ''}.mp4`);
+      index += 1;
+    } while (reserved.has(quchongPathKey(candidate)) || fs.existsSync(candidate));
+    reserved.add(quchongPathKey(candidate));
+    return candidate;
+  });
+}
+
+function quchongTaskPayload(task) {
+  return {
+    id: task.id,
+    src: task.src,
+    dst: task.dst,
+    name: path.basename(task.src),
+    status: task.status,
+    progress: task.progress || 0,
+    error: task.error || '',
+    path: task.status === 'completed' ? task.dst : undefined,
+  };
+}
+
+function emitQuchongTask(batch, task) {
+  sendToRenderer('quchong-task', { batchId: batch.id, task: quchongTaskPayload(task) });
+}
+
+function finishQuchongBatch(batch) {
+  if (batch.finished || batch.active > 0 || batch.queue.length > 0) return;
+  batch.finished = true;
+  const tasks = batch.tasks.map(quchongTaskPayload);
+  sendToRenderer('quchong-complete', {
+    batchId: batch.id,
+    cancelled: batch.cancelled,
+    success: !batch.cancelled && tasks.every((task) => task.status === 'completed'),
+    tasks,
+  });
+  quchongBatches.delete(batch.id);
+}
+
+function pumpQuchongBatch(batch) {
+  if (batch.finished) return;
+  while (!batch.cancelled && batch.active < batch.concurrency && batch.queue.length) {
+    const task = batch.queue.shift();
+    task.status = 'running';
+    task.progress = 0;
+    batch.active += 1;
+    const controller = new AbortController();
+    batch.controllers.set(task.id, controller);
+    emitQuchongTask(batch, task);
+    quchong.runJob({
+      ffmpegPath: batch.ffmpegPath,
+      ffprobePath: batch.ffprobePath,
+      src: task.src,
+      dst: task.dst,
+      bgm: batch.bgm,
+      opts: batch.opts,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        task.progress = progress;
+        sendToRenderer('quchong-progress', { batchId: batch.id, taskId: task.id, progress });
+      },
+      onLog: (line) => sendToRenderer('quchong-log', { batchId: batch.id, taskId: task.id, line }),
+    }).then((result) => {
+      task.status = 'completed';
+      task.progress = 100;
+      task.path = result.path;
+    }).catch((error) => {
+      task.status = batch.cancelled || controller.signal.aborted ? 'stopped' : 'failed';
+      task.error = error?.message || String(error);
+    }).finally(() => {
+      batch.controllers.delete(task.id);
+      batch.active -= 1;
+      emitQuchongTask(batch, task);
+      pumpQuchongBatch(batch);
+      finishQuchongBatch(batch);
+    });
+  }
+  if (batch.cancelled) {
+    while (batch.queue.length) {
+      const task = batch.queue.shift();
+      task.status = 'stopped';
+      task.error = '已取消';
+      emitQuchongTask(batch, task);
+    }
+  }
+  finishQuchongBatch(batch);
+}
+
+function cancelAllQuchongBatches() {
+  for (const batch of quchongBatches.values()) {
+    batch.cancelled = true;
+    for (const controller of batch.controllers.values()) controller.abort();
+    pumpQuchongBatch(batch);
+  }
+}
+
+ipcMain.handle('quchong-defaults', () => ({ ...quchong.DEFAULTS }));
+
+ipcMain.handle('quchong-select-videos', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi'] }],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
+ipcMain.handle('quchong-select-audio', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: '音频文件', extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('quchong-start', async (_event, payload = {}) => {
+  try {
+    if ([...quchongBatches.values()].some((batch) => !batch.finished)) {
+      return { success: false, error: '已有视频处理任务正在运行' };
+    }
+    const sources = [...new Set(Array.isArray(payload.sources) ? payload.sources : [])]
+      .map((file) => path.resolve(String(file)));
+    if (!sources.length) return { success: false, error: '请先选择视频文件' };
+    if (sources.length > 200) return { success: false, error: '单次最多处理 200 个视频' };
+    for (const file of sources) {
+      const stat = await fsp.stat(file).catch(() => null);
+      if (!stat?.isFile()) return { success: false, error: `找不到输入文件：${file}` };
+    }
+    if (typeof payload.outputDir !== 'string' || !payload.outputDir.trim()) {
+      return { success: false, error: '请选择有效的输出目录' };
+    }
+    const outputDir = path.resolve(payload.outputDir);
+    await fsp.mkdir(outputDir, { recursive: true });
+    const opts = quchong.validateOptions(payload.opts || {});
+    const bgm = payload.bgm ? path.resolve(String(payload.bgm)) : null;
+    if (bgm) {
+      const stat = await fsp.stat(bgm).catch(() => null);
+      if (!stat?.isFile()) return { success: false, error: `找不到 BGM 文件：${bgm}` };
+    }
+    const ffmpegPath = resolveFfmpeg('ffmpeg');
+    const ffprobePath = resolveFfmpeg('ffprobe');
+    if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
+
+    const id = randomUUID();
+    const destinations = allocateQuchongDestinations(sources, outputDir);
+    const batch = {
+      id, opts, bgm, ffmpegPath, ffprobePath, concurrency: opts.jobs,
+      queue: [], active: 0, controllers: new Map(), cancelled: false, finished: false,
+      tasks: sources.map((src, index) => ({ id: randomUUID(), src, dst: destinations[index], status: 'pending', progress: 0, error: '' })),
+    };
+    batch.queue = [...batch.tasks];
+    quchongBatches.set(id, batch);
+    batch.tasks.forEach((task) => emitQuchongTask(batch, task));
+    // 先把 batchId 返回给渲染进程，再开始跑第一条任务，避免极短视频的完成事件抢在响应之前。
+    setImmediate(() => pumpQuchongBatch(batch));
+    return { success: true, batchId: id, tasks: batch.tasks.map(quchongTaskPayload) };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('quchong-cancel', async (_event, batchId) => {
+  const batch = quchongBatches.get(String(batchId));
+  if (!batch) return { success: false, error: '任务不存在或已经结束' };
+  batch.cancelled = true;
+  for (const controller of batch.controllers.values()) controller.abort();
+  pumpQuchongBatch(batch);
+  return { success: true };
+});
 
 function probeDuration(ffprobePath, file, task) {
   return new Promise((resolve) => {
@@ -2859,6 +3045,7 @@ function createWindow() {
   mainWindow.on('closed', () => {
     clearOnlineCache();
     for (const job of compatPreparing.values()) { job.cancelled = true; job.controller.abort(); }
+    cancelAllQuchongBatches();
     mainWindow = null;
   });
 }

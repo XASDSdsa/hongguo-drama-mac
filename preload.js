@@ -121,6 +121,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFolder: (taskId) => ipcRenderer.invoke('open-folder', taskId),
   showInFolder: (filePath) => ipcRenderer.invoke('show-in-folder', filePath),
 
+  // 本地视频处理（去重）
+  quchongDefaults: () => ipcRenderer.invoke('quchong-defaults'),
+  quchongSelectVideos: () => ipcRenderer.invoke('quchong-select-videos'),
+  quchongSelectAudio: () => ipcRenderer.invoke('quchong-select-audio'),
+  quchongStart: (payload) => ipcRenderer.invoke('quchong-start', payload),
+  quchongCancel: (batchId) => ipcRenderer.invoke('quchong-cancel', batchId),
+  onQuchongTask: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('quchong-task', listener);
+    return () => ipcRenderer.removeListener('quchong-task', listener);
+  },
+  onQuchongProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('quchong-progress', listener);
+    return () => ipcRenderer.removeListener('quchong-progress', listener);
+  },
+  onQuchongLog: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('quchong-log', listener);
+    return () => ipcRenderer.removeListener('quchong-log', listener);
+  },
+  onQuchongComplete: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('quchong-complete', listener);
+    return () => ipcRenderer.removeListener('quchong-complete', listener);
+  },
+
   // 一键启动 / 一键暂停 / 队列状态
   pauseAll: () => ipcRenderer.invoke('pause-all'),
   resumeAll: () => ipcRenderer.invoke('resume-all'),

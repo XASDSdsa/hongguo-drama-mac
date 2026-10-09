@@ -14,6 +14,7 @@
     "build:dir": "npm run build:react && electron-builder --win --dir",
     "build:portable": "npm run build:react && electron-builder --win portable",
     "build:installer": "npm run build:react && electron-builder --win nsis",
+    "check:quchong": "node scripts/check-quchong.cjs",
     "pack": "electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
