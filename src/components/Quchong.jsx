@@ -16,6 +16,9 @@ function fileName(file) {
 export default function Quchong({ active = true }) {
   const [files, setFiles] = useState([]);
   const [library, setLibrary] = useState([]);
+  const [libraryLoaded, setLibraryLoaded] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(false);
   const [outputDir, setOutputDir] = useState('');
   const [bgm, setBgm] = useState('');
   const [opts, setOpts] = useState(fallbackDefaults);
@@ -36,15 +39,34 @@ export default function Quchong({ active = true }) {
     Promise.all([
       window.electronAPI.quchongDefaults?.(),
       window.electronAPI.getSettings?.(),
-      window.electronAPI.getDownloadTasks?.(),
-    ]).then(([defaults, settings, downloads]) => {
+    ]).then(([defaults, settings]) => {
       if (!alive) return;
       if (defaults) setOpts((value) => ({ ...value, ...defaults }));
       if (settings?.root) setOutputDir(`${settings.root}/红果短剧/处理后`);
-      if (Array.isArray(downloads)) setLibrary(downloads.filter((task) => task.status === 'completed' && task.savePath));
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  const toggleLibrary = useCallback(async () => {
+    if (libraryOpen) {
+      setLibraryOpen(false);
+      return;
+    }
+    setLibraryOpen(true);
+    if (libraryLoaded) return;
+    setLibraryLoading(true);
+    try {
+      const downloads = await window.electronAPI.getDownloadTasks?.({ completedOnly: true, limit: 50 });
+      if (Array.isArray(downloads)) {
+        setLibrary(downloads);
+      }
+      setLibraryLoaded(true);
+    } catch (_) {
+      setNotice('读取已下载视频失败，请改用“添加文件”选择视频。');
+    } finally {
+      setLibraryLoading(false);
+    }
+  }, [libraryLoaded, libraryOpen]);
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -116,8 +138,17 @@ export default function Quchong({ active = true }) {
 
       <section className="qc-card">
         <div className="qc-card-title"><span>输入视频</span><div className="qc-actions"><button className="btn btn-sm" onClick={async () => addFiles(await window.electronAPI.quchongSelectVideos())} disabled={running}><Plus size={14} /> 添加文件</button></div></div>
-        {files.length ? <div className="qc-file-list">{files.map((file) => <div className="qc-file" key={file}><Film size={15} /><span title={file}>{fileName(file)}</span><button className="icon-btn" onClick={() => setFiles((old) => old.filter((item) => item !== file))} disabled={running}><X size={15} /></button></div>)}</div> : <div className="qc-empty">可添加本地视频，或从下方已下载列表加入。</div>}
-        {library.length > 0 && <div className="qc-library"><div className="qc-subtitle">已下载视频</div>{library.slice(0, 12).map((task) => <div className="qc-library-row" key={task.id}><span title={task.savePath}>{fileName(task.savePath)}</span><button className="btn btn-sm" onClick={() => addFiles([task.savePath])} disabled={running || files.includes(task.savePath)}>加入</button></div>)}</div>}
+        {files.length ? <div className="qc-file-list">{files.map((file) => <div className="qc-file" key={file}><Film size={15} /><span title={file}>{fileName(file)}</span><button className="icon-btn" onClick={() => setFiles((old) => old.filter((item) => item !== file))} disabled={running}><X size={15} /></button></div>)}</div> : <div className="qc-empty">可添加本地视频，或按需从已下载视频中选择。</div>}
+        <div className="qc-library-toggle">
+          <button className="btn btn-sm" onClick={toggleLibrary} disabled={running || libraryLoading}>
+            {libraryLoading ? '读取下载记录…' : libraryOpen ? '收起已下载视频' : '从已下载视频中选择'}
+          </button>
+          {!libraryOpen && <span className="qc-hint">默认不展开，避免下载记录过多影响页面。</span>}
+        </div>
+        {libraryOpen && <div className="qc-library">
+          <div className="qc-subtitle">已下载视频（最多显示最近 50 个）</div>
+          {library.length ? library.map((task) => <div className="qc-library-row" key={task.id}><span title={task.savePath}>{fileName(task.savePath)}</span><button className="btn btn-sm" onClick={() => addFiles([task.savePath])} disabled={running || files.includes(task.savePath)}>加入</button></div>) : <div className="qc-empty">没有找到已完成的本地视频，请使用“添加文件”。</div>}
+        </div>}
       </section>
 
       <section className="qc-card">
@@ -151,7 +182,7 @@ export default function Quchong({ active = true }) {
         <div className="qc-checks"><label><input type="checkbox" checked={opts.black_intro} onChange={(event) => update('black_intro', event.target.checked)} /> 黑片头</label><label><input type="checkbox" checked={opts.vignette} onChange={(event) => update('vignette', event.target.checked)} /> 暗角</label><label><input type="checkbox" checked={opts.eq_enable} onChange={(event) => update('eq_enable', event.target.checked)} /> 音频均衡</label></div>
       </section>
 
-      <div className="qc-footer"><button className="btn btn-primary" onClick={start} disabled={running || !files.length}><Play size={15} /> 开始处理</button><button className="btn" onClick={cancel} disabled={!running}><Square size={14} /> 停止</button><button className="btn" onClick={() => { setFiles([]); setTasks([]); setLogs([]); setNotice(''); }} disabled={running}><Trash2 size={14} /> 清空</button></div>
+      <div className="qc-footer"><button className="btn btn-primary" onClick={start} disabled={running}><Play size={15} /> 开始处理</button><button className="btn" onClick={cancel} disabled={!running}><Square size={14} /> 停止</button><button className="btn" onClick={() => { setFiles([]); setTasks([]); setLogs([]); setNotice(''); }} disabled={running}><Trash2 size={14} /> 清空</button></div>
       {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">{completed}/{tasks.length} 完成</span></div>{tasks.map((task) => <div className="qc-progress-row" key={task.id}><span title={task.name}>{fileName(task.name)}</span><div className="qc-progress"><i style={{ width: `${task.progress || 0}%` }} /></div><em>{task.status === 'completed' ? '完成' : task.status === 'running' ? `${Math.round(task.progress || 0)}%` : task.status === 'failed' ? '失败' : task.status === 'stopped' ? '已停止' : '等待'}</em></div>)}{logs.length > 0 && <pre className="qc-log">{logs.join('\n')}</pre>}</section>}
     </div>
   );

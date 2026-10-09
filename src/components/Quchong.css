@@ -15,6 +15,7 @@
 .qc-file span, .qc-library-row span, .qc-progress-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qc-file .icon-btn { margin-left: auto; flex: 0 0 auto; width: 25px; height: 25px; }
 .qc-library { margin-top: 17px; border-top: 1px solid var(--border-muted); padding-top: 12px; }
+.qc-library-toggle { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .qc-subtitle { color: var(--text-secondary); font-size: 11px; margin-bottom: 7px; }
 .qc-library-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
 .qc-library-row span { flex: 1; }

@@ -104,7 +104,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testProxy: (draft) => ipcRenderer.invoke('test-proxy', draft),
 
   // 下载管理
-  getDownloadTasks: () => ipcRenderer.invoke('get-download-tasks'),
+  getDownloadTasks: (options) => ipcRenderer.invoke('get-download-tasks', options),
   deleteTask: (taskId) => ipcRenderer.invoke('delete-task', taskId),
   deleteTasks: (taskIds) => ipcRenderer.invoke('delete-tasks', taskIds),
 

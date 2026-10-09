@@ -2544,7 +2544,7 @@ ipcMain.handle('test-proxy', async (event, draft) => {
 });
 
 // ===== IPC：下载管理 =====
-ipcMain.handle('get-download-tasks', () => {
+ipcMain.handle('get-download-tasks', (_event, options = {}) => {
   const STATUS_ORDER = {
     downloading: 0,
     pending: 1,
@@ -2561,7 +2561,11 @@ ipcMain.handle('get-download-tasks', () => {
     }
     return (b.endTime || b.startTime || 0) - (a.endTime || a.startTime || 0);
   });
-  return sorted.map((task) => {
+  const completedOnly = options?.completedOnly === true;
+  const requestedLimit = Number(options?.limit);
+  const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 0;
+  const selected = completedOnly ? sorted.filter((task) => task.status === 'completed' && task.savePath) : sorted;
+  return (limit ? selected.slice(0, limit) : selected).map((task) => {
     const { cancelSource, writer, ...serializableTask } = task;
     if (task.status === 'completed' && !hasCompleteTaskFile(task)) {
       return { ...serializableTask, status: 'failed', progress: 0, error: '本地文件已丢失或路径冲突，请重新下载' };
