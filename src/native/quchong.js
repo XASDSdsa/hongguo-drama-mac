@@ -17,8 +17,8 @@ const DEFAULTS = Object.freeze({
   speed_max: 1.05,
   rotation_max: 0.008,
   rgb_shift: 2,
-  noise_min: 6,
-  noise_max: 9,
+  noise_min: 4,
+  noise_max: 7,
   contrast: 1.06,
   saturation: 1.25,
   hue_range: 12,
@@ -101,13 +101,30 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   const origin = hasAudio ? Math.min(media.video_start, media.audio_start) : media.video_start;
   const videoDelay = Math.max(0, (media.video_start - origin) / speed + intro);
   const audioDelay = Math.max(0, (media.audio_start - origin) / speed + intro);
+  const horizontal = media.video_width > media.video_height;
   const vf = [
     `crop=iw*${opts.crop_ratio}:ih*${opts.crop_ratio}:x=(iw-ow)*${r.CX.toFixed(6)}:y=(ih-oh)*${r.CY.toFixed(6)}`,
   ];
-  if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
-  vf.push(`scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`, 'setsar=1');
+  const filters = [];
+  let videoInput = '[0:V:0]';
+  if (horizontal) {
+    // Keep the source's landscape composition while filling the portrait canvas.
+    filters.push('[0:V:0]split=2[bgsrc][fgsrc]');
+    filters.push(`[bgsrc]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:1,setsar=1[bg]`);
+    filters.push(`[fgsrc]${vf.join(',')},scale=${width}:-2,setsar=1[fg]`);
+    filters.push('[bg][fg]overlay=(W-w)/2:(H-h)/2[vbase]');
+    videoInput = '[vbase]';
+    vf.length = 0;
+  }
+  if (!horizontal) {
+    if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
+    vf.push(`scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`, 'setsar=1');
+  } else if (r.ROT > 0) {
+    vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`, `scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`, 'setsar=1');
+  }
   if (opts.rgb_shift > 0) vf.push(`rgbashift=rh=${opts.rgb_shift}:rv=1:gh=0:gv=0:bh=-${opts.rgb_shift}:bv=1`);
   if (r.NOISE > 0) vf.push(`noise=alls=${r.NOISE}:allf=t`);
+  vf.push('unsharp=5:5:0.8');
   vf.push(`setpts=(PTS-STARTPTS)/${speed.toFixed(6)}`);
   vf.push(`eq=contrast=${opts.contrast}:saturation=${opts.saturation},hue=h=${r.HUE}`);
   if (opts.vignette) vf.push('vignette=PI/5');
@@ -115,7 +132,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   if (videoDelay > 0) vf.push(`tpad=start_duration=${videoDelay.toFixed(6)}:color=black`);
   if (opts.black_intro) vf.push(`fade=t=in:st=${videoDelay.toFixed(6)}:d=0.3`);
 
-  const filters = [`[0:V:0]${vf.join(',')}[v]`];
+  filters.push(`${videoInput}${vf.join(',')}[v]`);
   const inputs = ['-i', src];
   const audioOutput = hasAudio || Boolean(bgm);
   if (hasAudio) {
@@ -160,13 +177,21 @@ function execJson(ffprobePath, args, signal) {
 }
 
 async function probeMedia(ffprobePath, file, signal) {
-  const data = await execJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,start_time:stream_disposition=attached_pic', '-of', 'json', file], signal);
+  const data = await execJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,start_time,width,height:stream_disposition=attached_pic', '-of', 'json', file], signal);
   const streams = Array.isArray(data.streams) ? data.streams : [];
   const videos = streams.filter((s) => s.codec_type === 'video' && !s.disposition?.attached_pic);
   const audios = streams.filter((s) => s.codec_type === 'audio');
   const start = (list) => Number.isFinite(Number(list[0]?.start_time)) ? Number(list[0].start_time) : 0;
   const duration = Number(data.format?.duration);
-  return { duration: Number.isFinite(duration) && duration > 0 ? duration : 0, has_video: videos.length > 0, has_audio: audios.length > 0, video_start: start(videos), audio_start: start(audios) };
+  return {
+    duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
+    has_video: videos.length > 0,
+    has_audio: audios.length > 0,
+    video_width: Number(videos[0]?.width) || 0,
+    video_height: Number(videos[0]?.height) || 0,
+    video_start: start(videos),
+    audio_start: start(audios),
+  };
 }
 
 function tailPush(state, chunk) {

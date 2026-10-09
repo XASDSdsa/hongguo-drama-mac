@@ -31,13 +31,14 @@ async function main() {
     const opts = {
       ...quchong.DEFAULTS, encoder: 'cpu', quality: 'lean', resolution: '720x1280',
       speed_min: 1, speed_max: 1, pitch_min: 1, pitch_max: 1,
-      rotation_max: 0, rgb_shift: 0, noise_min: 0, noise_max: 0,
+      rotation_max: 0.004, rgb_shift: 0, noise_min: 0, noise_max: 0,
       hue_range: 0, vignette: false, black_intro: false, eq_enable: false,
     };
     await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst: audioOnlyOutput, opts });
     await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst, bgm, opts });
     const output = await quchong.probeMedia(ffprobe, dst);
     if (!output.has_video || !output.has_audio) throw new Error('合成输出缺少音视频轨道');
+    if (output.video_width !== 720 || output.video_height !== 1280) throw new Error(`输出尺寸错误：${output.video_width}x${output.video_height}`);
     await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src: silent, dst: silentOutput, bgm, opts });
     const silentResult = await quchong.probeMedia(ffprobe, silentOutput);
     if (!silentResult.has_video || !silentResult.has_audio) throw new Error('无原音+BGM 输出缺少音频轨道');

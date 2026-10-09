@@ -4,7 +4,7 @@ import { Film, Folder, Plus, X, Play, Square, Trash2 } from './icons';
 
 const fallbackDefaults = {
   crop_ratio: 0.94, speed_min: 1.03, speed_max: 1.05, pitch_min: 1.04, pitch_max: 1.07,
-  rotation_max: 0.008, rgb_shift: 2, noise_min: 6, noise_max: 9, contrast: 1.06, saturation: 1.25, hue_range: 12,
+  rotation_max: 0.008, rgb_shift: 2, noise_min: 4, noise_max: 7, contrast: 1.06, saturation: 1.25, hue_range: 12,
   vignette: true, black_intro: true, eq_enable: true, orig_volume: 0.5, bgm_volume: 0.15,
   resolution: '1080x1920', encoder: 'auto', quality: 'standard', jobs: 1,
 };
