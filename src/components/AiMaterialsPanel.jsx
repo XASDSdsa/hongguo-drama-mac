@@ -38,6 +38,7 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
   const [error, setError] = useState('');
   const [coverBusy, setCoverBusy] = useState(false);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [showAllCopyTasks, setShowAllCopyTasks] = useState(false);
   const coverBusyRef = useRef(false);
   const copyBusyRef = useRef(false);
   const autoSelectedSeries = useRef('');
@@ -71,6 +72,14 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
   const finishedCopyTasks = copyTasks.filter(task => task.status === 'completed').length;
   const coverTask = coverTasks[coverTasks.length - 1];
   const coverPreview = coverTask?.coverUrl || aiCover?.coverUrl || null;
+  const copyTaskOrder = useMemo(() => [...copyTasks].sort((a, b) => {
+    const aActive = !['completed', 'failed', 'stopped'].includes(a.status);
+    const bActive = !['completed', 'failed', 'stopped'].includes(b.status);
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return Number(a?.startedAt || a?.createdAt || 0) - Number(b?.startedAt || b?.createdAt || 0);
+  }), [copyTasks]);
+  const visibleCopyTasks = showAllCopyTasks ? copyTaskOrder : copyTaskOrder.slice(0, copyTaskOrder.filter(task => !['completed', 'failed', 'stopped'].includes(task.status)).length + 80);
+  const hiddenCopyTaskCount = Math.max(0, copyTaskOrder.length - visibleCopyTasks.length);
 
   const loadTasks = useCallback(async () => {
     if (!active || typeof window.electronAPI?.getAiMaterialTasks !== 'function') return;
@@ -204,11 +213,15 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
     const index = episodeNumber(task);
     const label = task.kind === 'cover' ? '剧集封面' : `第 ${index || '?'} 集文案`;
     const progress = Number(task.progress);
+    const elapsed = Number(task.elapsedSeconds);
+    const runningMessage = Number.isFinite(elapsed) && elapsed >= 0
+      ? `已运行 ${elapsed} 秒 · ${stageText(task)}${Number.isFinite(progress) && progress > 0 ? ` · 阶段进度 ${Math.round(progress)}%` : ''}`
+      : '后台处理中，离开此页面不会中断';
     return <div className={`aim-task ${statusClass(task)}`} key={taskKey(task)}>
       <div className="aim-task-main">
         <div className="aim-task-title"><span>{label}</span><b>{stageText(task)}</b></div>
-        <div className="aim-task-meta">{task.status === 'failed' ? (task.error || '处理失败') : task.status === 'stopped' ? '已取消，可重试' : task.status === 'completed' ? `完成于 ${new Date(task.completedAt || task.updatedAt || Date.now()).toLocaleTimeString()}` : '后台处理中，离开此页面不会中断'}</div>
-        {Number.isFinite(progress) && progress > 0 && <div className="aim-progress" aria-label={`进度 ${Math.round(Math.min(100, progress))}%`}><span style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>}
+        <div className="aim-task-meta">{task.status === 'failed' ? (task.error || '处理失败') : task.status === 'stopped' ? '已取消，可重试' : task.status === 'completed' ? `完成于 ${new Date(task.completedAt || task.updatedAt || Date.now()).toLocaleTimeString()}` : runningMessage}</div>
+        {Number.isFinite(progress) && progress > 0 && <div className="aim-progress" aria-label={`阶段进度 ${Math.round(Math.min(100, progress))}%`}><span style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>}
       </div>
       <div className="aim-task-actions">
         {isDone && <button className="btn btn-ghost btn-sm" onClick={() => openOutput(task)}><Folder size={14} />打开输出</button>}
@@ -237,7 +250,10 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
         {rangeError && <div className="aim-error"><AlertCircle size={14} />{rangeError}</div>}
         <button className="btn btn-primary aim-start-copy" disabled={!active || copyBusy || !selectedDownloaded.length} onClick={startCopies}><Sparkles size={15} />{copyBusy ? '提交中…' : `生成选中文案 (${selectedDownloaded.length})`}</button>
         {activeCopyTasks.length > 0 && <p className="aim-live">当前处理中 {activeCopyTasks.length} 集，完成 {finishedCopyTasks} 集</p>}
-        {!!copyTasks.length && <div className="aim-task-list">{copyTasks.slice(-80).map(renderTask)}</div>}
+        {!!copyTasks.length && <>
+          <div className="aim-task-list">{visibleCopyTasks.map(renderTask)}</div>
+          <div className="aim-task-history"><span>共 {copyTasks.length} 个文案任务</span>{hiddenCopyTaskCount > 0 && <button className="btn btn-ghost btn-sm" onClick={() => setShowAllCopyTasks(true)}>显示全部（还有 {hiddenCopyTaskCount} 个）</button>}{showAllCopyTasks && hiddenCopyTaskCount === 0 && copyTasks.length > 80 && <button className="btn btn-ghost btn-sm" onClick={() => setShowAllCopyTasks(false)}>收起历史</button>}</div>
+        </>}
       </div>
     </div>
     {error && <div className="aim-error" role="alert"><AlertCircle size={14} />{error}</div>}

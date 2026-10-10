@@ -227,6 +227,16 @@
   color: var(--accent);
 }
 
+.aim-task-history {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
 @media (max-width: 820px) {
   .aim-sections { grid-template-columns: 1fr; }
 }

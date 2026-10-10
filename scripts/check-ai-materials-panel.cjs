@@ -54,10 +54,25 @@ function mount(api = {}) {
     assert.equal(coverCalls, 1); waiting.resolve({ success: true, queued: 2, tasks: [] }); await copyRequest; ui.unmount();
   });
 
+  await test('cached copies are skipped without creating duplicate task rows', async () => {
+    let submitted;
+    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: async payload => { submitted = payload; return { success: true, queued: 0, tasks: [], cached: [{ episodeIndex: 1 }] }; } });
+    await ui.flush(); await ui.button('生成选中文案').props.onClick(); await ui.flush();
+    assert.deepEqual(submitted.episodeIndices, [1, 2]); assert.equal(ui.nodes().filter(node => String(node.props?.className || '').includes('aim-task')).length, 0); ui.unmount();
+  });
+
   await test('live backend stage is rendered without changing download state', async () => {
     let notify;
     const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: [{ id: 'c1', kind: 'episode-copy', seriesId: 'A', episodeIndex: 1, status: 'running', stage: 'extracting' }] }), onAiMaterialProgress: callback => { notify = callback; return () => {}; } });
     await ui.flush(); assert.ok(ui.text().includes('提取音频')); notify({ id: 'c1', kind: 'episode-copy', seriesId: 'A', episodeIndex: 1, status: 'running', stage: 'summarizing' }); ui.render(); assert.ok(ui.text().includes('AI 概括')); ui.unmount();
+  });
+
+  await test('active tasks stay visible and long history can be expanded', async () => {
+    const history = Array.from({ length: 85 }, (_, i) => ({ id: `done-${i}`, kind: 'episode-copy', seriesId: 'A', episodeIndex: i + 1, status: 'completed', stage: 'completed' }));
+    history[0] = { id: 'active-old', kind: 'episode-copy', seriesId: 'A', episodeIndex: 900, status: 'running', stage: 'transcribing', elapsedSeconds: 42, progress: 35 };
+    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: history }) });
+    await ui.flush(); assert.ok(ui.text().includes('第 900 集文案')); assert.ok(ui.text().includes('已运行 42 秒')); assert.ok(ui.text().includes('共 85 个文案任务'));
+    assert.ok(ui.button('显示全部').props); ui.button('显示全部').props.onClick(); ui.render(); assert.ok(ui.text().includes('第 85 集文案')); ui.unmount();
   });
 
   console.log(`AI materials panel: ${passed} passed, ${failed} failed`); process.exitCode = failed ? 1 : 0;

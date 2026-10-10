@@ -80,8 +80,8 @@ export default function Quchong({ active = true }) {
     if (!active) return undefined;
     const api = window.electronAPI;
     const offTask = api.onQuchongTask?.((data) => {
-      if (!batchRef.current) batchRef.current = data.batchId;
-      if (batchRef.current !== data.batchId) return;
+      // 页面没有主动提交/恢复批次时，绝不自动认领其他页面或历史任务的事件。
+      if (!batchRef.current || batchRef.current !== data.batchId) return;
       setBatchId(data.batchId);
       setTasks((previous) => {
         const index = previous.findIndex((task) => task.id === data.task?.id);
@@ -96,7 +96,7 @@ export default function Quchong({ active = true }) {
         : task));
     });
     const offLog = api.onQuchongLog?.((data) => {
-      if (batchRef.current && batchRef.current !== data.batchId) return;
+      if (!batchRef.current || batchRef.current !== data.batchId) return;
       setLogs((previous) => [...previous, data.line].slice(-160));
     });
     const offComplete = api.onQuchongComplete?.((data) => {
@@ -113,11 +113,35 @@ export default function Quchong({ active = true }) {
     return () => [offTask, offProgress, offLog, offComplete, offHistory].forEach((off) => off?.());
   }, [active]);
 
+  // 页面从隐藏状态回来时读取实时快照。仅刷新当前已选批次，不自动接管别的批次。
+  useEffect(() => {
+    if (!active) return undefined;
+    let alive = true;
+    const refreshSnapshot = async () => {
+      try {
+        const snapshots = await window.electronAPI.getQuchongTasks?.();
+        if (!alive || !Array.isArray(snapshots)) return;
+        setHistory(snapshots);
+        const selectedId = batchRef.current;
+        if (!selectedId) return;
+        const snapshot = snapshots.find((item) => String(item.id) === String(selectedId));
+        if (!snapshot) return;
+        setTasks(snapshot.tasks || []);
+        setBatchId(snapshot.id);
+        setRunning(['queued', 'running'].includes(snapshot.status));
+        if (!['queued', 'running'].includes(snapshot.status)) setNotice(snapshot.status === 'completed' ? '处理完成，输出文件已保存。' : snapshot.status === 'stopped' ? '处理已停止' : '处理结束，其中部分文件失败。');
+      } catch (_) {}
+    };
+    refreshSnapshot();
+    return () => { alive = false; };
+  }, [active]);
+
   const restoreSnapshot = (snapshot) => {
     if (!snapshot) return;
+    batchRef.current = String(snapshot.id);
+    setBatchId(String(snapshot.id));
     setTasks(snapshot.tasks || []);
-    setRunning(false);
-    setBatchId(null);
+    setRunning(['queued', 'running'].includes(snapshot.status));
     setNotice(`已恢复任务快照：${snapshot.done || 0}/${snapshot.total || 0} 完成`);
   };
 

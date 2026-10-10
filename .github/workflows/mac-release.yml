@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag to receive the macOS asset
         required: true
-        default: v1.1.13
+        default: v1.1.14
 
 permissions:
   contents: write
@@ -38,6 +38,7 @@ jobs:
           node scripts/check-download-series.cjs
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs
+          npm run check:ai
 
       - name: Build macOS DMG
         run: npm run build:mac

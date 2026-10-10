@@ -343,7 +343,7 @@ function SettingsPage({ active = true }) {
               >
                 {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} 个同时处理</option>)}
               </select>
-              <em>控制音频提取、转写和概括的后台并发，封面任务独立运行。</em>
+              <em>所有 AI 素材任务共享这里的并发槽位；封面与文案状态、取消和重试仍分别记录。</em>
             </label>
           </div>
         </div>

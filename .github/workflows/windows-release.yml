@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag to receive the Windows assets
         required: true
-        default: v1.1.13
+        default: v1.1.14
 
 permissions:
   contents: write
@@ -39,6 +39,8 @@ jobs:
           node scripts/check-download-series.cjs
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs
+          node scripts/check-quchong-panel.cjs
+          npm run check:ai
 
       - name: Build React assets
         run: npm run build:react

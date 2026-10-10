@@ -1381,6 +1381,12 @@ function serializeQuchongBatch(batch) {
   };
 }
 
+function getQuchongSnapshots() {
+  const snapshots = new Map(quchongHistory.map(batch => [batch.id, batch]));
+  for (const batch of quchongBatches.values()) snapshots.set(batch.id, serializeQuchongBatch(batch));
+  return [...snapshots.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 50);
+}
+
 function saveQuchongHistory() {
   try { store.saveQuchongTasks(quchongHistory.slice(0, 50)); return true; }
   catch (error) { console.error('[Quchong] 保存任务快照失败:', error.message); return false; }
@@ -1392,7 +1398,7 @@ function persistQuchongBatch(batch) {
   if (index < 0) quchongHistory.unshift(snapshot);
   else quchongHistory[index] = snapshot;
   saveQuchongHistory();
-  sendToRenderer('quchong-history-changed', { tasks: quchongHistory.slice(0, 50) });
+  sendToRenderer('quchong-history-changed', { tasks: getQuchongSnapshots() });
 }
 
 function loadQuchongTasks() {
@@ -1554,7 +1560,7 @@ function cancelAllQuchongBatches() {
 
 ipcMain.handle('quchong-defaults', () => ({ ...quchong.DEFAULTS }));
 
-ipcMain.handle('get-quchong-tasks', () => quchongHistory.slice(0, 50));
+ipcMain.handle('get-quchong-tasks', () => getQuchongSnapshots());
 
 ipcMain.handle('quchong-select-videos', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -2871,6 +2877,9 @@ ipcMain.handle('download-single-episode', async (event, seriesId, vidIndex) => {
 // ===== AI 发布素材 =====
 // AI 素材使用独立队列；下载、去重、合并任务只共享输入文件，不共享状态。
 let aiMaterialQueue = null;
+// API credentials stay in memory only. A queued task uses the settings that
+// existed when it was submitted, even if the user edits Settings meanwhile.
+const aiRuntimeConfigs = new Map();
 
 function aiSeriesMaterialDir(seriesId, seriesTitle, tasks = []) {
   const existing = resolveSeriesDir(String(seriesId), seriesTitle, tasks);
@@ -2899,9 +2908,10 @@ function aiLatestEntry(seriesId) {
 }
 
 function saveAiTask(task) {
-  const entry = aiLatestEntry(task.seriesId);
-  if (!entry) throw new Error('短剧档案已不存在，无法保存 AI 任务');
-  if (!Array.isArray(entry.ai_material_tasks)) entry.ai_material_tasks = [];
+  const entryIndex = seriesRegistry.findIndex(item => String(item.series_id) === String(task.seriesId));
+  if (entryIndex < 0) throw new Error('短剧档案已不存在，无法保存 AI 任务');
+  const previous = seriesRegistry[entryIndex];
+  const entry = { ...previous, ai_material_tasks: [...(previous.ai_material_tasks || [])], ai_episode_copies: { ...(previous.ai_episode_copies || {}) } };
   const index = entry.ai_material_tasks.findIndex(item => item.id === task.id);
   if (index < 0) entry.ai_material_tasks.push({ ...task });
   else entry.ai_material_tasks[index] = { ...entry.ai_material_tasks[index], ...task };
@@ -2913,19 +2923,34 @@ function saveAiTask(task) {
       entry.ai_episode_copies[key] = { ...(record || {}), episodeIndex: task.episodeIndex, taskId: task.id, status: 'processing', updatedAt: task.updatedAt };
     }
   }
-  if (task.kind === 'cover' && (task.status === 'failed' || task.status === 'stopped')) {
-    entry.ai_cover = { ...(entry.ai_cover || {}), status: task.status, taskId: task.id, error: task.error || '', updatedAt: task.updatedAt };
+  if (task.kind === 'cover' && task.status !== 'completed') {
+    entry.ai_cover = { ...(entry.ai_cover || {}), status: ['queued', 'running'].includes(task.status) ? 'processing' : task.status, taskId: task.id, error: task.error || '', updatedAt: task.updatedAt };
   }
-  saveSeriesRegistry();
+  if (task.kind === 'cover' && task.status === 'completed') {
+    entry.ai_cover = { status: 'completed', taskId: task.id, path: task.path, coverUrl: task.coverUrl, prompt: task.prompt || entry.ai_cover?.prompt || '', updatedAt: task.updatedAt, error: '' };
+  }
+  if (task.kind === 'episode-copy' && task.status === 'completed') {
+    const { key } = aiEpisodeRecord(entry, task.episodeIndex);
+    entry.ai_episode_copies[key] = { episodeIndex: task.episodeIndex, status: 'completed', taskId: task.id, outputPath: task.outputPath, textPath: task.textPath, transcriptPath: task.transcriptPath, inputFingerprint: task.inputFingerprint, copy: task.copy, updatedAt: task.updatedAt, error: '' };
+  }
+  seriesRegistry[entryIndex] = entry;
+  try { saveSeriesRegistry(); }
+  catch (error) { seriesRegistry[entryIndex] = previous; throw error; }
 }
 
 function aiTaskSnapshot(task) {
   const { sourceCover, prompt, child, ...safe } = task || {};
+  if (safe.status === 'completed') {
+    const outputValid = safe.kind === 'cover' ? aiOutputIsUsable(safe.path) : aiOutputIsUsable(safe.outputPath) && aiOutputIsUsable(safe.textPath);
+    const inputValid = safe.kind === 'cover' || (safe.inputPath && safe.inputFingerprint === aiInputFingerprint(safe.inputPath));
+    if (!outputValid || !inputValid) return { ...safe, status: 'failed', stage: 'failed', completedAt: null, error: outputValid ? '输入视频已变化，请重新生成文案' : '输出素材已移动或删除，请重新生成' };
+  }
   return { ...safe };
 }
 
 function aiNotify(task) {
   sendToRenderer('ai-material-progress', aiTaskSnapshot(task));
+  if (['completed', 'failed', 'stopped'].includes(task.status)) aiRuntimeConfigs.delete(task.id);
 }
 
 function aiConcurrency() {
@@ -3001,7 +3026,10 @@ function aiEpisodeRecord(entry, episodeIndex) {
 function aiValidEpisodeCopy(entry, episodeIndex) {
   const record = entry?.ai_episode_copies?.[String(Number(episodeIndex))];
   if (!record || record.status !== 'completed' || !aiOutputIsUsable(record.outputPath)) return null;
+  if (!record.textPath || !aiOutputIsUsable(record.textPath)) return null;
   if (record.transcriptPath && !aiOutputIsUsable(record.transcriptPath)) return null;
+  const input = aiCompletedEpisodeFile(entry.series_id, entry.series_title, episodeIndex);
+  if (!record.inputFingerprint || !input || aiInputFingerprint(input) !== record.inputFingerprint) return null;
   return record;
 }
 
@@ -3023,18 +3051,10 @@ function ensureAiQueue() {
   return aiMaterialQueue;
 }
 
-function updateLatestEpisodeCopy(task, record) {
-  const entry = aiLatestEntry(task.seriesId);
-  if (!entry) return;
-  const { key } = aiEpisodeRecord(entry, task.episodeIndex);
-  entry.ai_episode_copies[key] = { ...record };
-  saveSeriesRegistry();
-}
-
 async function executeAiMaterialTask(task, { signal, update }) {
   const entry = aiLatestEntry(task.seriesId);
   if (!entry) throw new Error('短剧档案已不存在');
-  const settings = getCurrentSettings();
+  const settings = aiRuntimeConfigs.get(task.id) || getCurrentSettings();
   if (task.kind === 'cover') {
     update({ stage: 'generating', progress: 10 });
     const source = task.sourceCover || entry.cover || '';
@@ -3047,10 +3067,8 @@ async function executeAiMaterialTask(task, { signal, update }) {
     await fsp.mkdir(outputDir, { recursive: true });
     const outputPath = path.join(outputDir, `${sanitizeFolderName(entry.series_title) || '短剧'}-重绘-${Date.now()}${aiImageExtension(image.contentType)}`);
     await fsp.writeFile(outputPath, image.buffer);
-    const cover = { status: 'completed', path: outputPath, coverUrl: localAssetUrl(outputPath), prompt: task.prompt, updatedAt: Date.now(), error: '' };
-    const latest = aiLatestEntry(task.seriesId);
-    latest.ai_cover = cover;
-    saveSeriesRegistry();
+    signal.throwIfAborted();
+    const cover = { path: outputPath, coverUrl: localAssetUrl(outputPath), updatedAt: Date.now() };
     return { path: outputPath, coverUrl: cover.coverUrl, updatedAt: cover.updatedAt };
   }
 
@@ -3065,6 +3083,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
   const transcriptPath = task.transcriptPath || path.join(materialDir, `${prefix}-转写.txt`);
   let transcript;
   if (task.transcriptFingerprint === fingerprint && aiOutputIsUsable(transcriptPath)) {
+    if ((await fsp.stat(transcriptPath)).size > 2 * 1024 * 1024) throw new Error('转写缓存过大，请重新生成');
     transcript = await fsp.readFile(transcriptPath, 'utf8');
     update({ stage: 'summarizing', progress: 55, transcriptPath });
   } else {
@@ -3093,8 +3112,9 @@ async function executeAiMaterialTask(task, { signal, update }) {
   const text = [copy.title, copy.summary, copy.hook, Array.isArray(copy.hashtags) ? copy.hashtags.join(' ') : copy.hashtags].filter(Boolean).join('\n');
   await fsp.writeFile(outputPath, JSON.stringify({ seriesId: task.seriesId, seriesTitle: latest.series_title, episodeIndex: task.episodeIndex, episodeTitle: episode?.title || '', copy, transcriptPath, updatedAt: Date.now() }, null, 2), 'utf8');
   await fsp.writeFile(textPath, text, 'utf8');
+  signal.throwIfAborted();
+  if (aiInputFingerprint(videoPath) !== fingerprint) throw new Error('输入视频在处理期间发生变化，请重新生成');
   const updatedAt = Date.now();
-  updateLatestEpisodeCopy(task, { episodeIndex: task.episodeIndex, status: 'completed', outputPath, textPath, transcriptPath, inputFingerprint: fingerprint, copy, updatedAt, error: '' });
   return { outputPath, textPath, transcriptPath, inputFingerprint: fingerprint, copy, updatedAt };
 }
 
@@ -3118,11 +3138,9 @@ function enqueueCopyTask(seriesId, episodeIndex, force = false) {
     transcriptPath: reusable?.transcriptFingerprint === fingerprint ? reusable.transcriptPath : null,
     transcriptFingerprint: reusable?.transcriptFingerprint === fingerprint ? fingerprint : null,
   };
-  const queued = ensureAiQueue().enqueue(taskInput, reusable).task;
-  const latest = aiLatestEntry(seriesId);
-  const { key, record } = aiEpisodeRecord(latest, episodeIndex);
-  latest.ai_episode_copies[key] = { ...(record || {}), episodeIndex: Number(episodeIndex), status: 'processing', taskId: queued.id, updatedAt: Date.now() };
-  saveSeriesRegistry();
+  const admission = ensureAiQueue().enqueue(taskInput, reusable);
+  const queued = admission.task;
+  if (!admission.duplicate) aiRuntimeConfigs.set(queued.id, { ...getCurrentSettings() });
   return { task: queued };
 }
 
@@ -3136,9 +3154,7 @@ function enqueueCoverTask(payload = {}) {
   const prompt = String(payload.prompt || '').trim() || `为短剧《${entry.series_title}》重绘竖版发布封面，保留故事氛围但重新设计人物构图与背景，不要水印、不要平台标志、不要多余文字，适合短视频封面。`;
   const reusable = previous && !['queued', 'running'].includes(previous.status) ? previous : null;
   const task = ensureAiQueue().enqueue({ kind: 'cover', seriesId: sid, episodeIndex: 0, sourceCover: payload.cover || entry.cover || '', prompt }, reusable).task;
-  const latest = aiLatestEntry(sid);
-  latest.ai_cover = { ...(latest.ai_cover || {}), status: 'processing', taskId: task.id, prompt, updatedAt: Date.now() };
-  saveSeriesRegistry();
+  aiRuntimeConfigs.set(task.id, { ...getCurrentSettings() });
   return { task };
 }
 
@@ -3185,9 +3201,11 @@ ipcMain.handle('cancel-ai-material', async (_event, id) => {
 ipcMain.handle('open-ai-material', async (_event, id) => {
   const task = aiTaskList().find(item => item.id === String(id));
   if (!task) return { success: false, error: '任务不存在' };
-  const file = task.path || task.outputPath || task.textPath || task.transcriptPath;
+  if (aiTaskSnapshot(task).status !== 'completed') return { success: false, error: '素材未完成或文件已发生变化' };
+  const file = task.path || task.textPath || task.outputPath;
   if (!file || !fs.existsSync(file)) return { success: false, error: '素材文件不存在' };
-  shell.showItemInFolder(file);
+  const error = await shell.openPath(file);
+  if (error) return { success: false, error: '无法打开素材，请检查系统默认应用' };
   return { success: true, path: file };
 });
 
@@ -3357,6 +3375,9 @@ function isTaskInFlight(task) {
 function isFileInUse(file) {
   const key = quchongPathKey(file);
   if (key && quchongInputRuns.has(key)) return true;
+  if (key && [...quchongBatches.values()].some(batch => !batch.finished &&
+    (batch.tasks.some(task => ['pending', 'running'].includes(task.status) && quchongPathKey(task.src) === key) ||
+      (batch.bgm && quchongPathKey(batch.bgm) === key)))) return true;
   // AI 文案提取只读取已下载源文件，任务在 queued/running 阶段也不能删除输入。
   try {
     const aiTasks = typeof listAiMaterialTasks === 'function'
@@ -3460,6 +3481,12 @@ ipcMain.handle('delete-series-files', async (event, seriesId, options) => {
     if (mergeTasks.some(task => task.seriesId === sid && task.status === 'running')) return { success: false, error: '该剧正在合并，请完成或取消合并后再清理' };
     const entry = seriesRegistry.find((s) => String(s.series_id) === sid);
     const title = (entry && entry.series_title) || '';
+
+    const protectedInputs = downloadTasks
+      .filter(task => String(task.hongguoInfo?.series_id) === sid && task.savePath && isFileInUse(task.savePath));
+    if (protectedInputs.length) {
+      return { success: false, error: '该剧有下载、视频处理或 AI 文案任务正在读取文件，请完成或停止后再清理' };
+    }
 
     const paths = seriesFilePaths(sid);
     let count = 0;
