@@ -267,11 +267,6 @@ function mount(file, api, props = {}) {
     ui.find(n => n.type === 'video').props.onEnded(); await ui.flush(); assert.equal(requested.at(-1).vidIndex, 3);
     await ui.button('下载未完成集').props.onClick(); assert.deepEqual(downloaded, [1, 3]); ui.unmount();
   });
-  await test('xifan merge progress retains completed episode count', async () => {
-    let update;
-    const ui = mount('DownloadManager', { getDownloadTasks: async () => [], getSeriesList: async () => [], getMergeTasks: async () => [{ id: 'm', seriesTitle: '合并', total: 72, done: 0, progress: 0, status: 'running' }], onMergeProgress: fn => { update = fn; return () => {}; } });
-    await ui.flush(); update({ id: 'm', progress: 35, done: 24 }); ui.render(); assert.ok(ui.text().includes('24/72 集')); ui.unmount();
-  });
   await test('app navigation keeps visited pages and marks background pages inactive', async () => {
     const ui = mount('../App', { getAppInfo: async () => ({ platform: 'darwin' }) });
     await ui.flush(); ui.button('设置').props.onClick(); ui.render();

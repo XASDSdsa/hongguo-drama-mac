@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
-import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle, Sparkles } from './icons';
+import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 
 const FORMAT_PRESETS = [
@@ -52,7 +52,6 @@ function SettingsPage({ active = true }) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const [whisperStatus, setWhisperStatus] = useState(null);
   const testVersion = useRef(0);
   const savingRef = useRef(false);
   const savedTimer = useRef(null);
@@ -62,9 +61,6 @@ function SettingsPage({ active = true }) {
     try {
       const next = await window.electronAPI.getSettings();
       setSettings(next);
-      if (typeof window.electronAPI.getWhisperStatus === 'function') {
-        try { setWhisperStatus(await window.electronAPI.getWhisperStatus()); } catch (_) { setWhisperStatus(null); }
-      }
     }
     catch (error) { setLoadError(error.message || '设置加载失败，请重试'); }
   };
@@ -266,131 +262,6 @@ function SettingsPage({ active = true }) {
           <p className="settings-hint">
             本机有代理（Clash / V2rayN 等）时在这里填上，解析剧集与下载视频都会走该代理。保存后立即生效，无需重启。
           </p>
-        </div>
-
-        <div className="settings-group ai-settings-group">
-          <div className="settings-section-heading">
-            <Sparkles size={17} />
-            <div>
-              <label className="settings-label">AI 素材处理</label>
-              <p className="settings-hint">用于封面重绘、音频转写和每集发布文案概括。配置只保存在本机。</p>
-            </div>
-          </div>
-          <div className="ai-settings-grid">
-            <label className="ai-field ai-field-wide">
-              <span>中转接口 URL</span>
-              <input
-                type="url"
-                className="input-field"
-                aria-label="AI 中转接口 URL"
-                value={settings.ai_base_url || ''}
-                onChange={(e) => update('ai_base_url', e.target.value)}
-                placeholder="https://api.openai.com/v1"
-                spellCheck="false"
-              />
-              <em>填写兼容 OpenAI 接口的地址，通常以 <code>/v1</code> 结尾。</em>
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>API Key</span>
-              <input
-                type="password"
-                className="input-field"
-                aria-label="AI API Key"
-                value={settings.ai_api_key || ''}
-                onChange={(e) => update('ai_api_key', e.target.value)}
-                placeholder="sk-…"
-                autoComplete="new-password"
-                spellCheck="false"
-              />
-              <em>仅用于本机请求，不会写入视频文件或任务日志。</em>
-            </label>
-            <label className="ai-field">
-              <span>图片模型</span>
-              <input
-                type="text"
-                className="input-field"
-                aria-label="AI 图片模型"
-                value={settings.ai_image_model || ''}
-                onChange={(e) => update('ai_image_model', e.target.value)}
-                placeholder="gpt-image-2.5"
-                spellCheck="false"
-              />
-            </label>
-            <label className="ai-field">
-              <span>文本模型</span>
-              <input
-                type="text"
-                className="input-field"
-                aria-label="AI 文本模型"
-                value={settings.ai_text_model || ''}
-                onChange={(e) => update('ai_text_model', e.target.value)}
-                placeholder="gpt-5.6"
-                spellCheck="false"
-              />
-            </label>
-            <label className="ai-field">
-              <span>转写模型</span>
-              <input
-                type="text"
-                className="input-field"
-                aria-label="AI 转写模型"
-                value={settings.ai_transcription_model || ''}
-                onChange={(e) => update('ai_transcription_model', e.target.value)}
-                placeholder="gpt-4o-mini-transcribe"
-                spellCheck="false"
-              />
-            </label>
-            <label className="ai-field">
-              <span>转写引擎</span>
-              <select
-                className="input-field select-field"
-                aria-label="转写引擎"
-                value={settings.ai_transcription_engine || 'whisper.cpp'}
-                onChange={(e) => update('ai_transcription_engine', e.target.value)}
-              >
-                <option value="whisper.cpp">本地 whisper.cpp（默认）</option>
-                <option value="openai-fallback">本地失败时才调用 OpenAI</option>
-                <option value="openai">OpenAI API（明确选择）</option>
-              </select>
-              <em>{whisperStatus?.available ? '本地 whisper.cpp 已就绪，转写不产生 API 费用。' : (whisperStatus?.message || '发布包会优先使用本地 whisper.cpp。')}</em>
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>whisper.cpp 可执行文件路径（可选）</span>
-              <input
-                type="text"
-                className="input-field"
-                aria-label="whisper.cpp 可执行文件路径"
-                value={settings.whisper_binary_path || ''}
-                onChange={(e) => update('whisper_binary_path', e.target.value)}
-                placeholder="留空使用安装包内置文件"
-                spellCheck="false"
-              />
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>whisper.cpp 模型路径（可选）</span>
-              <input
-                type="text"
-                className="input-field"
-                aria-label="whisper.cpp 模型路径"
-                value={settings.whisper_model_path || ''}
-                onChange={(e) => update('whisper_model_path', e.target.value)}
-                placeholder="留空使用安装包内置 ggml-tiny.bin"
-                spellCheck="false"
-              />
-            </label>
-            <label className="ai-field">
-              <span>AI 并发任务数</span>
-              <select
-                className="input-field select-field"
-                aria-label="AI 并发任务数"
-                value={settings.ai_concurrency || 2}
-                onChange={(e) => update('ai_concurrency', parseInt(e.target.value, 10))}
-              >
-                {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} 个同时处理</option>)}
-              </select>
-              <em>所有 AI 素材任务共享这里的并发槽位；封面与文案状态、取消和重试仍分别记录。</em>
-            </label>
-          </div>
         </div>
 
         <div className="settings-footer">

@@ -230,7 +230,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
         <span className={`quchong-status ${running ? 'is-running' : ''}`}>{status}</span>
       </div>
 
-      {seriesContext && <div className="qc-flow-note"><b>流程第 2 步：去重</b><span>{seriesLoading ? '正在读取本剧已下载集…' : `已带入 ${files.length} 集。处理完成后返回下载管理继续“分组并生成成品”。`}</span><button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.('manager', { seriesId: seriesContext.seriesId })}>返回本剧</button></div>}
+      {seriesContext && <div className="qc-flow-note"><b>流程第 2 步：去重</b><span>{seriesLoading ? '正在读取本剧已下载集…' : `已带入 ${files.length} 集。处理完成后返回下载管理查看每集去重状态。`}</span><button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.('manager', { seriesId: seriesContext.seriesId })}>返回本剧</button></div>}
 
       <section className="qc-card">
         <div className="qc-card-title"><span>输入视频</span><div className="qc-actions"><button className="btn btn-sm" onClick={async () => addFiles(await window.electronAPI.quchongSelectVideos())} disabled={running}><Plus size={14} /> 添加文件</button></div></div>
