@@ -36,43 +36,80 @@ function mount(api = {}) {
   return { render, nodes, text: () => textOf(tree), button: label => find(node => node.type === 'button' && textOf(node).includes(label)), flush: async () => { for (let i = 0; i < 20; i++) { await Promise.resolve(); render(); } }, unmount: () => cleanups.forEach(cleanup => cleanup?.()) };
 }
 
+const readyPipeline = {
+  success: true,
+  ready: true,
+  readyEpisodeIndices: [1, 2],
+  stages: {
+    download: { status: 'completed', count: 2, total: 2 },
+    dedup: { status: 'completed', done: 2, total: 2 },
+    split: { status: 'completed', groups: 1, total: 1 },
+    final: { done: 2, total: 2 },
+  },
+  final: { products: [{ id: 'p1', path: '/final.mp4', episodeIndices: [1, 2], status: 'ready' }] },
+};
+
 (async () => {
   let passed = 0; let failed = 0;
   const test = async (name, run) => { try { await run(); passed++; } catch (error) { failed++; console.error(`FAIL ${name}: ${error.stack}`); } };
 
   await test('submits selected downloaded episodes as one background batch', async () => {
     let payload; let calls = 0;
-    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: async input => { payload = input; calls++; return { success: true, queued: 2, tasks: input.episodeIndices.map(index => ({ id: `c${index}`, kind: 'episode-copy', seriesId: 'A', episodeIndex: index, status: 'queued', stage: 'queued' })) }; } });
+    const ui = mount({ getSeriesPipelineStatus: async () => readyPipeline, getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: async input => { payload = input; calls++; return { success: true, queued: 2, tasks: input.episodeIndices.map(index => ({ id: `c${index}`, kind: 'episode-copy', seriesId: 'A', episodeIndex: index, status: 'queued', stage: 'queued' })) }; } });
     await ui.flush(); assert.equal(ui.button('生成选中文案').props.disabled, false); await ui.button('生成选中文案').props.onClick(); await ui.flush();
     assert.equal(calls, 1); assert.deepEqual(payload.episodeIndices, [1, 2]); assert.ok(ui.text().includes('排队中')); ui.unmount();
   });
 
   await test('cover submission remains independent while copy batch is queued', async () => {
     const waiting = deferred(); let coverCalls = 0;
-    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: () => waiting.promise, aiGenerateCover: async () => { coverCalls++; return { success: true, task: { id: 'cover-1', kind: 'cover', seriesId: 'A', status: 'queued', stage: 'queued' } }; } });
-    await ui.flush(); ui.button('全部已下载').props.onClick(); ui.render(); const copyRequest = ui.button('生成选中文案').props.onClick(); ui.render(); await ui.button('重绘封面').props.onClick();
+    const ui = mount({ getSeriesPipelineStatus: async () => readyPipeline, getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: () => waiting.promise, aiGenerateCover: async () => { coverCalls++; return { success: true, task: { id: 'cover-1', kind: 'cover', seriesId: 'A', status: 'queued', stage: 'queued' } }; } });
+    await ui.flush(); ui.button('全部成品').props.onClick(); ui.render(); const copyRequest = ui.button('生成选中文案').props.onClick(); ui.render(); await ui.button('重绘封面').props.onClick();
     assert.equal(coverCalls, 1); waiting.resolve({ success: true, queued: 2, tasks: [] }); await copyRequest; ui.unmount();
   });
 
   await test('cached copies are skipped without creating duplicate task rows', async () => {
     let submitted;
-    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: async payload => { submitted = payload; return { success: true, queued: 0, tasks: [], cached: [{ episodeIndex: 1 }] }; } });
+    const ui = mount({ getSeriesPipelineStatus: async () => readyPipeline, getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: async payload => { submitted = payload; return { success: true, queued: 0, tasks: [], cached: [{ episodeIndex: 1 }] }; } });
     await ui.flush(); await ui.button('生成选中文案').props.onClick(); await ui.flush();
     assert.deepEqual(submitted.episodeIndices, [1, 2]); assert.equal(ui.nodes().filter(node => String(node.props?.className || '').includes('aim-task')).length, 0); ui.unmount();
   });
 
   await test('live backend stage is rendered without changing download state', async () => {
     let notify;
-    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: [{ id: 'c1', kind: 'episode-copy', seriesId: 'A', episodeIndex: 1, status: 'running', stage: 'extracting' }] }), onAiMaterialProgress: callback => { notify = callback; return () => {}; } });
+    const ui = mount({ getSeriesPipelineStatus: async () => readyPipeline, getAiMaterialTasks: async () => ({ success: true, tasks: [{ id: 'c1', kind: 'episode-copy', seriesId: 'A', episodeIndex: 1, status: 'running', stage: 'extracting' }] }), onAiMaterialProgress: callback => { notify = callback; return () => {}; } });
     await ui.flush(); assert.ok(ui.text().includes('提取音频')); notify({ id: 'c1', kind: 'episode-copy', seriesId: 'A', episodeIndex: 1, status: 'running', stage: 'summarizing' }); ui.render(); assert.ok(ui.text().includes('AI 概括')); ui.unmount();
   });
 
   await test('active tasks stay visible and long history can be expanded', async () => {
     const history = Array.from({ length: 85 }, (_, i) => ({ id: `done-${i}`, kind: 'episode-copy', seriesId: 'A', episodeIndex: i + 1, status: 'completed', stage: 'completed' }));
     history[0] = { id: 'active-old', kind: 'episode-copy', seriesId: 'A', episodeIndex: 900, status: 'running', stage: 'transcribing', elapsedSeconds: 42, progress: 35 };
-    const ui = mount({ getAiMaterialTasks: async () => ({ success: true, tasks: history }) });
+    const ui = mount({ getSeriesPipelineStatus: async () => readyPipeline, getAiMaterialTasks: async () => ({ success: true, tasks: history }) });
     await ui.flush(); assert.ok(ui.text().includes('第 900 集文案')); assert.ok(ui.text().includes('已运行 42 秒')); assert.ok(ui.text().includes('共 85 个文案任务'));
     assert.ok(ui.button('显示全部').props); ui.button('显示全部').props.onClick(); ui.render(); assert.ok(ui.text().includes('第 85 集文案')); ui.unmount();
+  });
+
+  await test('blocks every AI action until the final product is ready', async () => {
+    const stages = [
+      ['未下载', { download: { status: 'blocked' }, dedup: { status: 'blocked' }, split: { status: 'blocked' }, final: { status: 'blocked', products: [] } }],
+      ['未去重', { download: { status: 'completed' }, dedup: { status: 'running' }, split: { status: 'blocked' }, final: { status: 'blocked', products: [] } }],
+      ['未分割', { download: { status: 'completed' }, dedup: { status: 'completed' }, split: { status: 'queued' }, final: { status: 'blocked', products: [] } }],
+      ['无成品', { download: { status: 'completed' }, dedup: { status: 'completed' }, split: { status: 'completed' }, final: { status: 'completed', products: [] } }],
+    ];
+    for (const [label, stageData] of stages) {
+      const ui = mount({ getSeriesPipelineStatus: async () => ({ success: true, ready: false, blockedReason: label, stages: stageData, readyEpisodeIndices: [] }), getAiMaterialTasks: async () => ({ success: true, tasks: [] }) });
+      await ui.flush();
+      assert.ok(ui.text().includes(`暂不可操作：${label}`));
+      const blockedButtons = ui.nodes().filter(node => node.type === 'button' && String(node.children?.map(child => typeof child === 'string' ? child : '').join('') || '').includes('完成'));
+      assert.ok(blockedButtons.length >= 2 && blockedButtons.every(node => node.props.disabled));
+      ui.unmount();
+    }
+  });
+
+  await test('sends only final-product episode indices and product ids when ready', async () => {
+    let payload;
+    const ui = mount({ getSeriesPipelineStatus: async () => readyPipeline, getAiMaterialTasks: async () => ({ success: true, tasks: [] }), aiStartCopies: async input => { payload = input; return { success: true, tasks: [] }; } });
+    await ui.flush(); await ui.button('生成选中文案').props.onClick(); await ui.flush();
+    assert.deepEqual(payload.episodeIndices, [1, 2]); assert.deepEqual(payload.productIds, ['p1']); ui.unmount();
   });
 
   console.log(`AI materials panel: ${passed} passed, ${failed} failed`); process.exitCode = failed ? 1 : 0;

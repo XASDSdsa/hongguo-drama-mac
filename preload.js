@@ -65,12 +65,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadSingleEpisode: (seriesId, vidIndex) =>
     ipcRenderer.invoke('download-single-episode', seriesId, vidIndex),
   // AI 发布素材：独立于下载/合并任务，支持封面重绘与已下载分集文案生成
+  getSeriesPipelineStatus: (seriesId) => ipcRenderer.invoke('get-series-pipeline-status', seriesId),
   aiGenerateCover: (payload) => ipcRenderer.invoke('ai-generate-cover', payload),
   aiStartCopies: (payload) => ipcRenderer.invoke('ai-start-copies', payload),
   aiGenerateEpisodeCopy: (payload) => ipcRenderer.invoke('ai-generate-episode-copy', payload),
   getAiMaterialTasks: (options) => ipcRenderer.invoke('get-ai-material-tasks', options),
   cancelAiMaterial: (id) => ipcRenderer.invoke('cancel-ai-material', id),
   openAiMaterial: (id) => ipcRenderer.invoke('open-ai-material', id),
+  getWhisperStatus: () => ipcRenderer.invoke('get-whisper-status'),
   onAiMaterialProgress: (cb) => {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('ai-material-progress', listener);

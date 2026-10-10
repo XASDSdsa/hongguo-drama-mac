@@ -52,13 +52,20 @@ function SettingsPage({ active = true }) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [whisperStatus, setWhisperStatus] = useState(null);
   const testVersion = useRef(0);
   const savingRef = useRef(false);
   const savedTimer = useRef(null);
 
   const loadSettings = async () => {
     setLoadError('');
-    try { setSettings(await window.electronAPI.getSettings()); }
+    try {
+      const next = await window.electronAPI.getSettings();
+      setSettings(next);
+      if (typeof window.electronAPI.getWhisperStatus === 'function') {
+        try { setWhisperStatus(await window.electronAPI.getWhisperStatus()); } catch (_) { setWhisperStatus(null); }
+      }
+    }
     catch (error) { setLoadError(error.message || '设置加载失败，请重试'); }
   };
 
@@ -97,7 +104,7 @@ function SettingsPage({ active = true }) {
       const editable = [
         'root', 'name_format', 'max_concurrent',
         'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password',
-        'ai_base_url', 'ai_api_key', 'ai_image_model', 'ai_text_model', 'ai_transcription_model', 'ai_concurrency',
+        'ai_base_url', 'ai_api_key', 'ai_image_model', 'ai_text_model', 'ai_transcription_model', 'ai_transcription_engine', 'whisper_binary_path', 'whisper_model_path', 'whisper_language', 'whisper_threads', 'ai_concurrency',
       ];
       const submitted = { ...current };
       for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
@@ -330,6 +337,44 @@ function SettingsPage({ active = true }) {
                 value={settings.ai_transcription_model || ''}
                 onChange={(e) => update('ai_transcription_model', e.target.value)}
                 placeholder="gpt-4o-mini-transcribe"
+                spellCheck="false"
+              />
+            </label>
+            <label className="ai-field">
+              <span>转写引擎</span>
+              <select
+                className="input-field select-field"
+                aria-label="转写引擎"
+                value={settings.ai_transcription_engine || 'whisper.cpp'}
+                onChange={(e) => update('ai_transcription_engine', e.target.value)}
+              >
+                <option value="whisper.cpp">本地 whisper.cpp（默认）</option>
+                <option value="openai-fallback">本地失败时才调用 OpenAI</option>
+                <option value="openai">OpenAI API（明确选择）</option>
+              </select>
+              <em>{whisperStatus?.available ? '本地 whisper.cpp 已就绪，转写不产生 API 费用。' : (whisperStatus?.message || '发布包会优先使用本地 whisper.cpp。')}</em>
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>whisper.cpp 可执行文件路径（可选）</span>
+              <input
+                type="text"
+                className="input-field"
+                aria-label="whisper.cpp 可执行文件路径"
+                value={settings.whisper_binary_path || ''}
+                onChange={(e) => update('whisper_binary_path', e.target.value)}
+                placeholder="留空使用安装包内置文件"
+                spellCheck="false"
+              />
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>whisper.cpp 模型路径（可选）</span>
+              <input
+                type="text"
+                className="input-field"
+                aria-label="whisper.cpp 模型路径"
+                value={settings.whisper_model_path || ''}
+                onChange={(e) => update('whisper_model_path', e.target.value)}
+                placeholder="留空使用安装包内置 ggml-tiny.bin"
                 spellCheck="false"
               />
             </label>

@@ -1,6 +1,6 @@
 {
   "name": "hongguo-downloader",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "红果短剧全集批量下载器（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -9,19 +9,22 @@
     "dev": "node scripts/dev.js",
     "dev:react": "vite",
     "build:react": "vite build",
-    "build": "npm run build:react && electron-builder --win",
-    "build:zip": "npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
-    "build:dir": "npm run build:react && electron-builder --win --dir",
-    "build:portable": "npm run build:react && electron-builder --win portable",
-    "build:installer": "npm run build:react && electron-builder --win nsis",
+    "build": "npm run setup:whisper && npm run build:react && electron-builder --win",
+    "build:zip": "npm run setup:whisper && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
+    "build:dir": "npm run setup:whisper && npm run build:react && electron-builder --win --dir",
+    "build:portable": "npm run setup:whisper && npm run build:react && electron-builder --win portable",
+    "build:installer": "npm run setup:whisper && npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
     "check:openai": "node scripts/check-openai-adapter.cjs",
+    "check:pipeline": "node scripts/check-pipeline-gate.cjs",
+    "check:whisper": "node scripts/check-whisper-adapter.cjs",
+    "setup:whisper": "node scripts/setup-whisper.js",
     "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-ai-materials-panel.cjs",
     "pack": "electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
-    "build:mac": "npm run setup:ffmpeg:mac && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
-    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run build:react && electron-builder --mac --arm64 --dir --publish never"
+    "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
+    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run build:react && electron-builder --mac --arm64 --dir --publish never"
   },
   "dependencies": {
     "axios": "^1.13.2"
@@ -73,6 +76,21 @@
             "COPYING.*",
             "LICENSE.md"
           ]
+        },
+        {
+          "from": "build/whisper/win32-x64",
+          "to": "bin",
+          "filter": ["whisper-cli.exe"]
+        },
+        {
+          "from": "build/whisper/models",
+          "to": "models",
+          "filter": ["ggml-tiny.bin"]
+        },
+        {
+          "from": "build/whisper",
+          "to": ".",
+          "filter": ["WHISPER-LICENSE.txt"]
         }
       ],
       "extraFiles": [
@@ -136,6 +154,21 @@
           ]
         },
         {
+          "from": "build/whisper/darwin-arm64",
+          "to": "bin",
+          "filter": ["whisper-cli"]
+        },
+        {
+          "from": "build/whisper/models",
+          "to": "models",
+          "filter": ["ggml-tiny.bin"]
+        },
+        {
+          "from": "build/whisper",
+          "to": ".",
+          "filter": ["WHISPER-LICENSE.txt"]
+        },
+        {
           "from": "LICENSE",
           "to": "LICENSE.txt"
         },
@@ -150,7 +183,8 @@
       ],
       "binaries": [
         "Contents/Resources/bin/ffmpeg",
-        "Contents/Resources/bin/ffprobe"
+        "Contents/Resources/bin/ffprobe",
+        "Contents/Resources/bin/whisper-cli"
       ]
     }
   },

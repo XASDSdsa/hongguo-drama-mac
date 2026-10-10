@@ -40,6 +40,58 @@
   line-height: 1.5;
 }
 
+.aim-gate {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.aim-gate-blocked {
+  border-color: color-mix(in srgb, var(--warning, #a45e2b) 45%, var(--border-muted));
+  background: color-mix(in srgb, var(--warning, #a45e2b) 7%, var(--bg-card));
+}
+
+.aim-gate-ready {
+  border-color: color-mix(in srgb, #2e745b 40%, var(--border-muted));
+}
+
+.aim-gate-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aim-gate-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning, #a45e2b);
+}
+
+.aim-gate-ready .aim-gate-dot { background: #2e745b; }
+
+.aim-gate-message {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aim-gate-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 7px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.aim-gate-stages .done { color: #2e745b; }
+
 .aim-sections {
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
@@ -113,6 +165,36 @@
   color: var(--text-tertiary);
   font-size: 11px;
 }
+
+.aim-products {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px;
+  max-height: 190px;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.aim-product {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border-muted);
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aim-product:hover { border-color: var(--accent); }
+.aim-product.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg-inset)); }
+.aim-product-check { flex: 0 0 auto; color: var(--accent); font-size: 13px; line-height: 1.2; }
+.aim-product-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.aim-product-copy b { overflow: hidden; color: var(--text-primary); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.aim-product-copy small { overflow: hidden; color: var(--text-tertiary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .aim-start-copy {
   width: 100%;
