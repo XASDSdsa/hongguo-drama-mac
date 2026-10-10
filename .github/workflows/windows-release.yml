@@ -1,0 +1,80 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to receive the Windows assets
+        required: true
+        default: v1.1.12
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare Windows FFmpeg
+        run: node scripts/setup-ffmpeg.js
+
+      - name: Prepare Windows signing helper
+        run: node scripts/setup-winCodeSign.js
+
+      - name: Run Windows-safe checks
+        shell: bash
+        run: |
+          node scripts/check-download-manager.cjs
+          node scripts/check-download-series.cjs
+          node scripts/check-download-safety.cjs
+          node scripts/check-series-episode-panel.cjs
+
+      - name: Build React assets
+        run: npm run build:react
+
+      - name: Build NSIS installer
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Build portable executable
+        run: npx electron-builder --win portable --x64 --publish never
+
+      - name: Build unpacked directory and zip
+        run: |
+          npx electron-builder --win --dir --x64 --publish never
+          node scripts/make-zip.js
+
+      - name: Prepare release assets
+        run: node scripts/prepare-release-assets.js
+
+      - name: Create SHA256 manifest
+        shell: pwsh
+        run: |
+          Get-ChildItem -File dist/release | Where-Object { $_.Extension -ne '.sha256' } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii dist/release/hongguo-downloader-${{ inputs.tag }}-windows.sha256
+
+      - name: Upload Windows assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
+
+      - name: Keep a workflow artifact copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: hongguo-downloader-${{ inputs.tag }}-windows
+          path: dist/release/*
