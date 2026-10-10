@@ -64,6 +64,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSeriesEpisodes: (seriesId) => ipcRenderer.invoke('get-series-episodes', seriesId),
   downloadSingleEpisode: (seriesId, vidIndex) =>
     ipcRenderer.invoke('download-single-episode', seriesId, vidIndex),
+  // AI 发布素材：独立于下载/合并任务，支持封面重绘与已下载分集文案生成
+  aiGenerateCover: (payload) => ipcRenderer.invoke('ai-generate-cover', payload),
+  aiStartCopies: (payload) => ipcRenderer.invoke('ai-start-copies', payload),
+  aiGenerateEpisodeCopy: (payload) => ipcRenderer.invoke('ai-generate-episode-copy', payload),
+  getAiMaterialTasks: (options) => ipcRenderer.invoke('get-ai-material-tasks', options),
+  cancelAiMaterial: (id) => ipcRenderer.invoke('cancel-ai-material', id),
+  openAiMaterial: (id) => ipcRenderer.invoke('open-ai-material', id),
+  onAiMaterialProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('ai-material-progress', listener);
+    return () => ipcRenderer.removeListener('ai-material-progress', listener);
+  },
   savePlaybackPosition: (seriesId, vidIndex, currentTime) =>
     ipcRenderer.invoke('save-playback-position', seriesId, vidIndex, currentTime),
   getPlaybackPosition: (seriesId) => ipcRenderer.invoke('get-playback-position', seriesId),
@@ -129,6 +141,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 本地视频处理（去重）
   quchongDefaults: () => ipcRenderer.invoke('quchong-defaults'),
+  getQuchongTasks: () => ipcRenderer.invoke('get-quchong-tasks'),
   quchongSelectVideos: () => ipcRenderer.invoke('quchong-select-videos'),
   quchongSelectAudio: () => ipcRenderer.invoke('quchong-select-audio'),
   quchongStart: (payload) => ipcRenderer.invoke('quchong-start', payload),
@@ -152,6 +165,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('quchong-complete', listener);
     return () => ipcRenderer.removeListener('quchong-complete', listener);
+  },
+  onQuchongHistoryChanged: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('quchong-history-changed', listener);
+    return () => ipcRenderer.removeListener('quchong-history-changed', listener);
   },
 
   // 一键启动 / 一键暂停 / 队列状态

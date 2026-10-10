@@ -1,6 +1,6 @@
 {
   "name": "hongguo-downloader",
-  "version": "1.1.12",
+  "version": "1.1.13",
   "description": "红果短剧全集批量下载器（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -15,6 +15,8 @@
     "build:portable": "npm run build:react && electron-builder --win portable",
     "build:installer": "npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
+    "check:openai": "node scripts/check-openai-adapter.cjs",
+    "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-ai-materials-panel.cjs",
     "pack": "electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",

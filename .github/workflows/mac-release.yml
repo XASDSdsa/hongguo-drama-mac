@@ -1,0 +1,62 @@
+name: macOS release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to receive the macOS asset
+        required: true
+        default: v1.1.13
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare Apple Silicon FFmpeg
+        run: node scripts/setup-ffmpeg-mac.js
+
+      - name: Run macOS-safe checks
+        run: |
+          node scripts/check-download-manager.cjs
+          node scripts/check-download-series.cjs
+          node scripts/check-download-safety.cjs
+          node scripts/check-series-episode-panel.cjs
+
+      - name: Build macOS DMG
+        run: npm run build:mac
+
+      - name: Prepare release asset
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          version=$(node -p "require('./package.json').version")
+          cp "dist/红果短剧-${version}-mac-arm64.dmg" "dist/release/hongguo-downloader-${version}-mac-arm64.dmg"
+          shasum -a 256 "dist/release/hongguo-downloader-${version}-mac-arm64.dmg" > "dist/release/hongguo-downloader-${version}-mac-arm64.sha256"
+
+      - name: Upload macOS assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
+
+      - name: Keep a workflow artifact copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: hongguo-downloader-${{ inputs.tag }}-macos
+          path: dist/release/*

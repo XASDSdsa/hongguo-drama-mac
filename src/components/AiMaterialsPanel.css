@@ -1,0 +1,242 @@
+.ai-materials-panel {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-inset);
+}
+
+.aim-header,
+.aim-section-head,
+.aim-task,
+.aim-range-row,
+.aim-presets {
+  display: flex;
+  align-items: center;
+}
+
+.aim-header {
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.aim-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.aim-header p,
+.aim-section-head span,
+.aim-live {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aim-sections {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.aim-section {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.aim-section-head {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.aim-section-head > div {
+  min-width: 0;
+}
+
+.aim-section-head b {
+  display: block;
+  font-size: 13px;
+}
+
+.aim-section-head span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aim-cover-preview {
+  display: block;
+  width: 94px;
+  aspect-ratio: 3 / 4;
+  margin-top: 12px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
+}
+
+.aim-count {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.aim-range-row {
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.aim-range-row .input-field {
+  min-width: 0;
+  flex: 1;
+}
+
+.aim-presets {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.aim-presets > span {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.aim-start-copy {
+  width: 100%;
+  margin-top: 11px;
+  justify-content: center;
+}
+
+.aim-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 230px;
+  margin-top: 12px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.aim-task {
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border-muted);
+  border-radius: 7px;
+  background: var(--bg-inset);
+}
+
+.aim-task-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.aim-task-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.aim-task-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aim-task-title b {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.aim-task-meta {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aim-progress {
+  height: 3px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--border-muted);
+}
+
+.aim-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.aim-task.failed .aim-task-meta,
+.aim-error {
+  color: var(--danger, #b83338);
+}
+
+.aim-task.completed .aim-task-title b {
+  color: #2e745b;
+}
+
+.aim-task.failed .aim-task-title b,
+.aim-task.stopped .aim-task-title b {
+  color: #a45e2b;
+}
+
+.aim-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.aim-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 11px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.aim-live {
+  color: var(--accent);
+}
+
+@media (max-width: 820px) {
+  .aim-sections { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .ai-materials-panel { padding: 12px; }
+  .aim-section { padding: 11px; }
+  .aim-section-head { align-items: flex-start; flex-direction: column; }
+  .aim-section-head > .btn { align-self: stretch; justify-content: center; }
+  .aim-presets > span { width: 100%; margin-left: 0; }
+  .aim-task { align-items: flex-start; }
+  .aim-task-actions { flex-direction: column; }
+}

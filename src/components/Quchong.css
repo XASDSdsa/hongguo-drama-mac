@@ -35,5 +35,10 @@
 .qc-progress { height: 7px; overflow: hidden; border-radius: 99px; background: var(--bg-inset); }
 .qc-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s; }
 .qc-log { max-height: 180px; overflow: auto; margin-top: 15px; padding: 10px; border-radius: 7px; background: #292825; color: #e7e4de; white-space: pre-wrap; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.qc-history-card { margin-top: 14px; }
+.qc-history-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border-muted); }
+.qc-history-row > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.qc-history-row b { flex: 0 0 auto; font-size: 12px; }
+.qc-history-row span { min-width: 0; color: var(--text-tertiary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 850px) { .qc-options { grid-template-columns: repeat(3, minmax(130px, 1fr)); } }
 @media (max-width: 640px) { .quchong-header { display: block; } .quchong-status { display: block; margin-top: 12px; } .qc-row { flex-wrap: wrap; } .qc-row label { flex-basis: 100%; } .qc-options { grid-template-columns: repeat(2, minmax(120px, 1fr)); } .qc-progress-row { grid-template-columns: 1fr 48px; } .qc-progress-row > span { grid-column: 1 / -1; } }

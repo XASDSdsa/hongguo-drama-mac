@@ -21,8 +21,10 @@ try {
   fs.writeFileSync = write;
   store.saveTasks([{ id: 'complete' }]);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).tasks[0].id, 'complete');
+  store.saveQuchongTasks([{ id: 'batch-1', status: 'completed', tasks: [{ id: 'task-1', status: 'completed' }] }]);
+  assert.deepEqual(store.getQuchongTasks(), [{ id: 'batch-1', status: 'completed', tasks: [{ id: 'task-1', status: 'completed' }] }]);
   assert.deepEqual(fs.readdirSync(dir), ['data.json']);
-  console.log('PASS: interrupted save preserves data; next save recovers; no temporary file remains');
+  console.log('PASS: interrupted save preserves data; task and quchong snapshots recover; no temporary file remains');
 } finally {
   fs.writeFileSync = write;
   console.error = log;

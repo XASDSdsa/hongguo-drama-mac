@@ -70,6 +70,69 @@
   color: var(--text-secondary);
 }
 
+.settings-section-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--accent);
+}
+
+.settings-section-heading > div {
+  min-width: 0;
+}
+
+.settings-section-heading .settings-label {
+  display: block;
+  color: var(--text-primary);
+}
+
+.settings-section-heading .settings-hint {
+  margin-top: 4px;
+}
+
+.ai-settings-group {
+  padding-top: 20px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-muted);
+}
+
+.ai-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+  margin-top: 5px;
+}
+
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-field-wide {
+  grid-column: 1 / -1;
+}
+
+.ai-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ai-field > em {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+  font-style: normal;
+}
+
+.ai-field > em code {
+  background: var(--bg-inset);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 .settings-footer {
   display: flex;
   align-items: center;
@@ -77,6 +140,11 @@
   justify-content: flex-end;
   border-top: 1px solid var(--border-muted);
   padding-top: 18px;
+}
+
+@media (max-width: 640px) {
+  .ai-settings-grid { grid-template-columns: 1fr; }
+  .ai-field-wide { grid-column: auto; }
 }
 
 /* ===== 网络代理：设置页状态行 ===== */

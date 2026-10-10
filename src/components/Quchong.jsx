@@ -13,6 +13,11 @@ function fileName(file) {
   return String(file || '').split(/[\\/]/).pop() || file;
 }
 
+const stageText = {
+  queued: '排队中', processing: '处理中', completed: '完成',
+  failed: '失败', stopped: '已停止', running: '处理中', pending: '排队中',
+};
+
 export default function Quchong({ active = true }) {
   const [files, setFiles] = useState([]);
   const [library, setLibrary] = useState([]);
@@ -27,6 +32,7 @@ export default function Quchong({ active = true }) {
   const [logs, setLogs] = useState([]);
   const [notice, setNotice] = useState('');
   const [running, setRunning] = useState(false);
+  const [history, setHistory] = useState([]);
   const batchRef = useRef(null);
 
   const addFiles = useCallback((paths) => {
@@ -39,10 +45,12 @@ export default function Quchong({ active = true }) {
     Promise.all([
       window.electronAPI.quchongDefaults?.(),
       window.electronAPI.getSettings?.(),
-    ]).then(([defaults, settings]) => {
+      window.electronAPI.getQuchongTasks?.(),
+    ]).then(([defaults, settings, savedHistory]) => {
       if (!alive) return;
       if (defaults) setOpts((value) => ({ ...value, ...defaults }));
       if (settings?.root) setOutputDir(`${settings.root}/红果短剧/处理后`);
+      if (Array.isArray(savedHistory)) setHistory(savedHistory);
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -69,6 +77,7 @@ export default function Quchong({ active = true }) {
   }, [libraryLoaded, libraryOpen]);
 
   useEffect(() => {
+    if (!active) return undefined;
     const api = window.electronAPI;
     const offTask = api.onQuchongTask?.((data) => {
       if (!batchRef.current) batchRef.current = data.batchId;
@@ -82,7 +91,9 @@ export default function Quchong({ active = true }) {
     });
     const offProgress = api.onQuchongProgress?.((data) => {
       if (batchRef.current !== data.batchId) return;
-      setTasks((previous) => previous.map((task) => task.id === data.taskId ? { ...task, progress: data.progress } : task));
+      setTasks((previous) => previous.map((task) => task.id === data.taskId
+        ? { ...task, progress: data.progress, stage: data.stage || task.stage, updatedAt: data.updatedAt || task.updatedAt }
+        : task));
     });
     const offLog = api.onQuchongLog?.((data) => {
       if (batchRef.current && batchRef.current !== data.batchId) return;
@@ -96,8 +107,19 @@ export default function Quchong({ active = true }) {
       batchRef.current = null;
       setBatchId(null);
     });
-    return () => [offTask, offProgress, offLog, offComplete].forEach((off) => off?.());
-  }, []);
+    const offHistory = api.onQuchongHistoryChanged?.((data) => {
+      if (Array.isArray(data?.tasks)) setHistory(data.tasks);
+    });
+    return () => [offTask, offProgress, offLog, offComplete, offHistory].forEach((off) => off?.());
+  }, [active]);
+
+  const restoreSnapshot = (snapshot) => {
+    if (!snapshot) return;
+    setTasks(snapshot.tasks || []);
+    setRunning(false);
+    setBatchId(null);
+    setNotice(`已恢复任务快照：${snapshot.done || 0}/${snapshot.total || 0} 完成`);
+  };
 
   const update = (key, value) => setOpts((previous) => ({ ...previous, [key]: value }));
   const chooseOutput = async () => {
@@ -183,7 +205,8 @@ export default function Quchong({ active = true }) {
       </section>
 
       <div className="qc-footer"><button className="btn btn-primary" onClick={start} disabled={running}><Play size={15} /> 开始处理</button><button className="btn" onClick={cancel} disabled={!running}><Square size={14} /> 停止</button><button className="btn" onClick={() => { setFiles([]); setTasks([]); setLogs([]); setNotice(''); }} disabled={running}><Trash2 size={14} /> 清空</button></div>
-      {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">{completed}/{tasks.length} 完成</span></div>{tasks.map((task) => <div className="qc-progress-row" key={task.id}><span title={task.name}>{fileName(task.name)}</span><div className="qc-progress"><i style={{ width: `${task.progress || 0}%` }} /></div><em>{task.status === 'completed' ? '完成' : task.status === 'running' ? `${Math.round(task.progress || 0)}%` : task.status === 'failed' ? '失败' : task.status === 'stopped' ? '已停止' : '等待'}</em></div>)}{logs.length > 0 && <pre className="qc-log">{logs.join('\n')}</pre>}</section>}
+      {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">{completed}/{tasks.length} 完成</span></div>{tasks.map((task) => { const stage = task.stage || task.status; const label = stage === 'processing' || stage === 'running' ? `${Math.round(task.progress || 0)}%` : stageText[stage] || '等待'; return <div className="qc-progress-row" key={task.id}><span title={task.name}>{fileName(task.name)}</span><div className="qc-progress"><i style={{ width: `${task.progress || 0}%` }} /></div><em>{label}</em></div>; })}{logs.length > 0 && <pre className="qc-log">{logs.join('\n')}</pre>}</section>}
+      {!!history.length && <section className="qc-card qc-history-card"><div className="qc-card-title"><span>处理任务快照</span><span className="qc-hint">保留最近 {Math.min(history.length, 50)} 批</span></div>{history.slice(0, 12).map((batch) => <div className="qc-history-row" key={batch.id}><div><b>{batch.status === 'completed' ? '已完成' : batch.status === 'stopped' ? '已停止' : batch.status === 'failed' ? '部分失败' : '排队中'}</b><span>{batch.done || 0}/{batch.total || 0} 个视频 · {batch.createdAt ? new Date(batch.createdAt).toLocaleString() : '未知时间'}</span></div><button className="btn btn-sm" onClick={() => restoreSnapshot(batch)}>恢复查看</button></div>)}</section>}
     </div>
   );
 }

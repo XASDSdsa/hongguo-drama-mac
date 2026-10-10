@@ -30,7 +30,7 @@ function load(platform = 'darwin') {
   class Window extends EventEmitter {
     constructor(options) {
       super(); this.options = options; this.destroyed = false;
-      this.webContents = { setWindowOpenHandler() {}, send() {} };
+      this.webContents = { setWindowOpenHandler() {}, send() {}, once() {} };
       windows.push(this);
     }
     static getAllWindows() { return windows.filter(w => !w.destroyed); }

@@ -36,3 +36,4 @@
 .sep-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .sep-actions > span { flex: 1; color: var(--text-secondary); font-size: 11px; }
 @media (max-width: 820px) { .sep-header { gap: 16px; } .sep-cover { flex-basis: 100px; width: 100px; } .sep-title-row { flex-wrap: wrap; gap: 8px; } .sep-actions { flex-wrap: wrap; } .sep-actions > span { order: 3; flex-basis: 100%; } .sep-actions > .btn-primary { margin-left: auto; } }
+@media (max-width: 560px) { .sep-actions .btn { flex: 1 1 auto; } .sep-actions > .btn-primary { margin-left: 0; } }

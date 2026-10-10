@@ -1,6 +1,6 @@
 /**
  * store.js - 精简持久化模块
- * 用单个 JSON 文件保存「设置」与「下载任务」，替代原项目里的 sql.js 数据库 + electron-store，
+ * 用单个 JSON 文件保存设置、下载任务和视频处理快照，替代原项目里的 sql.js 数据库 + electron-store，
  * 减少依赖，方便独立打包。
  */
 const fs = require('fs');
@@ -23,6 +23,7 @@ function loadCache() {
   }
   if (!cache || typeof cache !== 'object') cache = {};
   if (!Array.isArray(cache.tasks)) cache.tasks = [];
+  if (!Array.isArray(cache.quchongTasks)) cache.quchongTasks = [];
   if (!cache.settings || typeof cache.settings !== 'object') cache.settings = {};
   durable = JSON.stringify(cache);
   return cache;
@@ -69,6 +70,19 @@ function saveTasks(tasks) {
   flush();
 }
 
+// ===== 视频处理任务快照 =====
+// 与下载任务分开保存，避免处理进度覆盖下载状态；调用方只在阶段变化时保存。
+function getQuchongTasks() {
+  const c = loadCache();
+  if (!Array.isArray(c.quchongTasks)) c.quchongTasks = [];
+  return c.quchongTasks;
+}
+
+function saveQuchongTasks(tasks) {
+  loadCache().quchongTasks = tasks || [];
+  flush();
+}
+
 // ===== 短剧档案（让播放页在没有下载任务时也能列出完整分集）=====
 function getSeries() {
   const c = loadCache();
@@ -112,6 +126,8 @@ module.exports = {
   saveSettings,
   getTasks,
   saveTasks,
+  getQuchongTasks,
+  saveQuchongTasks,
   getSeries,
   saveSeries,
   getPlayback,

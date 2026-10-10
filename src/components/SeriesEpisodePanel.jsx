@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Download, Film, Play, RefreshCw } from './icons';
+import AiMaterialsPanel from './AiMaterialsPanel';
 import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 import './SeriesEpisodePanel.css';
 
@@ -182,5 +183,7 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdated
       </div>
       <div className="sep-actions"><button className="btn btn-outline" disabled={!active || playing || !episodes.some(ep => !ep.locked && ep.vid)} onClick={play}><Play size={15} />{playing ? '正在打开…' : '立即播放'}</button><span>已下载及队列中的集数自动跳过</span><button className="btn btn-primary" disabled={disabled || !selected.size} onClick={downloadSelected}><Download size={15} />{submitting ? '正在加入队列…' : `下载选中 (${selected.size})`}</button></div>
     </>}
+    <AiMaterialsPanel key={seriesId} seriesId={seriesId} title={detail?.series_title || title} cover={poster}
+      aiCover={detail?.aiCover} episodes={episodes} active={active} revision={revision} onNotify={onNotify} />
   </section>;
 }
