@@ -154,7 +154,13 @@ function appendOutput(state, chunk, maxBytes = MAX_OUTPUT_BYTES) {
 
 function runWhisper(binaryPath, args, signal, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(binaryPath, args, { windowsHide: true });
+    // Windows development setups sometimes expose whisper through a .cmd
+    // wrapper. Packaged builds use whisper-cli.exe, but accepting the wrapper
+    // keeps the explicit settings path testable on every platform.
+    const child = spawn(binaryPath, args, {
+      windowsHide: true,
+      shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(binaryPath),
+    });
     const stdout = { text: '', bytes: 0 };
     const stderr = { text: '', bytes: 0 };
     let settled = false;

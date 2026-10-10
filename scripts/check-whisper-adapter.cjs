@@ -12,15 +12,26 @@ const { transcribeAudio, checkWhisper, cleanTranscript } = require('../src/nativ
   try {
     const model = path.join(root, 'ggml-tiny.bin');
     await fsp.writeFile(model, Buffer.alloc(4096, 1));
-    const fake = path.join(root, 'whisper-cli');
-    await fsp.writeFile(fake, String.raw`#!/usr/bin/env node
+    const fakeScript = path.join(root, 'fake-whisper.js');
+    await fsp.writeFile(fakeScript, String.raw`const fs = require('node:fs');
+const args = process.argv.slice(2);
+const i = args.indexOf('-of');
+const prefix = i >= 0 ? args[i + 1] : '';
+if (prefix) fs.writeFileSync(prefix + '.txt', '[00:00:00.000 --> 00:00:01.000]\n你好，这是本地识别。\n');
+process.stdout.write('system_info: fake\n');
+`);
+    const fake = path.join(root, process.platform === 'win32' ? 'whisper-cli.cmd' : 'whisper-cli');
+    const fakeContent = process.platform === 'win32'
+      ? `@echo off\r\nnode "%~dp0fake-whisper.js" %*\r\n`
+      : String.raw`#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const i = args.indexOf('-of');
 const prefix = i >= 0 ? args[i + 1] : '';
 if (prefix) fs.writeFileSync(prefix + '.txt', '[00:00:00.000 --> 00:00:01.000]\n你好，这是本地识别。\n');
 process.stdout.write('system_info: fake\n');
-`, { mode: 0o755 });
+`;
+    await fsp.writeFile(fake, fakeContent, { mode: 0o755 });
     const audio = path.join(root, 'audio.wav');
     await fsp.writeFile(audio, Buffer.alloc(4096, 2));
 
