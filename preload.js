@@ -149,8 +149,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // 一键启动 / 一键暂停 / 队列状态
-  pauseAll: () => ipcRenderer.invoke('pause-all'),
-  resumeAll: () => ipcRenderer.invoke('resume-all'),
+  pauseAll: (taskIds) => ipcRenderer.invoke('pause-all', taskIds),
+  resumeAll: (taskIds) => ipcRenderer.invoke('resume-all', taskIds),
   getQueueStatus: () => ipcRenderer.invoke('get-queue-status'),
 
   // 事件监听

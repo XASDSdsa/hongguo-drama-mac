@@ -455,12 +455,14 @@ function enqueuePendingTasks() {
 }
 
 /**
- * 一键暂停：取消进行中的任务、清空等待队列、把等待中的标记为已停止。
+ * 一键暂停：取消范围内进行中的任务、移出等待队列、把等待中的标记为已停止。
  * 返回被暂停的任务数。
  */
-function pauseAllTasks() {
+function pauseAllTasks(taskIds) {
+  if (taskIds?.size === 0) return 0;
   let stopped = 0;
   for (const task of downloadTasks) {
+    if (taskIds && !taskIds.has(task.id)) continue;
     if (task.status === 'pending') {
       task.status = 'stopped';
       task.error = '已手动暂停';
@@ -480,19 +482,21 @@ function pauseAllTasks() {
       stopped++;
     }
   }
-  downloadQueue = [];
+  downloadQueue = taskIds ? downloadQueue.filter(task => !taskIds.has(task.id)) : [];
   saveDownloadTasks();
   sendToRenderer('download-queue-changed', {});
   return stopped;
 }
 
 /**
- * 一键启动：把所有未完成（已停止 / 失败 / 等待中）的任务重新排队开跑。
+ * 一键启动：把范围内未完成（已停止 / 失败 / 等待中）的任务重新排队开跑。
  * 返回重新排队任务数。
  */
-function resumeAllTasks() {
+function resumeAllTasks(taskIds) {
+  if (taskIds?.size === 0) return 0;
   let count = 0;
   for (const task of downloadTasks) {
+    if (taskIds && !taskIds.has(task.id)) continue;
     if (task.status !== 'stopped' && task.status !== 'failed' && task.status !== 'pending' && !(task.status === 'completed' && !hasCompleteTaskFile(task))) continue;
 
     repairTaskDestination(task);
@@ -2953,9 +2957,19 @@ ipcMain.handle('retry-tasks', async (event, taskIds) => {
 });
 
 // ===== IPC：一键启动 / 一键暂停 =====
-ipcMain.handle('pause-all', async () => ({ success: true, count: pauseAllTasks() }));
+ipcMain.handle('pause-all', async (_event, taskIds) => {
+  if (taskIds !== undefined && (!Array.isArray(taskIds) || [...taskIds].some(id => typeof id !== 'string' || !id.trim()))) {
+    return { success: false, error: '任务范围必须是有效的任务 ID 数组' };
+  }
+  return { success: true, count: pauseAllTasks(taskIds === undefined ? undefined : new Set(taskIds)) };
+});
 
-ipcMain.handle('resume-all', async () => ({ success: true, count: resumeAllTasks() }));
+ipcMain.handle('resume-all', async (_event, taskIds) => {
+  if (taskIds !== undefined && (!Array.isArray(taskIds) || [...taskIds].some(id => typeof id !== 'string' || !id.trim()))) {
+    return { success: false, error: '任务范围必须是有效的任务 ID 数组' };
+  }
+  return { success: true, count: resumeAllTasks(taskIds === undefined ? undefined : new Set(taskIds)) };
+});
 
 // 队列实时状态（供界面显示「进行中 x/并发上限」）
 ipcMain.handle('get-queue-status', async () => ({

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
+import { downloadSeriesKey, groupDownloadSeries } from './downloadSeries.mjs';
+import './Browse.css';
 import './DownloadManager.css';
-import { Download, Trash2, RefreshCw, X, Film, Square, Folder, Zap, CheckSquare, Play, Pause, Layers } from './icons';
+import { Download, Trash2, RefreshCw, X, Film, Square, Folder, Zap, CheckSquare, Play, Pause, Layers, Check, ChevronRight, Search } from './icons';
 
 const STATUS_TEXT = {
   pending: '等待中',
@@ -53,6 +55,7 @@ function fmtBytes(bytes) {
 }
 
 const PAGE_SIZE = 100;
+const SERIES_PAGE_SIZE = 30;
 
 function DownloadManager({ onNavigate, active = true }) {
   const [tasks, setTasks] = useState([]);
@@ -60,7 +63,10 @@ function DownloadManager({ onNavigate, active = true }) {
   const [toast, setToast] = useState(null);
   const [queue, setQueue] = useState({ active: 0, queued: 0, maxConcurrent: 3 });
   const [seriesList, setSeriesList] = useState([]);
-  const [mergeSeriesId, setMergeSeriesId] = useState('');
+  const [selectedSeries, setSelectedSeries] = useState(null);
+  const [seriesPage, setSeriesPage] = useState(1);
+  const [seriesQuery, setSeriesQuery] = useState('');
+  const [loaded, setLoaded] = useState(false);
   const [merging, setMerging] = useState(false);
   const [mergeTasks, setMergeTasks] = useState([]);
   const [confirmAsk, setConfirmAsk] = useState(null); // 删除确认（可勾选删除本地文件）
@@ -68,11 +74,41 @@ function DownloadManager({ onNavigate, active = true }) {
   const [page, setPage] = useState(1);
   const [orderVersion, setOrderVersion] = useState(0);
   const [loadError, setLoadError] = useState('');
+  const containerRef = useRef(null);
+  const overviewScroll = useRef(0);
   const toastTimerRef = useRef(null);
   const activeRef = useRef(active);
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0, merges: 0 });
   const taskIndex = useRef(new Map());
+  const seriesCards = useMemo(() => groupDownloadSeries(tasks, seriesList), [tasks, seriesList]);
+  const currentSeries = selectedSeries && (seriesCards.find(series => series.key === selectedSeries.key) || selectedSeries);
+  const scopedTasks = useMemo(() => selectedSeries
+    ? tasks.filter(task => downloadSeriesKey(task) === selectedSeries.key)
+    : tasks, [tasks, selectedSeries]);
+  const mergeSeriesId = currentSeries?.seriesId || '';
+  // Clearing download records must not hide an active merge or its exported file.
+  const visibleMerges = selectedSeries
+    ? mergeTasks.filter(task => String(task.seriesId) === mergeSeriesId)
+    : mergeTasks.filter(task => !seriesCards.some(series => series.seriesId === String(task.seriesId)));
+  const filteredSeries = seriesCards.filter(series => series.title.toLocaleLowerCase().includes(seriesQuery.trim().toLocaleLowerCase()));
+  const seriesPageCount = Math.max(1, Math.ceil(filteredSeries.length / SERIES_PAGE_SIZE));
+  const currentSeriesPage = Math.min(seriesPage, seriesPageCount);
+  const visibleSeries = filteredSeries.slice((currentSeriesPage - 1) * SERIES_PAGE_SIZE, currentSeriesPage * SERIES_PAGE_SIZE);
+
+  const openSeries = (series) => {
+    if (!selectedSeries) overviewScroll.current = containerRef.current?.closest('.main-content')?.scrollTop || 0;
+    setSelectedSeries(series);
+    setSelected(new Set());
+    setPage(1);
+    setConfirmAsk(null);
+    setMergeAsk(false);
+  };
+
+  useEffect(() => {
+    const content = containerRef.current?.closest('.main-content');
+    if (content) content.scrollTop = selectedSeries ? 0 : overviewScroll.current;
+  }, [selectedSeries]);
 
   const refresh = useCallback(async () => {
     const request = ++requests.current.tasks;
@@ -85,6 +121,7 @@ function DownloadManager({ onNavigate, active = true }) {
       const ids = new Set(list.map(task => task.id));
       setSelected(previous => new Set([...previous].filter(id => ids.has(id))));
       setLoadError('');
+      setLoaded(true);
     } catch (error) {
       if (activeRef.current && request === requests.current.tasks) setLoadError(error.message || '下载任务读取失败，请重试');
     }
@@ -104,7 +141,6 @@ function DownloadManager({ onNavigate, active = true }) {
       const list = (await window.electronAPI.getSeriesList()) || [];
       if (!activeRef.current || request !== requests.current.series) return;
       setSeriesList(list);
-      setMergeSeriesId((prev) => list.some(item => String(item.series_id) === prev) ? prev : (list[0] ? String(list[0].series_id) : ''));
     } catch (_) {}
   }, []);
 
@@ -210,8 +246,8 @@ function DownloadManager({ onNavigate, active = true }) {
   };
 
   const clearSelection = () => setSelected(new Set());
-  const selectAll = () => setSelected(new Set(tasks.map((task) => task.id)));
-  const allSelected = tasks.length > 0 && tasks.every((task) => selected.has(task.id));
+  const selectAll = () => setSelected(new Set(scopedTasks.map((task) => task.id)));
+  const allSelected = scopedTasks.length > 0 && scopedTasks.every((task) => selected.has(task.id));
 
   const fmtSize = (b) => {
     if (!b || b <= 0) return '0 B';
@@ -250,7 +286,7 @@ function DownloadManager({ onNavigate, active = true }) {
 
   const deleteSelected = async () => {
     if (selected.size === 0) return;
-    askDelete(tasks.filter((t) => selected.has(t.id)), '删除选中任务');
+    askDelete(scopedTasks.filter((t) => selected.has(t.id)), '删除选中任务');
   };
   const retrySelected = async () => {
     if (selected.size === 0) return;
@@ -308,7 +344,7 @@ function DownloadManager({ onNavigate, active = true }) {
 
   // 一键暂停：取消进行中的 + 清空等待队列
   const pauseAll = async () => {
-    const res = await window.electronAPI.pauseAll();
+    const res = await window.electronAPI.pauseAll(selectedSeries ? scopedTasks.map(task => task.id) : undefined);
     await refresh();
     await loadQueue();
     showToast(res && res.success ? `已暂停 ${res.count} 个任务` : '暂停失败', res && res.success ? 'success' : 'error');
@@ -316,7 +352,7 @@ function DownloadManager({ onNavigate, active = true }) {
 
   // 一键启动：把所有已停止/失败/等待中的任务重新排队开跑
   const resumeAll = async () => {
-    const res = await window.electronAPI.resumeAll();
+    const res = await window.electronAPI.resumeAll(selectedSeries ? scopedTasks.map(task => task.id) : undefined);
     await refresh();
     await loadQueue();
     showToast(res && res.success ? `已启动 ${res.count} 个任务` : '启动失败', res && res.success ? 'success' : 'error');
@@ -324,7 +360,7 @@ function DownloadManager({ onNavigate, active = true }) {
 
   // 重试失败/已停止的任务
   const retryAllFailed = async () => {
-    const ids = tasks.filter((t) => t.status === 'failed' || t.status === 'stopped').map((t) => t.id);
+    const ids = scopedTasks.filter((t) => t.status === 'failed' || t.status === 'stopped').map((t) => t.id);
     if (ids.length === 0) return;
     const res = await window.electronAPI.retryTasks(ids);
     await refresh();
@@ -337,7 +373,7 @@ function DownloadManager({ onNavigate, active = true }) {
 
   // 一键选中全部失败/已停止的任务（选中后可再点「重试选中」）
   const selectAllFailed = () => {
-    const ids = tasks.filter((t) => t.status === 'failed' || t.status === 'stopped').map((t) => t.id);
+    const ids = scopedTasks.filter((t) => t.status === 'failed' || t.status === 'stopped').map((t) => t.id);
     if (ids.length === 0) {
       showToast('没有失败或已停止的任务');
       return;
@@ -347,32 +383,34 @@ function DownloadManager({ onNavigate, active = true }) {
   };
 
   const clearCompleted = async () => {
-    const done = tasks.filter((t) => t.status === 'completed');
+    const done = scopedTasks.filter((t) => t.status === 'completed');
     if (done.length === 0) return;
-    askDelete(done, '清空已完成任务');
+    askDelete(done, selectedSeries ? '清空本剧已完成任务' : '清空已完成任务');
   };
 
   // Progress updates change row values, not the established series/episode order.
-  const sortedIds = useMemo(() => sortTasks(tasks).map(task => task.id), [orderVersion]);
+  const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [orderVersion, selectedSeries]);
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks]);
   taskIndex.current = taskById;
   const pageCount = Math.max(1, Math.ceil(sortedIds.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const visibleTasks = sortedIds.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(id => taskById.get(id)).filter(Boolean);
 
-  const activeCount = tasks.filter((t) => t.status === 'downloading' || t.status === 'pending').length;
-  const completedCount = tasks.filter((t) => t.status === 'completed').length;
+  const activeCount = scopedTasks.filter((t) => t.status === 'downloading' || t.status === 'pending').length;
+  const completedCount = scopedTasks.filter((t) => t.status === 'completed').length;
   const failedTasks = useMemo(
-    () => tasks.filter((t) => t.status === 'failed' || t.status === 'stopped'),
-    [tasks]
+    () => scopedTasks.filter((t) => t.status === 'failed' || t.status === 'stopped'),
+    [scopedTasks]
   );
   const failedCount = failedTasks.length;
 
-  // 可暂停的任务：正在下载、等待中、已停止（未跑完的都算）
+  // 开始和暂停分别只针对可恢复与正在排队的任务。
   const pausableCount = useMemo(
-    () => tasks.filter((t) => t.status !== 'completed').length,
-    [tasks]
+    () => scopedTasks.filter((t) => t.status === 'downloading' || t.status === 'pending').length,
+    [scopedTasks]
   );
+
+  const resumableCount = scopedTasks.filter(task => ['pending', 'failed', 'stopped'].includes(task.status)).length;
 
   // 已选中项里真正可重试的数量
   const retryableSelectedCount = useMemo(
@@ -387,10 +425,11 @@ function DownloadManager({ onNavigate, active = true }) {
   useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.dm-container .player-confirm');
 
   return (
-    <div className="dm-container">
+    <div className="dm-container" ref={containerRef}>
+      {selectedSeries && <button className="btn btn-outline dm-back" onClick={() => openSeries(null)}><ChevronRight size={16} style={{ transform: 'rotate(180deg)' }} />返回短剧列表</button>}
       <div className="dm-header">
         <div className="dm-title">
-          <div><h2>下载管理</h2><p className="page-description">下载进度、已保存的剧集，都在这里。</p></div>
+          <div><h2>{currentSeries?.title || '下载管理'}</h2><p className="page-description">{selectedSeries ? `本剧视频列表 · ${scopedTasks.length} 个下载任务` : `共 ${seriesCards.length} 部短剧，点击封面查看视频列表。`}</p></div>
         </div>
         <div className="dm-stats">
           <span className="stat stat-active">进行中 {activeCount}</span>
@@ -403,31 +442,32 @@ function DownloadManager({ onNavigate, active = true }) {
         <button
           className="btn btn-primary"
           onClick={resumeAll}
-          disabled={queue.active > 0 || pausableCount === 0}
-          title="把等待中 / 已停止 / 失败的任务全部排队开跑"
+          disabled={resumableCount === 0}
+          title={selectedSeries ? '开始本剧等待中、已停止和失败的任务' : '开始所有短剧的未完成任务'}
         >
           <Play size={15} />
-          全部开始
+          {selectedSeries ? '开始本剧' : '全部开始'}
         </button>
         <button
           className="btn btn-outline"
           onClick={pauseAll}
           disabled={pausableCount === 0}
-          title="暂停全部：取消正在下载的并清空等待队列"
+          title={selectedSeries ? '仅暂停本剧正在下载和等待中的任务' : '暂停所有短剧的下载任务'}
         >
           <Pause size={15} />
-          全部暂停
+          {selectedSeries ? '暂停本剧' : '全部暂停'}
         </button>
         <button
           className="btn btn-outline"
           onClick={retryAllFailed}
           disabled={failedCount === 0}
-          title="把所有失败/已停止的任务一次性重新加入下载队列"
+          title={selectedSeries ? '重试本剧失败或已停止的任务' : '重试所有短剧失败或已停止的任务'}
         >
           <Zap size={15} />
           {failedCount > 0 ? `重试失败 (${failedCount})` : '重试失败'}
         </button>
         <details className="dm-more-actions"><summary>更多操作</summary><div className="dm-more-menu">
+        {selectedSeries && <>
         <button
           className="btn btn-outline"
           onClick={selectAllFailed}
@@ -445,12 +485,11 @@ function DownloadManager({ onNavigate, active = true }) {
           <Trash2 size={15} />
           删除选中
         </button>
+        <button className="btn btn-outline" onClick={clearSelection} disabled={selected.size === 0}>取消选择</button>
+        </>}
         <button className="btn btn-outline" onClick={clearCompleted} disabled={completedCount === 0}>
           <X size={15} />
           清空已完成
-        </button>
-        <button className="btn btn-outline" onClick={clearSelection} disabled={selected.size === 0}>
-          取消选择
         </button>
         <button
           className="btn btn-outline"
@@ -467,21 +506,9 @@ function DownloadManager({ onNavigate, active = true }) {
           扫描下载目录
         </button>
         </div></details>
-        {seriesList.length > 0 && (
+        {selectedSeries && mergeSeriesId && (
           <div className="merge-inline">
-            <select
-              className="input-field merge-select"
-              value={mergeSeriesId}
-              onChange={(e) => setMergeSeriesId(e.target.value)}
-              title="选择要合并的短剧"
-            >
-              {seriesList.map((s) => (
-                <option key={s.series_id} value={String(s.series_id)}>
-                  {s.series_title}
-                </option>
-              ))}
-            </select>
-            <button className="btn btn-outline" onClick={() => setMergeAsk(true)} disabled={merging} title="把该剧已下载的分集合并成单个 mp4">
+            <button className="btn btn-outline" onClick={() => setMergeAsk(true)} disabled={merging || completedCount === 0} title="把本剧已下载的分集合并成单个 mp4">
               <Layers size={15} />
               {merging ? '合并中...' : '合并整部剧'}
             </button>
@@ -495,12 +522,12 @@ function DownloadManager({ onNavigate, active = true }) {
         )}
       </div>
 
-      {seriesList.length > 0 && <p className="settings-hint dm-merge-hint">选择剧名后点“合并整部剧”，导出该剧全部已下载分集，无需勾选任务。</p>}
+      {selectedSeries && mergeSeriesId && <p className="settings-hint dm-merge-hint">“合并整部剧”导出本剧全部已下载分集，无需勾选任务。</p>}
 
       {/* 合并任务 */}
-      {mergeTasks.length > 0 && (
+      {visibleMerges.length > 0 && (
         <div className="merge-list">
-          {mergeTasks.map((m) => (
+          {visibleMerges.map((m) => (
             <div key={m.id} className={`merge-card merge-${m.status}`}>
               <Layers size={16} />
               <div className="merge-body">
@@ -570,7 +597,7 @@ function DownloadManager({ onNavigate, active = true }) {
         <div className="dm-queue-bar">
           <span className="dm-queue-running">
             <span className="dm-queue-pulse" />
-            正在并发下载 <b>{queue.active}</b> / {queue.maxConcurrent}
+            全局并发下载 <b>{queue.active}</b> / {queue.maxConcurrent}
             {queue.queued > 0 ? <> · 队列等待 <b>{queue.queued}</b></> : null}
           </span>
           <span className="dm-queue-hint">
@@ -587,13 +614,13 @@ function DownloadManager({ onNavigate, active = true }) {
       )}
 
       {loadError && <div className="alert alert-error" role="alert">{loadError}<button className="btn btn-outline btn-sm" onClick={refresh}>重新加载</button></div>}
-      {tasks.length > 0 && <div className="dm-pagination">
+      {selectedSeries && scopedTasks.length > 0 && <div className="dm-pagination">
         <div className="dm-selection-summary">
           <button className="btn btn-outline btn-sm" onClick={allSelected ? clearSelection : selectAll}
-            title={allSelected ? '取消所有分页中的选择' : `选中全部 ${tasks.length} 项，包含其他分页`}>
+            title={allSelected ? '取消所有分页中的选择' : `选中本剧全部 ${scopedTasks.length} 项，包含其他分页`}>
             <CheckSquare size={15} />{allSelected ? '取消全选' : '全选'}
           </button>
-        <span>共 {tasks.length} 项 · 当前 {(currentPage - 1) * PAGE_SIZE + 1}-{Math.min(currentPage * PAGE_SIZE, tasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
+        <span>共 {scopedTasks.length} 项 · 当前 {(currentPage - 1) * PAGE_SIZE + 1}-{Math.min(currentPage * PAGE_SIZE, scopedTasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
         </div>
         <nav aria-label="下载任务分页">
           <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
@@ -602,19 +629,57 @@ function DownloadManager({ onNavigate, active = true }) {
         </nav>
       </div>}
 
-      {tasks.length === 0 ? (
+      {!selectedSeries ? (
+        <>
+          <div className="dm-series-toolbar">
+            <label className="dm-series-search"><Search size={16} /><input aria-label="搜索已添加的短剧" placeholder="搜索剧名" value={seriesQuery} onChange={event => { setSeriesQuery(event.target.value); setSeriesPage(1); }} /></label>
+            <span>{filteredSeries.length} 部短剧</span>
+          </div>
+          {!loaded && !loadError ? <div className="browse-loading" role="status">正在读取下载记录…</div> : filteredSeries.length === 0 ? (
+            <div className="dm-empty">
+              <Download size={40} />
+              <p>{seriesQuery.trim() ? '没有找到匹配的短剧' : '暂无下载任务'}</p>
+              <p className="dm-empty-sub">{seriesQuery.trim() ? '换个剧名试试。' : '搜索剧名或粘贴分享链接，选择想保存的集数。'}</p>
+              {!seriesQuery.trim() && onNavigate && <button className="btn btn-primary" onClick={() => onNavigate('download')}>添加第一部短剧</button>}
+            </div>
+          ) : (
+            <div className="browse-grid">
+              {visibleSeries.map(series => (
+                <button type="button" key={series.key} className="browse-card" data-series-key={series.key} onClick={() => openSeries(series)} title={series.title} aria-label={`查看《${series.title}》的视频，已下载 ${series.completed} 集`}>
+                  <div className="browse-cover">
+                    {series.cover ? <img src={series.cover} alt="" loading="lazy" /> : <div className="cover-placeholder"><Film size={22} /></div>}
+                    {series.total > 0 && <span className="browse-ep-badge">全{series.total}集</span>}
+                    <span className="browse-dl-badge"><Check size={11} />{series.completed}{series.total > 0 ? `/${series.total}` : ' 集'}</span>
+                    <div className="browse-hover"><span className="browse-hover-play"><Film size={16} />查看视频</span></div>
+                  </div>
+                  <div className="browse-card-title">{series.title}</div>
+                  <div className="dm-card-count">已下载 {series.completed}{series.total > 0 ? ` / ${series.total}` : ''} 集</div>
+                  <div className="browse-card-tags">
+                    <span className="browse-tag">{series.seriesId?.startsWith('xifan:') ? '西饭短剧' : series.seriesId?.startsWith('hema:') ? '河马短剧' : series.seriesId ? '红果短剧' : '本地任务'}</span>
+                    {series.downloading + series.pending > 0 && <span className="browse-tag">进行中 {series.downloading + series.pending}</span>}
+                    {series.failed + series.stopped > 0 && <span className="browse-tag">失败/停止 {series.failed + series.stopped}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {seriesPageCount > 1 && <nav className="browse-pager" aria-label="短剧分页">
+            <button className="btn btn-outline btn-sm" disabled={currentSeriesPage <= 1} onClick={() => setSeriesPage(currentSeriesPage - 1)}>上一页</button>
+            <span>第 {currentSeriesPage} / {seriesPageCount} 页</span>
+            <button className="btn btn-outline btn-sm" disabled={currentSeriesPage >= seriesPageCount} onClick={() => setSeriesPage(currentSeriesPage + 1)}>下一页</button>
+          </nav>}
+        </>
+      ) : scopedTasks.length === 0 ? (
         <div className="dm-empty">
           <Download size={40} />
-          <p>暂无下载任务</p>
-          <p className="dm-empty-sub">搜索剧名或粘贴分享链接，选择想保存的集数。</p>
-          {onNavigate && <button className="btn btn-primary" onClick={() => onNavigate('download')}>添加第一部短剧</button>}
+          <p>本剧暂无下载任务</p>
+          <button className="btn btn-outline" onClick={() => openSeries(null)}>返回短剧列表</button>
         </div>
       ) : (
         <div className="dm-list">
           {visibleTasks.map((task) => {
 
             const isSel = selected.has(task.id);
-            const isActive = task.status === 'downloading' || task.status === 'pending';
             const canStop = task.status === 'downloading';
             const canRetry = task.status === 'failed' || task.status === 'stopped';
             const pct = task.progress || 0;
@@ -691,7 +756,7 @@ function DownloadManager({ onNavigate, active = true }) {
               合并整部剧
             </div>
             <div className="player-confirm-msg">
-              <p>将《{seriesList.find((series) => String(series.series_id) === mergeSeriesId)?.series_title || '所选短剧'}》的全部已下载分集合并为一个 mp4。未下载的分集不会自动补齐。</p>
+              <p>将《{currentSeries?.title || '所选短剧'}》的全部已下载分集合并为一个 mp4。未下载的分集不会自动补齐。</p>
               <p><b>智能快速合并</b>：格式一致时无损合并；不一致时只处理必要的音视频，耗时取决于总时长。</p>
               <p><b>兼容合并</b>：导出 H.264/AAC，已经兼容的分集无需重复转换。两种方式都保留原文件。</p>
             </div>

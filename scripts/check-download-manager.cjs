@@ -21,7 +21,7 @@ function mount(api = {}, props = {}) {
   const setTimer = (fn, delay, interval = false) => { const id = ++timerId; timers.set(id, { fn, delay, interval }); return id; };
   const module = { exports: {} };
   vm.runInNewContext(transformSync(fs.readFileSync(`${__dirname}/../src/components/DownloadManager.jsx`, 'utf8'), { loader: 'jsx', format: 'cjs' }).code, {
-    module, exports: module.exports, require: name => name === 'react' ? react : name === './useDialogKeyboard' ? open => { dialogOpen = open; } : {}, window,
+    module, exports: module.exports, require: name => name === 'react' ? react : name === './downloadSeries.mjs' ? require('../src/components/downloadSeries.mjs') : name === './useDialogKeyboard' ? open => { dialogOpen = open; } : {}, window,
     document: { querySelector: () => null }, console, setTimeout: (fn, delay) => setTimer(fn, delay), clearTimeout: id => timers.delete(id), setInterval: (fn, delay) => setTimer(fn, delay, true), clearInterval: id => timers.delete(id),
   });
   const render = () => { cursor = 0; tree = module.exports.default(props); effects.splice(0).forEach(fn => fn()); };
@@ -38,9 +38,10 @@ function mount(api = {}, props = {}) {
     unmount: () => cleanups.forEach(fn => fn?.()),
   };
 }
-const task = (i, status = 'downloading') => ({ id: `t${i}`, title: `第${i}集`, status, progress: 0, startTime: i, hongguoInfo: { series_id: 'A', vid_index: i } });
+const task = (i, status = 'downloading') => ({ id: `t${i}`, title: `第${i}集`, status, progress: 0, startTime: i, hongguoInfo: { series_id: 'A', series_title: '示例剧', vid_index: i } });
 const rows = ui => ui.nodes().filter(n => /^dm-task(?: selected)?$/.test((n.props.className || '').trim()));
-const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, progress: 0, seriesTitle: 'A', startTime: Date.now() });
+const openSeries = (ui, key = 'series:A') => { const card = ui.find(n => n.props['data-series-key'] === key); assert.ok(card, `missing series card ${key}`); card.props.onClick(); ui.render(); };
+const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 2, done: 0, progress: 0, seriesTitle: 'A', startTime: Date.now() });
 
 (async () => {
   let failures = 0, passed = 0;
@@ -49,27 +50,27 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
     let calls = 0;
     const ui = mount({ getDownloadTasks: async () => { calls++; return [task(1)]; } });
     await ui.flush(); assert.equal(calls, 1, 'initial effects must not request duplicate snapshots');
-    ui.find(n => n.props.title?.startsWith('删除任务')).props.onClick(); ui.render(); assert.equal(ui.dialogOpen(), true);
+    openSeries(ui); ui.find(n => n.props.title?.startsWith('删除任务')).props.onClick(); ui.render(); assert.equal(ui.dialogOpen(), true);
     ui.setProps({ active: false }); const before = calls; ui.advance(20000); await ui.flush();
     assert.equal(ui.intervals(), 0); assert.equal(calls, before); assert.equal(ui.dialogOpen(), false);
     const writes = ui.writes(); ui.emit('onDownloadProgress', { id: 't1', progress: 98 }); ui.advance(250); await ui.flush();
     assert.equal(ui.writes(), writes, 'hidden page must ignore high frequency task events'); ui.unmount();
   });
-  await test('reactivation refreshes newly registered series and removes stale selection', async () => {
-    let list = [{ series_id: 'A', series_title: 'Old' }];
-    const ui = mount({ getSeriesList: async () => list }); await ui.flush();
-    ui.setProps({ active: false }); list = [{ series_id: 'B', series_title: 'New' }]; ui.setProps({ active: true }); await ui.flush();
-    const select = ui.find(n => n.type === 'select' && n.props.className?.includes('merge-select'));
-    assert.equal(select.props.value, 'B'); assert.ok(ui.text().includes('New')); assert.ok(!ui.text().includes('Old')); ui.unmount();
+  await test('reactivation refreshes series metadata and clears stale task selections', async () => {
+    let list = [{ series_id: 'A', series_title: 'Old' }], tasks = [task(1)];
+    const ui = mount({ getSeriesList: async () => list, getDownloadTasks: async () => tasks }); await ui.flush();
+    openSeries(ui); rows(ui)[0].props.onClick(); ui.render();
+    ui.setProps({ active: false }); list = [{ series_id: 'A', series_title: 'New' }]; tasks = [task(2)]; ui.setProps({ active: true }); await ui.flush();
+    assert.ok(ui.text().includes('New')); assert.ok(!ui.text().includes('Old')); assert.equal(ui.button('删除选中').props.disabled, true); ui.unmount();
   });
   await test('progress events coalesce into one task update and keep the latest value', async () => {
-    const ui = mount({ getDownloadTasks: async () => [task(1)] }); await ui.flush(); const before = ui.writes();
+    const ui = mount({ getDownloadTasks: async () => [task(1)] }); await ui.flush(); openSeries(ui); const before = ui.writes();
     for (let progress = 1; progress <= 80; progress++) ui.emit('onDownloadProgress', { id: 't1', progress });
     assert.equal(ui.writes(), before, 'progress must wait for one short batch'); ui.advance(250); await ui.flush();
     assert.equal(ui.writes() - before, 1); assert.ok(ui.text().includes('80%')); ui.unmount();
   });
   await test('select-all covers every page and clears every selection', async () => {
-    const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush();
+    const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush(); openSeries(ui);
     const all = ui.button('全选'); assert.ok(all, 'select-all must be visible beside task counts'); all.props.onClick(); ui.render();
     assert.ok(ui.text().includes('已选 205 项')); assert.ok(rows(ui).every(r => r.props.className.includes('selected')));
     ui.button('下一页').props.onClick(); ui.render(); ui.button('下一页').props.onClick(); ui.render();
@@ -80,34 +81,95 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
   await test('whole-series merge needs no checked tasks and identifies its series', async () => {
     let sent;
     const ui = mount({ getDownloadTasks: async () => [task(1, 'completed'), task(2, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: '整部示例剧' }], mergeSeries: async (...args) => { sent = args; return { success: true, count: 2, totalBytes: 1000 }; } }); await ui.flush();
-    assert.ok(ui.text().includes('无需勾选任务')); const merge = ui.button('合并整部剧'); assert.ok(merge); assert.equal(!!merge.props.disabled, false);
+    openSeries(ui); assert.ok(ui.text().includes('无需勾选任务')); const merge = ui.button('合并整部剧'); assert.ok(merge); assert.equal(!!merge.props.disabled, false);
     merge.props.onClick(); ui.render(); assert.ok(ui.text().includes('《整部示例剧》')); assert.ok(ui.text().includes('全部已下载分集'));
     await ui.button('智能快速合并').props.onClick(); await ui.flush(); assert.equal(sent[0], 'A'); assert.equal(sent[2].compatible, false); ui.unmount();
   });
   await test('task list pages at 100 while global totals and cross-page selections persist', async () => {
     const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush();
-    assert.equal(rows(ui).length, 100); assert.ok(ui.text().includes('已完成 205'));
+    openSeries(ui); assert.equal(rows(ui).length, 100); assert.ok(ui.text().includes('已完成 205'));
     rows(ui)[0].props.onClick(); ui.render(); ui.button('下一页').props.onClick(); ui.render(); assert.equal(rows(ui).length, 100);
     rows(ui)[0].props.onClick(); ui.render(); ui.button('删除选中').props.onClick(); ui.render(); assert.ok(ui.text().includes('共 2 个任务'));
     ui.button('取消').props.onClick(); ui.render(); ui.button('下一页').props.onClick(); ui.render(); assert.equal(rows(ui).length, 5); ui.unmount();
   });
   for (const rejected of [false, true]) await test(`delete ${rejected ? 'rejection' : 'failure response'} is visible and preserves selection`, async () => {
     const ui = mount({ getDownloadTasks: async () => [task(1, 'completed')], deleteTasksWithFiles: async () => { if (rejected) throw new Error('删除失败示例'); return { success: false, error: '删除失败示例' }; } });
-    await ui.flush(); rows(ui)[0].props.onClick(); ui.render(); ui.button('删除选中').props.onClick(); ui.render();
+    await ui.flush(); openSeries(ui); rows(ui)[0].props.onClick(); ui.render(); ui.button('删除选中').props.onClick(); ui.render();
     await assert.doesNotReject(() => ui.button('仅删除记录').props.onClick(), 'delete rejection must become visible feedback'); await ui.flush();
     assert.ok(ui.text().includes('删除失败示例')); assert.ok(rows(ui)[0].props.className.includes('selected')); ui.unmount();
   });
   await test('merge cancellation only acknowledges the request and exposes failure', async () => {
     let fail = false;
-    const ui = mount({ getMergeTasks: async () => [runningMerge()], cancelMerge: async () => fail ? { success: false, error: '取消请求失败' } : { success: true } }); await ui.flush();
-    await ui.find(n => n.props.title === '取消合并').props.onClick(); await ui.flush();
+    const ui = mount({ getDownloadTasks: async () => [task(1)], getMergeTasks: async () => [runningMerge()], cancelMerge: async () => fail ? { success: false, error: '取消请求失败' } : { success: true } }); await ui.flush();
+    openSeries(ui); await ui.find(n => n.props.title === '取消合并').props.onClick(); await ui.flush();
     assert.ok(!ui.text().includes('已取消合并')); assert.ok(ui.text().includes('取消请求'));
     fail = true; await ui.find(n => n.props.title === '取消合并').props.onClick(); await ui.flush(); assert.ok(ui.text().includes('取消请求失败')); ui.unmount();
   });
   await test('unknown merge duration does not claim zero minutes', async () => {
-    const ui = mount({ getSeriesList: async () => [{ series_id: 'A', series_title: 'A' }], mergeSeries: async () => ({ success: true, count: 2, totalBytes: 100000, totalDuration: 0 }) }); await ui.flush();
-    ui.button('合并整部剧').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
+    const ui = mount({ getDownloadTasks: async () => [task(1, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: 'A' }], mergeSeries: async () => ({ success: true, count: 2, totalBytes: 100000, totalDuration: 0 }) }); await ui.flush();
+    openSeries(ui); ui.button('合并整部剧').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
     assert.ok(!ui.text().includes('0 分钟')); assert.ok(ui.text().includes('开始合并 2 集')); ui.unmount();
+  });
+  await test('overview shows only series cards and live deduplicated download counts', async () => {
+    const one = task(1, 'completed'), two = task(2);
+    const other = { ...task(3, 'completed'), hongguoInfo: { series_id: 'xifan:A', series_title: '同名短剧', vid_index: 1 } };
+    const ui = mount({ getDownloadTasks: async () => [one, two, { ...one, id: 'duplicate' }, other], getSeriesList: async () => [
+      { series_id: 'A', series_title: '同名短剧', total: 17 },
+      { series_id: 'xifan:A', series_title: '同名短剧', total: 20 },
+      { series_id: 'browsed', series_title: '只浏览过' },
+    ] }); await ui.flush();
+    assert.equal(rows(ui).length, 0); assert.equal(ui.nodes().filter(n => n.props.className === 'browse-card').length, 2);
+    assert.ok(ui.text().includes('已下载 1 / 17 集')); assert.ok(ui.text().includes('已下载 1 / 20 集')); assert.ok(!ui.text().includes('只浏览过'));
+    assert.equal(ui.button('全选'), undefined); assert.equal(ui.button('合并整部剧'), undefined);
+    ui.emit('onDownloadCompleted', { id: 't2', path: '/sample.mp4' }); ui.advance(250); await ui.flush();
+    assert.ok(ui.text().includes('已下载 2 / 17 集')); assert.equal(rows(ui).length, 0);
+    openSeries(ui, 'series:xifan:A'); assert.equal(rows(ui).length, 1); assert.ok(ui.text().includes('第3集')); assert.ok(!ui.text().includes('第2集')); ui.unmount();
+  });
+  await test('series detail scopes batch controls, selections, deletion and merge records', async () => {
+    const calls = [], a = [task(1, 'failed'), task(2, 'stopped')];
+    const b = { ...task(3, 'failed'), hongguoInfo: { series_id: 'B', series_title: '另一部剧', vid_index: 1 } };
+    const ui = mount({
+      getDownloadTasks: async () => [...a, b],
+      getMergeTasks: async () => [{ ...runningMerge(), seriesId: 'A', seriesTitle: '本剧合并' }, { ...runningMerge(), id: 'other', seriesId: 'B', seriesTitle: '别剧合并' }],
+      resumeAll: async ids => { calls.push(['resume', ids]); return { success: true, count: ids.length }; },
+      pauseAll: async ids => { calls.push(['pause', ids]); return { success: true, count: ids.length }; },
+      retryTasks: async ids => { calls.push(['retry', ids]); return { success: true, count: ids.length }; },
+      deleteTasksWithFiles: async (ids, files) => { calls.push(['delete', ids, files]); return { success: true, count: ids.length }; },
+    }); await ui.flush(); openSeries(ui);
+    assert.equal(rows(ui).length, 2); assert.ok(ui.text().includes('本剧合并')); assert.ok(!ui.text().includes('别剧合并'));
+    await ui.button('开始本剧').props.onClick(); await ui.flush();
+    ui.emit('onDownloadProgress', { id: 't1', progress: 10 }); ui.advance(250); await ui.flush();
+    await ui.button('暂停本剧').props.onClick(); await ui.flush();
+    await ui.button('重试失败').props.onClick(); await ui.flush();
+    ui.button('全选').props.onClick(); ui.render(); ui.button('删除选中').props.onClick(); ui.render();
+    await ui.button('仅删除记录').props.onClick(); await ui.flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['resume', ['t1', 't2']], ['pause', ['t1', 't2']], ['retry', ['t1', 't2']], ['delete', ['t1', 't2'], false]]);
+    ui.button('返回短剧列表').props.onClick(); ui.render(); openSeries(ui, 'series:B');
+    assert.equal(rows(ui).length, 1); assert.equal(ui.button('删除选中').props.disabled, true); assert.ok(!rows(ui)[0].props.className.includes('selected')); ui.unmount();
+  });
+  await test('return preserves card page and search while resetting detail selection', async () => {
+    const tasks = Array.from({ length: 35 }, (_, i) => ({ ...task(i + 1, 'completed'), hongguoInfo: { series_id: `s${i}`, series_title: `短剧${i}`, vid_index: 1 } }));
+    const ui = mount({ getDownloadTasks: async () => tasks }); await ui.flush();
+    assert.equal(ui.nodes().filter(n => n.props.className === 'browse-card').length, 30);
+    ui.button('下一页').props.onClick(); ui.render();
+    const card = ui.find(n => n.props.className === 'browse-card'), key = card.props['data-series-key'];
+    openSeries(ui, key); rows(ui)[0].props.onClick(); ui.render(); ui.button('返回短剧列表').props.onClick(); ui.render();
+    assert.equal(rows(ui).length, 0); assert.ok(ui.text().includes('第 2 / 2 页')); assert.equal(ui.nodes().filter(n => n.props.className === 'browse-card').length, 5);
+    ui.find(n => n.props['aria-label'] === '搜索已添加的短剧').props.onChange({ target: { value: '短剧12' } }); ui.render();
+    assert.equal(ui.nodes().filter(n => n.props.className === 'browse-card').length, 1); openSeries(ui, 'series:s12');
+    assert.equal(ui.button('删除选中').props.disabled, true); ui.button('返回短剧列表').props.onClick(); ui.render();
+    assert.equal(ui.find(n => n.props['aria-label'] === '搜索已添加的短剧').props.value, '短剧12'); ui.unmount();
+  });
+  await test('merge records remain accessible after all download records are cleared', async () => {
+    let tasks = [task(1, 'completed')];
+    const ui = mount({ getDownloadTasks: async () => tasks, getMergeTasks: async () => [runningMerge()], deleteTasksWithFiles: async () => { tasks = []; return { success: true, count: 1 }; } });
+    await ui.flush(); openSeries(ui); ui.button('清空已完成').props.onClick(); ui.render();
+    await ui.button('仅删除记录').props.onClick(); await ui.flush();
+    ui.button('返回短剧列表').props.onClick(); ui.render();
+    assert.equal(ui.nodes().filter(n => n.props.className === 'browse-card').length, 0);
+    assert.ok(ui.find(n => n.props.title === '取消合并'), 'active merge must still be cancellable');
+    ui.emit('onMergeProgress', { id: 'm', status: 'completed', output: '/out.mp4', outputName: 'out.mp4' }); ui.render();
+    assert.ok(ui.find(n => n.props.title === '打开所在文件夹'), 'completed output must remain accessible'); ui.unmount();
   });
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
 })();

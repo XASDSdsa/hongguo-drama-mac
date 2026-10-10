@@ -72,6 +72,71 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     finishLookup({ url: null }); await deleting;
     assert.equal(h.run('downloadTasks.length'), 0); assert.equal(h.run('runningDownloads.size'), 0);
   });
+  await check('scoped pause preserves another series active and queued downloads', async () => {
+    const h = load(); const active = task('one', h.dir, 'downloading'), waiting = task('two', h.dir, 'pending');
+    const otherActive = task('other-active', h.dir, 'downloading'), otherWaiting = task('other-waiting', h.dir, 'pending');
+    otherActive.hongguoInfo.series_id = otherWaiting.hongguoInfo.series_id = 'Other';
+    let cancelled = 0, destroyed = 0;
+    active.cancelSource = { cancel() { cancelled++; } }; active.writer = { destroy() { destroyed++; } };
+    otherActive.cancelSource = { cancel() { assert.fail('another series was cancelled'); } };
+    const otherSource = otherActive.cancelSource;
+    h.set('downloadTasks', [active, waiting, otherActive, otherWaiting]); h.set('downloadQueue', [waiting, otherWaiting]);
+    const result = await h.handlers['pause-all']({}, ['one', 'two', 'one']);
+    assert.equal(result.success, true); assert.equal(result.count, 2); assert.equal(cancelled, 1); assert.equal(destroyed, 1);
+    assert.equal(active.status, 'stopped'); assert.equal(waiting.status, 'stopped');
+    assert.equal(otherActive.status, 'downloading'); assert.equal(otherActive.cancelSource, otherSource); assert.equal(otherWaiting.status, 'pending');
+    assert.equal(h.run('downloadQueue.length'), 1); assert.equal(h.run('downloadQueue[0].id'), 'other-waiting');
+  });
+  await check('scoped resume retries only selected tasks without resetting active work', async () => {
+    const h = load(); const stopped = task('one', h.dir, 'stopped'), failed = task('two', h.dir, 'failed');
+    const active = task('active', h.dir, 'downloading'), otherStopped = task('other-stopped', h.dir, 'stopped');
+    const otherActive = task('other-active', h.dir, 'downloading'), otherWaiting = task('other-waiting', h.dir, 'pending');
+    for (const t of [otherStopped, otherActive, otherWaiting]) t.hongguoInfo.series_id = 'Other';
+    active.progress = 42; otherActive.progress = 73; otherWaiting.progress = 12;
+    active.cancelSource = { cancel() {} }; otherActive.cancelSource = { cancel() {} };
+    const activeSource = active.cancelSource, otherSource = otherActive.cancelSource;
+    h.set('downloadTasks', [stopped, failed, active, otherStopped, otherActive, otherWaiting]); h.set('downloadQueue', [otherWaiting]);
+    const result = await h.handlers['resume-all']({}, ['one', 'two', 'active', 'one']);
+    assert.equal(result.success, true); assert.equal(result.count, 2); assert.equal(stopped.status, 'pending'); assert.equal(failed.status, 'pending');
+    assert.equal(active.progress, 42); assert.equal(active.cancelSource, activeSource); assert.equal(otherActive.progress, 73); assert.equal(otherActive.cancelSource, otherSource);
+    assert.equal(otherStopped.status, 'stopped'); assert.equal(otherWaiting.progress, 12);
+    assert.deepEqual(Array.from(h.run('downloadQueue.map(task => task.id)')), ['other-waiting', 'one', 'two']);
+  });
+  await check('empty and invalid scopes never fall back to all downloads', async () => {
+    for (const name of ['pause-all', 'resume-all']) {
+      const h = load(); const waiting = task('one', h.dir, 'pending'), stopped = task('two', h.dir, 'stopped');
+      h.set('downloadTasks', [waiting, stopped]); h.set('downloadQueue', [waiting]);
+      const before = h.run('JSON.stringify({ tasks: downloadTasks, queue: downloadQueue })');
+      const empty = await h.handlers[name]({}, []);
+      assert.equal(empty.success, true); assert.equal(empty.count, 0);
+      for (const invalid of [null, {}, 'one', 1, ['one', null], ['one', 2], [''], [' '], Array(1)]) {
+        assert.equal((await h.handlers[name]({}, invalid)).success, false, `${name} accepted invalid scope`);
+      }
+      assert.equal(h.run('JSON.stringify({ tasks: downloadTasks, queue: downloadQueue })'), before);
+    }
+  });
+  await check('omitting the scope still pauses and resumes all series', async () => {
+    const h = load(); const one = task('one', h.dir, 'pending'), other = task('other', h.dir, 'pending');
+    other.hongguoInfo.series_id = 'Other'; h.set('downloadTasks', [one, other]); h.set('downloadQueue', [one, other]);
+    assert.equal((await h.handlers['pause-all']({})).count, 2); assert.equal(h.run('downloadQueue.length'), 0);
+    assert.equal(one.status, 'stopped'); assert.equal(other.status, 'stopped');
+    assert.equal((await h.handlers['resume-all']({})).count, 2); assert.equal(h.run('downloadQueue.length'), 2);
+    assert.equal(one.status, 'pending'); assert.equal(other.status, 'pending');
+  });
+  await check('scoped resume waits for a cancelled run and never starts the same task twice', async () => {
+    let finishLookup, lookups = 0;
+    const h = load({}, { './src/native/hongguo': { fetchPlayUrlSingle: () => { lookups++; return new Promise(resolve => { finishLookup = resolve; }); } } });
+    const one = task('one', h.dir, 'pending'); h.set('downloadTasks', [one]); h.set('downloadQueue', [one]); h.pump();
+    const oldRun = h.run('downloadRuns.get("one")');
+    assert.equal((await h.handlers['pause-all']({}, ['one'])).count, 1);
+    assert.equal((await h.handlers['resume-all']({}, ['one'])).count, 1);
+    h.pump(); assert.equal(lookups, 1, 'a second writer started before the cancelled run settled');
+    finishLookup({ url: null }); await oldRun;
+    assert.equal(one.status, 'pending', 'cancelled predecessor overwrote the queued retry');
+    assert.equal(h.run('runningDownloads.size'), 0); assert.equal(h.run('downloadQueue.length'), 1);
+    h.pump(); assert.equal(lookups, 2); const retriedRun = h.run('downloadRuns.get("one")');
+    finishLookup({ url: null }); await retriedRun;
+  });
   await check('failed file deletion keeps the task record', async () => {
     const denied = Object.create(fs); denied.unlinkSync = () => { throw new Error('permission denied'); };
     const h = load({}, { fs: denied }); const one = task('one', h.dir, 'completed', 'Short 001.mp4');

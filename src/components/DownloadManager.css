@@ -1,5 +1,5 @@
 .dm-container {
-  max-width: 1000px;
+  max-width: 1180px;
   margin: 0 auto;
   color: var(--text-primary);
 }
@@ -467,3 +467,12 @@
 
 .dm-selection-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .dm-merge-hint { margin-top: 12px; }
+
+.dm-back { margin-bottom: 20px; }
+.dm-title { min-width: 0; }
+.dm-title h2 { overflow-wrap: anywhere; }
+.dm-series-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 22px 0; color: var(--text-secondary); font-size: 12px; }
+.dm-series-search { display: flex; align-items: center; gap: 9px; width: 300px; max-width: 75%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+.dm-series-search:focus-within { border-color: var(--accent); }
+.dm-series-search input { min-width: 0; width: 100%; border: 0; outline: none; background: transparent; color: var(--text-primary); font: inherit; }
+.dm-card-count { margin-top: 5px; font-size: 12px; color: var(--success); font-variant-numeric: tabular-nums; }
