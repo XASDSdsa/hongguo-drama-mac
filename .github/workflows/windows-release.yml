@@ -32,9 +32,6 @@ jobs:
       - name: Prepare Windows FFmpeg
         run: node scripts/setup-ffmpeg.js
 
-      - name: Prepare Windows signing helper
-        run: node scripts/setup-winCodeSign.js
-
       - name: Run Windows-safe checks
         shell: bash
         run: |
