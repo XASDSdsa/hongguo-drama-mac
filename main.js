@@ -1523,22 +1523,37 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
     const entry = seriesRegistry.find((s) => String(s.series_id) === sid);
     const tasks = downloadTasks.filter((t) => t.hongguoInfo && String(t.hongguoInfo.series_id) === sid);
 
-    // 一集只保留一个任务（同 vid 重复提交时取最新的）
+    // 一集只保留一个任务：完整文件优先，其次保留活动任务，最后才取最新失败记录。
+    // 任务记录可能因重复提交或重试留下多条，不能让一条较新的失败记录遮住已下载文件。
     const taskByIndex = new Map();
+    const taskPriority = (task) => {
+      if (hasCompleteTaskFile(task)) return 0;
+      if (task.status === 'downloading') return 1;
+      if (task.status === 'pending') return 2;
+      return 3;
+    };
     for (const t of tasks) {
       const idx = Number(t.hongguoInfo.vid_index);
-      const prev = taskByIndex.get(idx);
-      if (!prev || (t.startTime || 0) > (prev.startTime || 0)) taskByIndex.set(idx, t);
+      const key = Number.isFinite(idx) && idx > 0 ? `index:${idx}` : `vid:${String(t.hongguoInfo.vid)}`;
+      const prev = taskByIndex.get(key);
+      if (!prev || taskPriority(t) < taskPriority(prev) ||
+          (taskPriority(t) === taskPriority(prev) && (t.startTime || 0) > (prev.startTime || 0))) {
+        taskByIndex.set(key, t);
+      }
     }
 
     const baseEpisodes =
       entry && entry.episodes.length
         ? entry.episodes
-        : tasks.map((t) => ({
-            vid: t.hongguoInfo.vid,
-            vid_index: t.hongguoInfo.vid_index,
-            title: t.hongguoInfo.ep_title || '',
-          }));
+        : [...new Map(tasks.map((t) => {
+            const idx = Number(t.hongguoInfo.vid_index);
+            const key = Number.isFinite(idx) && idx > 0 ? `index:${idx}` : `vid:${String(t.hongguoInfo.vid)}`;
+            return [key, {
+              vid: t.hongguoInfo.vid,
+              vid_index: t.hongguoInfo.vid_index,
+              title: t.hongguoInfo.ep_title || '',
+            }];
+          })).values()];
 
     // 目录兜底：磁盘上可能存在没有任务记录的「孤儿」文件
     // （任务被清理、跨会话下载等），仅靠任务判断会把它们误报成「未下载」。
@@ -1555,7 +1570,8 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
     const episodes = baseEpisodes
       .map((ep) => {
         const idx = Number(ep.vid_index);
-        const t = taskByIndex.get(idx);
+        const taskKey = Number.isFinite(idx) && idx > 0 ? `index:${idx}` : `vid:${String(ep.vid)}`;
+        const t = taskByIndex.get(taskKey);
         let status = 'missing';
         let fileUrl = null;
         let progress = 0;
@@ -2357,24 +2373,28 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
     const filename = uniqueEpisodeFilename(settings, cleanSeriesTitle, ep);
     const finalPath = path.join(downloadDir, filename);
 
-    // 已有同一集在队列/已完成，避免重复建任务
-    const dup = downloadTasks.find(
+    // 已有同一集在队列/已完成，避免重复建任务。重复记录中只要有完整文件或活动任务，
+    // 就跳过；只有没有可用记录时，才把最新失败/停止记录重新入队。
+    const duplicates = downloadTasks.filter(
       (t) => t.hongguoInfo && String(t.hongguoInfo.vid) === String(ep.vid)
     );
+    const complete = duplicates.find((t) => hasCompleteTaskFile(t));
+    const active = duplicates.find((t) => t.status === 'downloading' || t.status === 'pending');
+    if (complete || active) continue;
+    const dup = duplicates
+      .filter((t) => t.status === 'stopped' || t.status === 'failed' || (t.status === 'completed' && !hasCompleteTaskFile(t)))
+      .sort((a, b) => (b.startTime || 0) - (a.startTime || 0))[0];
     if (dup) {
-      // 已停止或失败的重新入队
-      if (dup.status === 'stopped' || dup.status === 'failed' || (dup.status === 'completed' && !hasCompleteTaskFile(dup))) {
-        changedTasks.push({ task: dup, previous: { ...dup } });
-        repairTaskDestination(dup);
-        dup.status = 'pending';
-        dup.cancelled = false;
-        dup.progress = 0;
-        dup.receivedBytes = 0;
-        dup.totalBytes = 0;
-        delete dup.error;
-        if (!downloadQueue.some((t) => t.id === dup.id)) downloadQueue.push(dup);
-        created++;
-      }
+      changedTasks.push({ task: dup, previous: { ...dup } });
+      repairTaskDestination(dup);
+      dup.status = 'pending';
+      dup.cancelled = false;
+      dup.progress = 0;
+      dup.receivedBytes = 0;
+      dup.totalBytes = 0;
+      delete dup.error;
+      if (!downloadQueue.some((t) => t.id === dup.id)) downloadQueue.push(dup);
+      created++;
       continue;
     }
 
@@ -2429,11 +2449,11 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
 
 ipcMain.handle('hongguo-download-batch', async (event, payload) => {
   try {
-    const { seriesId, seriesTitle, episodes } = payload || {};
+    const { seriesId, seriesTitle, episodes, cover } = payload || {};
     if (!Array.isArray(episodes) || episodes.length === 0) {
       return { success: false, error: '未选择集数' };
     }
-    const count = await enqueueEpisodes({ seriesId, seriesTitle, episodes });
+    const count = await enqueueEpisodes({ seriesId, seriesTitle, episodes, cover });
     return { success: true, count, requested: episodes.length };
   } catch (error) {
     console.error('[Hongguo] 提交批量下载失败:', error.message);

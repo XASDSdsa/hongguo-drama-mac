@@ -476,3 +476,5 @@
 .dm-series-search:focus-within { border-color: var(--accent); }
 .dm-series-search input { min-width: 0; width: 100%; border: 0; outline: none; background: transparent; color: var(--text-primary); font: inherit; }
 .dm-card-count { margin-top: 5px; font-size: 12px; color: var(--success); font-variant-numeric: tabular-nums; }
+.dm-video-heading { display: flex; align-items: baseline; gap: 12px; margin: 28px 0 16px; font-size: 17px; }
+.dm-video-heading span { font-size: 12px; font-weight: 400; color: var(--text-secondary); }

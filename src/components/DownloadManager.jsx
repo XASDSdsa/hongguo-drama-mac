@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import { downloadSeriesKey, groupDownloadSeries } from './downloadSeries.mjs';
+import SeriesEpisodePanel from './SeriesEpisodePanel';
 import './Browse.css';
 import './DownloadManager.css';
 import { Download, Trash2, RefreshCw, X, Film, Square, Folder, Zap, CheckSquare, Play, Pause, Layers, Check, ChevronRight, Search } from './icons';
@@ -161,6 +162,10 @@ function DownloadManager({ onNavigate, active = true }) {
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
+
+  const handleEpisodesChanged = useCallback(async () => {
+    await Promise.all([refresh(), loadSeriesList(), loadQueue()]);
+  }, [refresh, loadSeriesList, loadQueue]);
 
   useEffect(() => {
     if (!active) return;
@@ -429,7 +434,7 @@ function DownloadManager({ onNavigate, active = true }) {
       {selectedSeries && <button className="btn btn-outline dm-back" onClick={() => openSeries(null)}><ChevronRight size={16} style={{ transform: 'rotate(180deg)' }} />返回短剧列表</button>}
       <div className="dm-header">
         <div className="dm-title">
-          <div><h2>{currentSeries?.title || '下载管理'}</h2><p className="page-description">{selectedSeries ? `本剧视频列表 · ${scopedTasks.length} 个下载任务` : `共 ${seriesCards.length} 部短剧，点击封面查看视频列表。`}</p></div>
+          <div><h2>{currentSeries?.title || '下载管理'}</h2><p className="page-description">{selectedSeries ? '查看全部分集和下载状态，下方管理本剧视频。' : `共 ${seriesCards.length} 部短剧，点击封面查看分集和视频列表。`}</p></div>
         </div>
         <div className="dm-stats">
           <span className="stat stat-active">进行中 {activeCount}</span>
@@ -438,6 +443,18 @@ function DownloadManager({ onNavigate, active = true }) {
         </div>
       </div>
 
+      {selectedSeries && mergeSeriesId && <SeriesEpisodePanel
+        key={mergeSeriesId}
+        seriesId={mergeSeriesId}
+        title={currentSeries.title}
+        cover={currentSeries.cover}
+        active={active}
+        revision={orderVersion}
+        onDownloadsChanged={handleEpisodesChanged}
+        onNotify={showToast}
+      />}
+
+      {selectedSeries && <h3 className="dm-video-heading">视频列表 <span>{scopedTasks.length} 个任务</span></h3>}
       <div className="dm-toolbar">
         <button
           className="btn btn-primary"
@@ -514,7 +531,7 @@ function DownloadManager({ onNavigate, active = true }) {
             </button>
           </div>
         )}
-        {onNavigate && (
+        {onNavigate && !selectedSeries && (
           <button className="btn btn-primary dm-toolbar-end" onClick={() => onNavigate('download')}>
             <Film size={15} />
             添加下载

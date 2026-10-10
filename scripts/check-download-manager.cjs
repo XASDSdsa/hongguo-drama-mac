@@ -21,7 +21,7 @@ function mount(api = {}, props = {}) {
   const setTimer = (fn, delay, interval = false) => { const id = ++timerId; timers.set(id, { fn, delay, interval }); return id; };
   const module = { exports: {} };
   vm.runInNewContext(transformSync(fs.readFileSync(`${__dirname}/../src/components/DownloadManager.jsx`, 'utf8'), { loader: 'jsx', format: 'cjs' }).code, {
-    module, exports: module.exports, require: name => name === 'react' ? react : name === './downloadSeries.mjs' ? require('../src/components/downloadSeries.mjs') : name === './useDialogKeyboard' ? open => { dialogOpen = open; } : {}, window,
+    module, exports: module.exports, require: name => name === 'react' ? react : name === './SeriesEpisodePanel' ? 'SeriesEpisodePanel' : name === './downloadSeries.mjs' ? require('../src/components/downloadSeries.mjs') : name === './useDialogKeyboard' ? open => { dialogOpen = open; } : {}, window,
     document: { querySelector: () => null }, console, setTimeout: (fn, delay) => setTimer(fn, delay), clearTimeout: id => timers.delete(id), setInterval: (fn, delay) => setTimer(fn, delay, true), clearInterval: id => timers.delete(id),
   });
   const render = () => { cursor = 0; tree = module.exports.default(props); effects.splice(0).forEach(fn => fn()); };
@@ -170,6 +170,27 @@ const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 
     assert.ok(ui.find(n => n.props.title === '取消合并'), 'active merge must still be cancellable');
     ui.emit('onMergeProgress', { id: 'm', status: 'completed', output: '/out.mp4', outputName: 'out.mp4' }); ui.render();
     assert.ok(ui.find(n => n.props.title === '打开所在文件夹'), 'completed output must remain accessible'); ui.unmount();
+  });
+  await test('series opens an inline episode panel above its scoped video list', async () => {
+    const ui = mount({ getDownloadTasks: async () => [task(1), { ...task(2), hongguoInfo: { series_id: 'B', vid_index: 1 } }], getSeriesList: async () => [{ series_id: 'A', series_title: '完整剧名', cover: 'https://example.com/poster.jpg' }] }, { onNavigate: () => {} });
+    await ui.flush();
+    const panel = () => ui.find(n => n.type === 'SeriesEpisodePanel');
+    assert.equal(panel(), undefined);
+    openSeries(ui);
+    assert.equal(panel().props.seriesId, 'A');
+    assert.equal(panel().props.title, '完整剧名');
+    assert.equal(panel().props.cover, 'https://example.com/poster.jpg');
+    assert.equal(rows(ui).length, 1);
+    assert.ok(ui.nodes().indexOf(panel()) < ui.nodes().indexOf(rows(ui)[0]), 'full episode picker must precede video rows');
+    assert.equal(ui.find(n => n.props.role === 'dialog'), undefined, 'episode details are not a popup');
+    assert.equal(ui.button('添加下载'), undefined, 'download selection happens within this page');
+    const before = panel().props.revision;
+    ui.emit('onDownloadProgress', { id: 't1', progress: 20 }); ui.advance(250); await ui.flush();
+    assert.equal(panel().props.revision, before, 'progress ticks must not trigger disk rescans');
+    ui.emit('onDownloadCompleted', { id: 't1' }); ui.advance(250); await ui.flush();
+    assert.ok(panel().props.revision > before, 'completed status refreshes the episode overview');
+    ui.setProps({ active: false }); assert.equal(panel().props.active, false);
+    ui.button('返回短剧列表').props.onClick(); ui.render(); assert.equal(panel(), undefined); ui.unmount();
   });
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
 })();

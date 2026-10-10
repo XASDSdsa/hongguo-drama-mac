@@ -34,6 +34,27 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     const paths = h.run('downloadTasks.map(task => task.savePath)');
     assert.equal(new Set(paths).size, 2, 'different episodes must not share a final or temporary path');
   });
+  await check('episode status prefers a valid file over a newer failed retry', async () => {
+    const h = load(); h.set('seriesRegistry', series());
+    const complete = task('one', h.dir, 'completed', 'complete.mp4'); complete.startTime = 1; file(complete.savePath);
+    const failed = task('one', h.dir, 'failed', 'retry.mp4'); failed.id = 'retry'; failed.startTime = 2;
+    h.set('downloadTasks', [complete, failed]);
+    const detail = await h.handlers['get-series-episodes']({}, 'S');
+    assert.equal(detail.data.episodes.length, 2);
+    assert.equal(detail.data.episodes[0].status, 'completed');
+    assert.equal(detail.data.completedCount, 1);
+    const added = await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[0]] });
+    assert.equal(added, 0, 'a valid existing file must not be requeued');
+  });
+  await check('task-only episode overview deduplicates repeated indices', async () => {
+    const h = load();
+    const first = task('one', h.dir, 'failed', 'one.mp4', 1);
+    const retry = task('one', h.dir, 'failed', 'retry.mp4', 1); retry.id = 'retry'; retry.startTime = 2;
+    h.set('downloadTasks', [first, retry]);
+    const detail = await h.handlers['get-series-episodes']({}, 'S');
+    assert.equal(detail.data.episodes.length, 1);
+    assert.equal(detail.data.episodes[0].vid_index, 1);
+  });
   await check('same-title series use independent directories; legacy records still resolve', () => {
     const h = load();
     assert.notEqual(h.context.seriesDownloadDir(h.dir, 'S1', 'Short'), h.context.seriesDownloadDir(h.dir, 'S2', 'Short'));
