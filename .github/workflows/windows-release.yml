@@ -41,7 +41,7 @@ jobs:
           build="$RUNNER_TEMP/whisper-build"
           git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp.git "$src"
           cmake -S "$src" -B "$build" -A x64 -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
-          cmake --build "$build" --config Release --target whisper-cli -- /m:2
+          cmake --build "$build" --config Release --target whisper-cli
           bin=$(find "$build" -type f -iname whisper-cli.exe | head -n 1)
           test -n "$bin"
           mkdir -p build/whisper/win32-x64 build/whisper/models
