@@ -100,7 +100,8 @@ const readyPipeline = {
       await ui.flush();
       assert.ok(ui.text().includes(`暂不可操作：${label}`));
       const blockedButtons = ui.nodes().filter(node => node.type === 'button' && String(node.children?.map(child => typeof child === 'string' ? child : '').join('') || '').includes('完成'));
-      assert.ok(blockedButtons.length >= 2 && blockedButtons.every(node => node.props.disabled));
+      assert.equal(blockedButtons.length, 0, '未就绪时不应展示可操作的封面/文案控件');
+      assert.ok(ui.button('先下载视频') || ui.button('去视频处理') || ui.button('去分组并生成成品'));
       ui.unmount();
     }
   });

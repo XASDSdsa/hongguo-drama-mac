@@ -79,7 +79,7 @@ function mergeTaskList(previous, incoming) {
   return [...next.values()].sort((a, b) => Number(a?.startedAt || a?.createdAt || 0) - Number(b?.startedAt || b?.createdAt || 0));
 }
 
-export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = null, episodes = [], active = true, revision = 0, onNotify }) {
+export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = null, episodes = [], active = true, revision = 0, onNotify, onNavigate }) {
   const [tasks, setTasks] = useState([]);
   const [pipeline, setPipeline] = useState(() => normalizePipelineGate(null, episodes));
   const [pipelineLoading, setPipelineLoading] = useState(false);
@@ -314,6 +314,14 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
 
   if (!active && !tasks.length) return null;
   const gateLabel = pipelineLoading ? '正在核验流程状态…' : pipeline.ready ? `已生成 ${pipeline.products.length} 个最终成品，可处理发布素材` : `暂不可操作：${pipeline.blockedReason}`;
+  const nextAction = () => {
+    const downloadDone = Number(pipeline.stages?.download?.done || 0);
+    const dedupDone = Number(pipeline.stages?.dedup?.done || 0);
+    if (!downloadDone) document.querySelector('.sep-grid')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    else if (dedupDone < downloadDone) onNavigate?.('quchong', { seriesId, title });
+    else document.getElementById('dm-merge-action')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  const nextActionLabel = !Number(pipeline.stages?.download?.done || 0) ? '先下载视频' : Number(pipeline.stages?.dedup?.done || 0) < Number(pipeline.stages?.download?.done || 0) ? '去视频处理' : '去分组并生成成品';
   return <section className="ai-materials-panel" aria-label="AI 发布素材">
     <div className="aim-header">
       <div><div className="aim-title"><Sparkles size={17} />AI 发布素材</div><p>仅对已完成下载、去重、分割并生成的最终成品处理，任务独立排队。</p></div>
@@ -334,7 +342,8 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
         })}
       </div>
     </div>
-    <div className="aim-sections">
+    {!pipeline.ready && <div className="aim-next-step"><span>完成当前步骤后，这里会自动开放封面和文案。</span><button className="btn btn-outline btn-sm" onClick={nextAction} disabled={pipelineLoading}>{nextActionLabel}</button></div>}
+    {pipeline.ready && <div className="aim-sections">
       <div className="aim-section">
         <div className="aim-section-head"><div><b>剧集封面</b><span>最终成品就绪后重绘，保存到发布素材/封面</span></div><button className="btn btn-outline btn-sm" onClick={startCover} disabled={coverBusy || !active || !pipeline.ready || !pipeline.products.length}><Sparkles size={14} className={coverBusy ? 'spin' : ''} />{coverBusy ? '提交中…' : pipeline.ready ? '重绘封面' : '完成成品后可用'}</button></div>
         {coverPreview && <img className="aim-cover-preview" src={coverPreview} alt="AI 重绘封面预览" />}
@@ -357,7 +366,7 @@ export default function AiMaterialsPanel({ seriesId, title, cover, aiCover = nul
           <div className="aim-task-history"><span>共 {copyTasks.length} 个文案任务</span>{hiddenCopyTaskCount > 0 && <button className="btn btn-ghost btn-sm" onClick={() => setShowAllCopyTasks(true)}>显示全部（还有 {hiddenCopyTaskCount} 个）</button>}{showAllCopyTasks && hiddenCopyTaskCount === 0 && copyTasks.length > 80 && <button className="btn btn-ghost btn-sm" onClick={() => setShowAllCopyTasks(false)}>收起历史</button>}</div>
         </>}
       </div>
-    </div>
+    </div>}
     {error && <div className="aim-error" role="alert"><AlertCircle size={14} />{error}</div>}
   </section>;
 }

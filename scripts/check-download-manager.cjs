@@ -80,9 +80,9 @@ const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 
   });
   await test('whole-series merge needs no checked tasks and identifies its series', async () => {
     let sent;
-    const ui = mount({ getDownloadTasks: async () => [task(1, 'completed'), task(2, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: '整部示例剧' }], mergeSeries: async (...args) => { sent = args; return { success: true, count: 2, totalBytes: 1000 }; } }); await ui.flush();
-    openSeries(ui); assert.ok(ui.text().includes('无需勾选任务')); const merge = ui.button('合并整部剧'); assert.ok(merge); assert.equal(!!merge.props.disabled, false);
-    merge.props.onClick(); ui.render(); assert.ok(ui.text().includes('《整部示例剧》')); assert.ok(ui.text().includes('全部已下载分集'));
+    const ui = mount({ getDownloadTasks: async () => [task(1, 'completed'), task(2, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: '整部示例剧' }], getSeriesPipelineStatus: async () => ({ success: true, episodes: [{ episodeIndex: 1, status: 'deduped' }, { episodeIndex: 2, status: 'deduped' }] }), mergeSeries: async (...args) => { sent = args; return { success: true, count: 2, totalBytes: 1000 }; } }); await ui.flush();
+    openSeries(ui); await ui.flush(); assert.ok(ui.text().includes('只使用已完成去重')); const merge = ui.button('分组并生成成品'); assert.ok(merge); assert.equal(!!merge.props.disabled, false);
+    merge.props.onClick(); ui.render(); assert.ok(ui.text().includes('《整部示例剧》')); assert.ok(ui.text().includes('全部已下载集'));
     await ui.button('智能快速合并').props.onClick(); await ui.flush(); assert.equal(sent[0], 'A'); assert.equal(sent[2].compatible, false); ui.unmount();
   });
   await test('overview refreshes every downloaded series and reports newly added episodes', async () => {
@@ -119,8 +119,8 @@ const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 
     fail = true; await ui.find(n => n.props.title === '取消合并').props.onClick(); await ui.flush(); assert.ok(ui.text().includes('取消请求失败')); ui.unmount();
   });
   await test('unknown merge duration does not claim zero minutes', async () => {
-    const ui = mount({ getDownloadTasks: async () => [task(1, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: 'A' }], mergeSeries: async () => ({ success: true, count: 2, totalBytes: 100000, totalDuration: 0 }) }); await ui.flush();
-    openSeries(ui); ui.button('合并整部剧').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
+    const ui = mount({ getDownloadTasks: async () => [task(1, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: 'A' }], getSeriesPipelineStatus: async () => ({ success: true, episodes: [{ episodeIndex: 1, status: 'deduped' }] }), mergeSeries: async () => ({ success: true, count: 2, totalBytes: 100000, totalDuration: 0 }) }); await ui.flush();
+    openSeries(ui); await ui.flush(); ui.button('分组并生成成品').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
     assert.ok(!ui.text().includes('0 分钟')); assert.ok(ui.text().includes('已提交 1 集合并任务')); ui.unmount();
   });
   await test('overview shows only series cards and live deduplicated download counts', async () => {
@@ -133,7 +133,7 @@ const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 
     ] }); await ui.flush();
     assert.equal(rows(ui).length, 0); assert.equal(ui.nodes().filter(n => n.props.className === 'browse-card').length, 2);
     assert.ok(ui.text().includes('已下载 1 / 17 集')); assert.ok(ui.text().includes('已下载 1 / 20 集')); assert.ok(!ui.text().includes('只浏览过'));
-    assert.equal(ui.button('全选'), undefined); assert.equal(ui.button('合并整部剧'), undefined);
+    assert.equal(ui.button('全选'), undefined); assert.equal(ui.button('分组并生成成品'), undefined);
     ui.emit('onDownloadCompleted', { id: 't2', path: '/sample.mp4' }); ui.advance(250); await ui.flush();
     assert.ok(ui.text().includes('已下载 2 / 17 集')); assert.equal(rows(ui).length, 0);
     openSeries(ui, 'series:xifan:A'); assert.equal(rows(ui).length, 1); assert.ok(ui.text().includes('第3集')); assert.ok(!ui.text().includes('第2集')); ui.unmount();

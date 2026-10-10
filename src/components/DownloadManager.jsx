@@ -59,7 +59,7 @@ function fmtBytes(bytes) {
 const PAGE_SIZE = 100;
 const SERIES_PAGE_SIZE = 30;
 
-function DownloadManager({ onNavigate, active = true }) {
+function DownloadManager({ onNavigate, active = true, target = null }) {
   const [tasks, setTasks] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [toast, setToast] = useState(null);
@@ -78,6 +78,7 @@ function DownloadManager({ onNavigate, active = true }) {
   const [mergeRange, setMergeRange] = useState('');
   const [mergeGroupSize, setMergeGroupSize] = useState('0');
   const [mergeRangeError, setMergeRangeError] = useState('');
+  const [pipelineStatus, setPipelineStatus] = useState(null);
   const [page, setPage] = useState(1);
   const [orderVersion, setOrderVersion] = useState(0);
   const [loadError, setLoadError] = useState('');
@@ -85,6 +86,7 @@ function DownloadManager({ onNavigate, active = true }) {
   const overviewScroll = useRef(0);
   const toastTimerRef = useRef(null);
   const refreshSeriesBusy = useRef(false);
+  const handledTarget = useRef('');
   const activeRef = useRef(active);
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0, merges: 0 });
@@ -104,6 +106,18 @@ function DownloadManager({ onNavigate, active = true }) {
   const currentSeriesPage = Math.min(seriesPage, seriesPageCount);
   const visibleSeries = filteredSeries.slice((currentSeriesPage - 1) * SERIES_PAGE_SIZE, currentSeriesPage * SERIES_PAGE_SIZE);
 
+  useEffect(() => {
+    if (!active || !target?.seriesId || !seriesCards.length) return;
+    const found = seriesCards.find(item => String(item.seriesId) === String(target.seriesId));
+    const marker = `${target.ts || ''}:${target.seriesId}`;
+    if (found && handledTarget.current !== marker) {
+      handledTarget.current = marker;
+      openSeries(found);
+    }
+  // target.ts makes a return from 视频处理 reopen the same card exactly once.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, target?.seriesId, target?.ts, seriesCards]);
+
   const openSeries = (series) => {
     if (!selectedSeries) overviewScroll.current = containerRef.current?.closest('.main-content')?.scrollTop || 0;
     setSelectedSeries(series);
@@ -115,7 +129,17 @@ function DownloadManager({ onNavigate, active = true }) {
     setMergeRange('');
     setMergeGroupSize('0');
     setMergeRangeError('');
+    setPipelineStatus(null);
   };
+
+  useEffect(() => {
+    if (!active || !selectedSeries?.seriesId || typeof window.electronAPI.getSeriesPipelineStatus !== 'function') return undefined;
+    let alive = true;
+    window.electronAPI.getSeriesPipelineStatus(selectedSeries.seriesId).then(result => {
+      if (alive && result?.success !== false && Array.isArray(result?.episodes)) setPipelineStatus(result);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [active, selectedSeries?.seriesId, orderVersion]);
 
   useEffect(() => {
     const content = containerRef.current?.closest('.main-content');
@@ -353,15 +377,18 @@ function DownloadManager({ onNavigate, active = true }) {
   };
 
   const mergeCandidates = useMemo(() => {
+    if (selectedSeries?.seriesId && pipelineStatus === null) return [];
     const byIndex = new Map();
+    const pipelineEpisodes = new Map((pipelineStatus?.episodes || []).map(item => [Number(item.episodeIndex), item]));
     for (const task of scopedTasks) {
       const index = Number(task.hongguoInfo?.vid_index);
       if (task.status !== 'completed' || !Number.isSafeInteger(index) || index < 1) continue;
+      if (pipelineStatus?.episodes && !['deduped', 'segmented'].includes(String(pipelineEpisodes.get(index)?.status || ''))) continue;
       const previous = byIndex.get(index);
       if (!previous || (task.startTime || 0) > (previous.startTime || 0)) byIndex.set(index, task);
     }
     return [...byIndex.values()].sort((a, b) => Number(a.hongguoInfo.vid_index) - Number(b.hongguoInfo.vid_index));
-  }, [scopedTasks]);
+  }, [scopedTasks, pipelineStatus]);
 
   const waitForMergeTask = async (id) => {
     for (let attempt = 0; attempt < 720; attempt++) {
@@ -563,6 +590,7 @@ function DownloadManager({ onNavigate, active = true }) {
         revision={orderVersion}
         onDownloadsChanged={handleEpisodesChanged}
         onNotify={showToast}
+        onNavigate={onNavigate}
       />}
 
       {selectedSeries && <h3 className="dm-video-heading">视频列表 <span>{scopedTasks.length} 个任务</span></h3>}
@@ -646,10 +674,10 @@ function DownloadManager({ onNavigate, active = true }) {
         </button>
         </div></details>
         {selectedSeries && mergeSeriesId && (
-          <div className="merge-inline">
-            <button className="btn btn-outline" onClick={() => setMergeAsk(true)} disabled={merging || completedCount === 0} title="把本剧已下载的分集合并成单个 mp4">
+          <div className="merge-inline" id="dm-merge-action">
+            <button className="btn btn-outline" onClick={() => setMergeAsk(true)} disabled={merging || mergeCandidates.length === 0} title="把已完成去重的分集按范围和每组集数生成最终成品">
               <Layers size={15} />
-              {merging ? '合并中...' : '合并整部剧'}
+              {merging ? '生成中...' : '分组并生成成品'}
             </button>
           </div>
         )}
@@ -661,7 +689,7 @@ function DownloadManager({ onNavigate, active = true }) {
         )}
       </div>
 
-      {selectedSeries && mergeSeriesId && <p className="settings-hint dm-merge-hint">“合并整部剧”导出本剧全部已下载分集，无需勾选任务。</p>}
+      {selectedSeries && mergeSeriesId && <p className="settings-hint dm-merge-hint">这里只使用已完成去重的分集；先完成去重后，这里才会出现可生成的数量。</p>}
 
       {/* 合并任务 */}
       {visibleMerges.length > 0 && (

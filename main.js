@@ -540,6 +540,20 @@ function markPipelineReady(task) {
   return indices.length;
 }
 
+function markPipelineMergeFailed(task) {
+  const sid = String(task?.seriesId || '');
+  const entry = seriesRegistry.find(item => String(item.series_id) === sid);
+  if (!entry || !task?.id) return 0;
+  const pipeline = pipelineForEntry(entry);
+  const group = pipeline.groups[String(task.id)];
+  if (!group || group.status !== 'processing') return 0;
+  group.status = task.cancelled ? 'stopped' : 'failed';
+  group.error = task.error || (task.cancelled ? '合并已取消' : '合并失败');
+  group.updatedAt = Date.now();
+  try { saveSeriesRegistry(); } catch (_) {}
+  return 1;
+}
+
 function invalidatePipelineRecord(entry, index, record, reason) {
   if (!record) return false;
   if (!record.status || record.status === 'missing') return false;
@@ -573,6 +587,17 @@ function getPipelineStatus(seriesId) {
   if (!entry) return { success: false, error: '未找到该剧档案' };
   const pipeline = pipelineForEntry(entry);
   let changed = false;
+  // 应用在合并过程中被强制退出时没有机会执行 finally；启动后第一次读取状态时
+  // 将没有对应运行任务的 processing 组收敛为 stopped，避免流程永远卡在“处理中”。
+  for (const group of Object.values(pipeline.groups)) {
+    if (group.status !== 'processing') continue;
+    const task = mergeTasks.find(item => String(item.id) === String(group.id));
+    if (task?.status === 'running') continue;
+    group.status = task?.status === 'failed' ? 'failed' : 'stopped';
+    group.error = task?.error || '应用关闭时中断，可重新生成成品';
+    group.updatedAt = Date.now();
+    changed = true;
+  }
   for (const [idx, record] of Object.entries(pipeline.episodes)) changed = invalidatePipelineRecord(entry, idx, record) || changed;
   const groupsBefore = JSON.stringify(pipeline.groups);
   const products = pipelineReadyProducts(entry);
@@ -2111,6 +2136,7 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
       } finally {
         task.endTime = Date.now();
         if (task.status === 'completed' && task.verified !== false) markPipelineReady(task);
+        else markPipelineMergeFailed(task);
         if (!saveMergeTasks()) task.storageWarning = '合并记录未保存，导出文件状态请以磁盘为准';
         sendToRenderer(task.status === 'completed' ? 'merge-completed' : 'merge-failed', { id, path: output, error: task.error, verified: task.verified, storageWarning: task.storageWarning });
       }

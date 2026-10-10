@@ -18,7 +18,7 @@ const stageText = {
   failed: '失败', stopped: '已停止', running: '处理中', pending: '排队中',
 };
 
-export default function Quchong({ active = true }) {
+export default function Quchong({ active = true, target = null, onNavigate }) {
   const [files, setFiles] = useState([]);
   const [library, setLibrary] = useState([]);
   const [libraryLoaded, setLibraryLoaded] = useState(false);
@@ -33,6 +33,8 @@ export default function Quchong({ active = true }) {
   const [notice, setNotice] = useState('');
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState([]);
+  const [seriesContext, setSeriesContext] = useState(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
   const batchRef = useRef(null);
 
   const addFiles = useCallback((paths) => {
@@ -54,6 +56,52 @@ export default function Quchong({ active = true }) {
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  // 从单剧详情进入时，自动带入该剧已下载且尚未去重的原视频，避免用户在全局列表里逐个找文件。
+  useEffect(() => {
+    if (!active || target?.seriesId) return;
+    setSeriesContext(null);
+    setFiles([]);
+    setTasks([]);
+    setLogs([]);
+  }, [active, target?.seriesId]);
+
+  useEffect(() => {
+    if (!active || !target?.seriesId || typeof window.electronAPI.getSeriesEpisodes !== 'function') return undefined;
+    let alive = true;
+    batchRef.current = null;
+    setBatchId(null);
+    setTasks([]);
+    setLogs([]);
+    setFiles([]);
+    setSeriesLoading(true);
+    (async () => {
+      try {
+        const result = await window.electronAPI.getSeriesEpisodes(target.seriesId);
+        if (!alive || !result?.success) return;
+        const episodes = Array.isArray(result.data?.episodes) ? result.data.episodes : [];
+        const pipeline = result.data?.pipeline || {};
+        const records = Array.isArray(pipeline.episodes) ? pipeline.episodes : [];
+        const recordMap = new Map(records.map(item => [Number(item.episodeIndex || item.vid_index), item]));
+        const candidates = episodes
+          .filter(ep => ep.status === 'completed' && ep.savePath)
+          .filter(ep => !['deduped', 'segmented', 'ready'].includes(String(recordMap.get(Number(ep.vid_index))?.status || '')))
+          .sort((a, b) => Number(a.vid_index) - Number(b.vid_index));
+        setSeriesContext({ seriesId: target.seriesId, title: result.data.series_title || target.title || '', count: candidates.length, total: episodes.length });
+        setFiles(previous => {
+          const existing = new Set(previous);
+          return [...previous, ...candidates.map(ep => ep.savePath).filter(path => path && !existing.has(path))];
+        });
+        const settings = await window.electronAPI.getSettings?.();
+        if (alive && settings?.root) setOutputDir(`${settings.root}/红果短剧/处理后/${result.data.series_title || target.title || '当前短剧'}`);
+      } catch (_) {
+        if (alive) setNotice('读取当前剧集失败，请改用“添加文件”。');
+      } finally {
+        if (alive) setSeriesLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [active, target?.seriesId, target?.title]);
 
   const toggleLibrary = useCallback(async () => {
     if (libraryOpen) {
@@ -178,9 +226,11 @@ export default function Quchong({ active = true }) {
   return (
     <div className="quchong-container">
       <div className="quchong-header">
-        <div><h2><Film size={25} /> 视频处理</h2><p>按本地版 quchong_app 的逻辑处理视频，输出到独立目录，不覆盖原文件。</p><p className="qc-note">本地画面与音频扰动不能保证平台一定判定为新内容，请只处理你有权使用的素材。</p></div>
+        <div><h2><Film size={25} /> 视频处理</h2><p>{seriesContext ? `当前短剧：${seriesContext.title} · 已自动带入 ${seriesContext.count} 集未处理视频` : '按本地版 quchong_app 的逻辑处理视频，输出到独立目录，不覆盖原文件。'}</p><p className="qc-note">本地画面与音频扰动不能保证平台一定判定为新内容，请只处理你有权使用的素材。</p></div>
         <span className={`quchong-status ${running ? 'is-running' : ''}`}>{status}</span>
       </div>
+
+      {seriesContext && <div className="qc-flow-note"><b>流程第 2 步：去重</b><span>{seriesLoading ? '正在读取本剧已下载集…' : `已带入 ${files.length} 集。处理完成后返回下载管理继续“分组并生成成品”。`}</span><button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.('manager', { seriesId: seriesContext.seriesId })}>返回本剧</button></div>}
 
       <section className="qc-card">
         <div className="qc-card-title"><span>输入视频</span><div className="qc-actions"><button className="btn btn-sm" onClick={async () => addFiles(await window.electronAPI.quchongSelectVideos())} disabled={running}><Plus size={14} /> 添加文件</button></div></div>

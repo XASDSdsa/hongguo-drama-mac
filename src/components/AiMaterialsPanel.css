@@ -73,6 +73,8 @@
 }
 
 .aim-gate-ready .aim-gate-dot { background: #2e745b; }
+.aim-next-step { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 11px 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--text-secondary); font-size: 12px; }
+.aim-next-step span { flex: 1; }
 
 .aim-gate-message {
   margin-top: 4px;

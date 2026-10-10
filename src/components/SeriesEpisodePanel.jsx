@@ -16,7 +16,7 @@ const formatUpdatedAt = value => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
-export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdatedAt = 0, active = true, revision = 0, onDownloadsChanged, onNotify }) {
+export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdatedAt = 0, active = true, revision = 0, onDownloadsChanged, onNotify, onNavigate }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -27,6 +27,7 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdated
   const [range, setRange] = useState('');
   const [rangeError, setRangeError] = useState('');
   const [coverFailed, setCoverFailed] = useState(false);
+  const [pipeline, setPipeline] = useState(null);
   const lifecycle = useRef(0);
   const readRequest = useRef(0);
   const busy = useRef(false);
@@ -46,6 +47,12 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdated
       if (!result?.success || !Array.isArray(result.data?.episodes)) throw new Error(result?.error || '读取剧集失败');
       const episodes = result.data.episodes.map(ep => ({ ...ep, vid_index: Number(ep.vid_index) }));
       setDetail({ ...result.data, episodes });
+      if (typeof window.electronAPI.getSeriesPipelineStatus === 'function') {
+        try {
+          const pipelineResult = await window.electronAPI.getSeriesPipelineStatus(seriesId);
+          if (pipelineResult?.success !== false) setPipeline(pipelineResult);
+        } catch (_) { /* 状态卡不应阻断剧集列表 */ }
+      }
       const available = new Set(episodes.filter(canDownload).map(ep => ep.vid_index));
       setSelected(previous => new Set([...previous].filter(index => available.has(index))));
       setError('');
@@ -76,6 +83,26 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdated
   const completed = episodes.filter(ep => ep.status === 'completed').length;
   const source = String(seriesId).startsWith('xifan:') ? '西饭短剧' : String(seriesId).startsWith('hema:') ? '河马短剧' : '红果短剧';
   const disabled = !active || submitting || updating;
+
+  const stages = pipeline?.stages || {};
+  const dedupDone = Number(stages.dedup?.done || 0);
+  const dedupTotal = Number(stages.dedup?.total || completed);
+  const groups = Array.isArray(stages.final?.products) ? stages.final.products : (Array.isArray(pipeline?.final?.products) ? pipeline.final.products : (Array.isArray(pipeline?.products) ? pipeline.products : []));
+  const finalDone = groups.length;
+  const dedupReady = completed > 0 && dedupDone < completed;
+  const finalReady = pipeline?.ready === true && finalDone > 0;
+  const nextLabel = completed === 0 ? '先选择分集下载' : dedupReady ? '去重处理本剧' : finalReady ? '去发布素材' : '分组并生成成品';
+  const nextAction = () => {
+    if (completed === 0) {
+      document.querySelector('.sep-grid')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else if (dedupReady) {
+      onNavigate?.('quchong', { seriesId, title: detail?.series_title || title });
+    } else if (finalReady) {
+      document.getElementById('sep-ai-materials')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      document.getElementById('dm-merge-action')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   const updateEpisodes = async () => {
     if (!active || busy.current) return;
@@ -169,6 +196,16 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdated
         {rangeError && <p className="sep-error" role="alert">{rangeError}</p>}
       </div>
     </div>
+    <div className="sep-pipeline" aria-label="本剧处理流程">
+      <div className="sep-pipeline-head"><div><b>本剧处理流程</b><span>每一步完成后，下一步才会开放</span></div><button className="btn btn-primary btn-sm" onClick={nextAction} disabled={loading || updating}>{nextLabel}</button></div>
+      <div className="sep-pipeline-steps">
+        <span className={completed ? 'done' : 'current'}><i>1</i>下载 <em>{completed}/{episodes.length || 0}</em></span>
+        <span className={dedupDone >= Math.max(completed, 1) && completed > 0 ? 'done' : dedupReady ? 'current' : ''}><i>2</i>去重 <em>{dedupDone}/{dedupTotal || completed}</em></span>
+        <span className={finalDone ? 'done' : !dedupReady && completed > 0 ? 'current' : ''}><i>3</i>分组/拼接 <em>{finalDone} 组</em></span>
+        <span className={finalReady ? 'done' : ''}><i>4</i>最终成品 <em>{finalDone} 个</em></span>
+        <span className={finalReady ? 'current' : ''}><i>5</i>发布素材</span>
+      </div>
+    </div>
     {error && <div className="sep-error" role="alert">{error}<button className="btn btn-outline btn-sm" disabled={loading || disabled} onClick={loadLocal}>重试读取</button></div>}
     {loading && !detail && <p className="sep-hint" role="status">正在读取剧集和下载状态…</p>}
     {!loading && detail && !episodes.length && <p className="sep-hint">尚未保存分集信息，点击「更新剧集」获取完整列表。</p>}
@@ -183,7 +220,8 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdated
       </div>
       <div className="sep-actions"><button className="btn btn-outline" disabled={!active || playing || !episodes.some(ep => !ep.locked && ep.vid)} onClick={play}><Play size={15} />{playing ? '正在打开…' : '立即播放'}</button><span>已下载及队列中的集数自动跳过</span><button className="btn btn-primary" disabled={disabled || !selected.size} onClick={downloadSelected}><Download size={15} />{submitting ? '正在加入队列…' : `下载选中 (${selected.size})`}</button></div>
     </>}
-    <AiMaterialsPanel key={seriesId} seriesId={seriesId} title={detail?.series_title || title} cover={poster}
-      aiCover={detail?.aiCover} episodes={episodes} active={active} revision={revision} onNotify={onNotify} />
+    <div id="sep-ai-materials"><AiMaterialsPanel key={seriesId} seriesId={seriesId} title={detail?.series_title || title} cover={poster}
+      aiCover={detail?.aiCover} episodes={episodes} active={active} revision={revision} onNotify={onNotify} onNavigate={onNavigate} />
+    </div>
   </section>;
 }

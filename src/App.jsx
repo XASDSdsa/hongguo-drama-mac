@@ -22,6 +22,7 @@ export default function App() {
   const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
   const [playerTarget, setPlayerTarget] = useState(null); // 浏览页点播 -> 播放页选中
+  const [pageTarget, setPageTarget] = useState(null); // 当前流程页的剧集上下文
 
   useEffect(() => {
     window.electronAPI.getAppInfo().then((info) => {
@@ -38,13 +39,17 @@ export default function App() {
     if (!window.electronAPI.onNavigate) return undefined;
     return window.electronAPI.onNavigate((data) => {
       if (!data || !data.page) return;
-      if (data.payload) setPlayerTarget({ ...data.payload, ts: Date.now() });
+      if (data.payload) {
+        setPlayerTarget({ ...data.payload, ts: Date.now() });
+        setPageTarget({ ...data.payload, ts: Date.now() });
+      }
       setVisited((pages) => pages.includes(data.page) ? pages : [...pages, data.page]);
       setPage(data.page);
     });
   }, []);
 
-  const navigate = (nextPage) => {
+  const navigate = (nextPage, payload = null) => {
+    setPageTarget(payload ? { ...payload, ts: Date.now() } : null);
     setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
     setPage(nextPage);
   };
@@ -56,9 +61,9 @@ export default function App() {
       case 'player':
         return <Player active={page === id} target={playerTarget} onNavigate={navigate} />;
       case 'manager':
-        return <DownloadManager active={page === id} onNavigate={navigate} />;
+        return <DownloadManager active={page === id} onNavigate={navigate} target={pageTarget} />;
       case 'quchong':
-        return <Quchong active={page === id} />;
+        return <Quchong active={page === id} target={pageTarget} onNavigate={navigate} />;
       case 'settings':
         return <SettingsPage active={page === id} />;
       case 'download':

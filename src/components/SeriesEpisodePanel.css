@@ -35,5 +35,20 @@
 .sep-pick-dot { position: absolute; right: 5px; bottom: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .sep-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .sep-actions > span { flex: 1; color: var(--text-secondary); font-size: 11px; }
+.sep-pipeline { margin: 20px 0 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-inset); }
+.sep-pipeline-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sep-pipeline-head > div { display: flex; align-items: baseline; gap: 10px; }
+.sep-pipeline-head b { font-size: 13px; }
+.sep-pipeline-head span { color: var(--text-tertiary); font-size: 11px; }
+.sep-pipeline-steps { display: grid; grid-template-columns: repeat(5, minmax(100px, 1fr)); gap: 8px; margin-top: 13px; }
+.sep-pipeline-steps > span { display: flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
+.sep-pipeline-steps i { width: 21px; height: 21px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--border); color: var(--text-secondary); font-style: normal; font-size: 10px; }
+.sep-pipeline-steps em { margin-left: auto; font-style: normal; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.sep-pipeline-steps > span.current { color: var(--accent); font-weight: 600; }
+.sep-pipeline-steps > span.current i { background: var(--accent); color: #fff; }
+.sep-pipeline-steps > span.done { color: #28664e; }
+.sep-pipeline-steps > span.done i { background: #388564; color: #fff; }
+@media (max-width: 820px) { .sep-pipeline-steps { grid-template-columns: repeat(3, minmax(120px, 1fr)); } }
+@media (max-width: 560px) { .sep-pipeline-head { align-items: flex-start; flex-direction: column; } .sep-pipeline-steps { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
 @media (max-width: 820px) { .sep-header { gap: 16px; } .sep-cover { flex-basis: 100px; width: 100px; } .sep-title-row { flex-wrap: wrap; gap: 8px; } .sep-actions { flex-wrap: wrap; } .sep-actions > span { order: 3; flex-basis: 100%; } .sep-actions > .btn-primary { margin-left: auto; } }
 @media (max-width: 560px) { .sep-actions .btn { flex: 1 1 auto; } .sep-actions > .btn-primary { margin-left: 0; } }
