@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 搜索（内嵌浏览器嗅探）
   searchSeries: (keyword, options) => ipcRenderer.invoke('search-series', keyword, options),
   searchResolve: (seriesId) => ipcRenderer.invoke('search-resolve', seriesId),
+  refreshAllSeries: () => ipcRenderer.invoke('refresh-all-series'),
+  onSeriesRefreshProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('series-refresh-progress', listener);
+    return () => ipcRenderer.removeListener('series-refresh-progress', listener);
+  },
   searchWindowShow: (visible, sourceUrl) => ipcRenderer.invoke('search-window-show', visible, sourceUrl),
   getSeriesList: () => ipcRenderer.invoke('get-series-list'),
   removeSeries: (seriesId) => ipcRenderer.invoke('remove-series', seriesId),

@@ -291,10 +291,14 @@ async function resolveSeriesId(shareUrl) {
 /**
  * 获取全集剧集列表
  */
-async function fetchEpisodeList(seriesId) {
+async function fetchEpisodeList(seriesId, options = {}) {
   if (String(seriesId).startsWith('hema:')) return require('./hema').fetchEpisodeList(seriesId);
   if (String(seriesId).startsWith('xifan:')) return require('./xifan').fetchEpisodeList(seriesId);
-  return cachedRequest(`episodes:${seriesId}`, 60000, () => fetchEpisodeListFresh(seriesId));
+  // 更新剧集按钮明确要求重新读取远端目录；正在进行的同 key 请求仍共享，
+  // 但已经完成的 60 秒缓存必须先失效，避免显示旧总集数。
+  const cacheKey = `episodes:${seriesId}`;
+  if (options?.forceRefresh) responseCache.delete(cacheKey);
+  return cachedRequest(cacheKey, 60000, () => fetchEpisodeListFresh(seriesId));
 }
 
 async function fetchEpisodeListFresh(seriesId) {

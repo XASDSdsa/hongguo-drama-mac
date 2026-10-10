@@ -2,6 +2,15 @@ const STATUS_PRIORITY = { completed: 0, downloading: 1, pending: 2, failed: 3, s
 
 const hasId = value => value != null && String(value).trim() !== '';
 
+export function formatSeriesUpdatedAt(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '未更新';
+  const date = new Date(numeric < 1e12 ? numeric * 1000 : numeric);
+  if (Number.isNaN(date.getTime())) return '未更新';
+  const pad = part => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function downloadSeriesKey(task) {
   const id = task.hongguoInfo?.series_id;
   return hasId(id) ? `series:${String(id)}` : `task:${task.id}`;
@@ -27,6 +36,9 @@ export function groupDownloadSeries(tasks, seriesList) {
       group = {
         key, seriesId, title: series?.series_title || '', cover: series?.cover || '',
         total: series ? Math.max(Number.isInteger(metadataTotal) && metadataTotal > 0 ? metadataTotal : 0, episodeTotal) || null : null,
+        // episodesUpdatedAt is written when the source episode list is refreshed.
+        // Keep updatedAt as a backwards-compatible fallback for older registries.
+        lastUpdatedAt: Number(series?.episodesUpdatedAt || series?.updatedAt || series?.lastUpdatedAt || 0) || 0,
         completed: 0, downloading: 0, pending: 0, failed: 0, stopped: 0,
         count: 0, updatedAt: 0, episodes: new Map(),
       };

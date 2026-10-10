@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
-import { downloadSeriesKey, groupDownloadSeries } from './downloadSeries.mjs';
+import { downloadSeriesKey, groupDownloadSeries, formatSeriesUpdatedAt } from './downloadSeries.mjs';
+import { parseEpisodeRange } from './episodeRange';
 import SeriesEpisodePanel from './SeriesEpisodePanel';
 import './Browse.css';
 import './DownloadManager.css';
@@ -64,6 +65,7 @@ function DownloadManager({ onNavigate, active = true }) {
   const [toast, setToast] = useState(null);
   const [queue, setQueue] = useState({ active: 0, queued: 0, maxConcurrent: 3 });
   const [seriesList, setSeriesList] = useState([]);
+  const [seriesRefresh, setSeriesRefresh] = useState({ active: false, done: 0, total: 0 });
   const [selectedSeries, setSelectedSeries] = useState(null);
   const [seriesPage, setSeriesPage] = useState(1);
   const [seriesQuery, setSeriesQuery] = useState('');
@@ -72,12 +74,17 @@ function DownloadManager({ onNavigate, active = true }) {
   const [mergeTasks, setMergeTasks] = useState([]);
   const [confirmAsk, setConfirmAsk] = useState(null); // 删除确认（可勾选删除本地文件）
   const [mergeAsk, setMergeAsk] = useState(false);    // 合并格式选择
+  const [mergeScope, setMergeScope] = useState('all');
+  const [mergeRange, setMergeRange] = useState('');
+  const [mergeGroupSize, setMergeGroupSize] = useState('0');
+  const [mergeRangeError, setMergeRangeError] = useState('');
   const [page, setPage] = useState(1);
   const [orderVersion, setOrderVersion] = useState(0);
   const [loadError, setLoadError] = useState('');
   const containerRef = useRef(null);
   const overviewScroll = useRef(0);
   const toastTimerRef = useRef(null);
+  const refreshSeriesBusy = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0, merges: 0 });
@@ -104,6 +111,10 @@ function DownloadManager({ onNavigate, active = true }) {
     setPage(1);
     setConfirmAsk(null);
     setMergeAsk(false);
+    setMergeScope('all');
+    setMergeRange('');
+    setMergeGroupSize('0');
+    setMergeRangeError('');
   };
 
   useEffect(() => {
@@ -166,6 +177,30 @@ function DownloadManager({ onNavigate, active = true }) {
   const handleEpisodesChanged = useCallback(async () => {
     await Promise.all([refresh(), loadSeriesList(), loadQueue()]);
   }, [refresh, loadSeriesList, loadQueue]);
+
+  const refreshAllSeries = useCallback(async () => {
+    if (!activeRef.current || refreshSeriesBusy.current || seriesCards.length === 0) return;
+    refreshSeriesBusy.current = true;
+    setSeriesRefresh({ active: true, done: 0, total: seriesCards.length });
+    try {
+      const result = await window.electronAPI.refreshAllSeries();
+      if (!result?.success && !Array.isArray(result?.results)) throw new Error(result?.error || '更新剧集失败');
+      const total = Number(result.total) || seriesCards.length;
+      const succeeded = Number(result.succeeded ?? result.successful) || 0;
+      const failed = Number(result.failed) || Math.max(0, total - succeeded);
+      const added = Number(result.addedEpisodes ?? result.addedCount) || 0;
+      await Promise.all([refresh(), loadSeriesList()]);
+      if (activeRef.current) {
+        const summary = failed > 0 ? `已检查 ${total} 部，成功 ${succeeded} 部，失败 ${failed} 部` : added > 0 ? `已更新 ${total} 部，新增 ${added} 集` : `已检查 ${total} 部，暂无新增剧集`;
+        showToast(summary, failed > 0 ? 'error' : 'success');
+      }
+    } catch (error) {
+      if (activeRef.current) showToast(error.message || '更新剧集失败，请重试', 'error');
+    } finally {
+      refreshSeriesBusy.current = false;
+      setSeriesRefresh({ active: false, done: 0, total: 0 });
+    }
+  }, [loadSeriesList, refresh, seriesCards, showToast]);
 
   useEffect(() => {
     if (!active) return;
@@ -230,6 +265,16 @@ function DownloadManager({ onNavigate, active = true }) {
         showToast('合并失败：' + (data.error || '未知错误'), 'error');
       }),
     ];
+    if (typeof window.electronAPI.onSeriesRefreshProgress === 'function') {
+      cleanups.push(window.electronAPI.onSeriesRefreshProgress((data) => {
+        if (!activeRef.current || !data) return;
+        setSeriesRefresh(previous => ({
+          active: true,
+          total: Number(data.total) || previous.total || seriesCards.length,
+          done: Math.min(Number(data.total) || previous.total || seriesCards.length, Number(data.done) || 0),
+        }));
+      }));
+    }
     const timer = setInterval(() => {
       loadQueue();
       refresh();
@@ -253,6 +298,8 @@ function DownloadManager({ onNavigate, active = true }) {
   const clearSelection = () => setSelected(new Set());
   const selectAll = () => setSelected(new Set(scopedTasks.map((task) => task.id)));
   const allSelected = scopedTasks.length > 0 && scopedTasks.every((task) => selected.has(task.id));
+  const selectPage = ids => setSelected(previous => new Set([...previous, ...ids]));
+  const clearPage = ids => setSelected(previous => new Set([...previous].filter(id => !ids.includes(id))));
 
   const fmtSize = (b) => {
     if (!b || b <= 0) return '0 B';
@@ -305,27 +352,88 @@ function DownloadManager({ onNavigate, active = true }) {
     }
   };
 
-  // 一键合并选中的短剧
+  const mergeCandidates = useMemo(() => {
+    const byIndex = new Map();
+    for (const task of scopedTasks) {
+      const index = Number(task.hongguoInfo?.vid_index);
+      if (task.status !== 'completed' || !Number.isSafeInteger(index) || index < 1) continue;
+      const previous = byIndex.get(index);
+      if (!previous || (task.startTime || 0) > (previous.startTime || 0)) byIndex.set(index, task);
+    }
+    return [...byIndex.values()].sort((a, b) => Number(a.hongguoInfo.vid_index) - Number(b.hongguoInfo.vid_index));
+  }, [scopedTasks]);
+
+  const waitForMergeTask = async (id) => {
+    for (let attempt = 0; attempt < 720; attempt++) {
+      const list = await window.electronAPI.getMergeTasks();
+      const task = Array.isArray(list) ? list.find(item => item.id === id) : null;
+      if (task && task.status !== 'running') return task;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return null;
+  };
+
+  // 一键合并：支持当前选中、区间和每 N 集分组。
   const doMerge = async (compatible) => {
     if (!mergeSeriesId) {
       showToast('请先选择要合并的短剧', 'error');
       return;
     }
+    const candidates = mergeCandidates.filter(task => mergeScope === 'selected' ? selected.has(task.id) : true);
+    if (!candidates.length) {
+      showToast(mergeScope === 'selected' ? '请先在视频列表中选择已下载集数' : '没有可合并的已下载分集', 'error');
+      return;
+    }
+    let filtered = candidates;
+    if (mergeRange.trim()) {
+      try {
+        const total = Math.max(Number(currentSeries?.total) || 0, ...candidates.map(task => Number(task.hongguoInfo.vid_index)));
+        const indexes = parseEpisodeRange(mergeRange, total);
+        filtered = candidates.filter(task => indexes.has(Number(task.hongguoInfo.vid_index)));
+      } catch (error) {
+        setMergeRangeError(error.message);
+        return;
+      }
+      if (!filtered.length) { setMergeRangeError('指定范围内没有已下载完成的分集。'); return; }
+    }
+    const size = Math.max(0, Number.parseInt(mergeGroupSize, 10) || 0);
+    const groups = [];
+    if (size > 0) {
+      for (let offset = 0; offset + size <= filtered.length; offset += size) groups.push(filtered.slice(offset, offset + size));
+      const skipped = filtered.length % size;
+      if (!groups.length) { setMergeRangeError(`已下载 ${filtered.length} 集，不足每组 ${size} 集，未创建合并任务。`); return; }
+      if (skipped) showToast(`最后 ${skipped} 集不足 ${size} 集，已按要求跳过`, 'success');
+    } else groups.push(filtered);
+    setMergeRangeError('');
     setMergeAsk(false);
     setMerging(true);
     try {
-      const res = await window.electronAPI.mergeSeries(mergeSeriesId, '', { compatible });
-      if (!res || !res.success) {
-        showToast((res && res.error) || '合并失败', 'error');
-        return;
+      let submitted = 0;
+      for (const group of groups) {
+        const indexes = group.map(task => Number(task.hongguoInfo.vid_index));
+        const isSubset = indexes.length !== mergeCandidates.length || mergeScope === 'selected' || mergeRange.trim() || groups.length > 1;
+        const first = indexes[0], last = indexes[indexes.length - 1];
+        const outputName = isSubset ? `${currentSeries?.title || '短剧'}_第${first}-${last}集` : '';
+        const res = await window.electronAPI.mergeSeries(mergeSeriesId, outputName, { compatible, episodeIndices: indexes });
+        if (!res || !res.success) {
+          showToast((res && res.error) || `第 ${first}-${last} 集合并失败`, 'error');
+          break;
+        }
+        submitted++;
+        await loadMergeTasks();
+        if (groups.length > 1) {
+          const finished = await waitForMergeTask(res.id);
+          if (!finished) {
+            showToast(`第 ${first}-${last} 集合并等待超时，后续分组未继续`, 'error');
+            break;
+          }
+          if (finished.status !== 'completed') {
+            showToast(`第 ${first}-${last} 集合并未完成：${finished.error || '任务已停止'}`, 'error');
+            break;
+          }
+        }
       }
-      await loadMergeTasks();
-      const sizeGb = (res.totalBytes / 1073741824).toFixed(2);
-      const duration = res.totalDuration > 0 ? ` / ${fmtElapsed(res.totalDuration)}` : ' / 时长待探测';
-      showToast(compatible
-        ? `开始兼容格式合并 ${res.count} 集（H.264，耗时较长）`
-        : `开始合并 ${res.count} 集（约 ${sizeGb} GB${duration}）`);
-      if (res.codecWarning) showToast(res.codecWarning, 'error');
+      if (submitted > 0) showToast(groups.length > 1 ? `已提交 ${submitted} 组分集合并任务` : `已提交 ${filtered.length} 集合并任务`);
     } catch (e) {
       showToast('合并异常: ' + e.message, 'error');
     } finally {
@@ -400,6 +508,8 @@ function DownloadManager({ onNavigate, active = true }) {
   const pageCount = Math.max(1, Math.ceil(sortedIds.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const visibleTasks = sortedIds.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(id => taskById.get(id)).filter(Boolean);
+  const visibleTaskIds = visibleTasks.map(task => task.id);
+  const allPageSelected = visibleTaskIds.length > 0 && visibleTaskIds.every(id => selected.has(id));
 
   const activeCount = scopedTasks.filter((t) => t.status === 'downloading' || t.status === 'pending').length;
   const completedCount = scopedTasks.filter((t) => t.status === 'completed').length;
@@ -448,6 +558,7 @@ function DownloadManager({ onNavigate, active = true }) {
         seriesId={mergeSeriesId}
         title={currentSeries.title}
         cover={currentSeries.cover}
+        lastUpdatedAt={currentSeries.lastUpdatedAt}
         active={active}
         revision={orderVersion}
         onDownloadsChanged={handleEpisodesChanged}
@@ -456,6 +567,17 @@ function DownloadManager({ onNavigate, active = true }) {
 
       {selectedSeries && <h3 className="dm-video-heading">视频列表 <span>{scopedTasks.length} 个任务</span></h3>}
       <div className="dm-toolbar">
+        {!selectedSeries && (
+          <button
+            className="btn btn-outline dm-refresh-series"
+            onClick={refreshAllSeries}
+            disabled={seriesRefresh.active || seriesCards.length === 0}
+            title="重新读取所有已登记短剧的总集数和分集信息，不会自动下载"
+          >
+            <RefreshCw size={15} className={seriesRefresh.active ? 'spin' : ''} />
+            {seriesRefresh.active ? `更新剧集 ${seriesRefresh.done}/${seriesRefresh.total}` : '更新全部剧集'}
+          </button>
+        )}
         <button
           className="btn btn-primary"
           onClick={resumeAll}
@@ -634,9 +756,20 @@ function DownloadManager({ onNavigate, active = true }) {
       {selectedSeries && scopedTasks.length > 0 && <div className="dm-pagination">
         <div className="dm-selection-summary">
           <button className="btn btn-outline btn-sm" onClick={allSelected ? clearSelection : selectAll}
-            title={allSelected ? '取消所有分页中的选择' : `选中本剧全部 ${scopedTasks.length} 项，包含其他分页`}>
-            <CheckSquare size={15} />{allSelected ? '取消全选' : '全选'}
+            title={allSelected ? '取消本剧所有分页中的选择' : `选中本剧全部 ${scopedTasks.length} 项，包含其他分页`}>
+            <CheckSquare size={15} />{allSelected ? '取消全选本剧' : '全选本剧'}
           </button>
+          <button className="btn btn-outline btn-sm" onClick={allPageSelected ? () => clearPage(visibleTaskIds) : () => selectPage(visibleTaskIds)}
+            title={allPageSelected ? '取消当前页选择' : `选中当前页 ${visibleTaskIds.length} 项`}>
+            <CheckSquare size={15} />{allPageSelected ? '取消本页' : '全选本页'}
+          </button>
+          {selected.size > 0 && <button className="btn btn-outline btn-sm" onClick={clearSelection}>取消选择</button>}
+          {selected.size > 0 && <button className="btn btn-outline btn-sm" onClick={retrySelected} disabled={retryableSelectedCount === 0}>
+            <RefreshCw size={14} />重试选中 ({retryableSelectedCount})
+          </button>}
+          {selected.size > 0 && <button className="btn btn-outline btn-sm" onClick={deleteSelected}>
+            <Trash2 size={14} />删除选中
+          </button>}
         <span>共 {scopedTasks.length} 项 · 当前 {(currentPage - 1) * PAGE_SIZE + 1}-{Math.min(currentPage * PAGE_SIZE, scopedTasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
         </div>
         <nav aria-label="下载任务分页">
@@ -671,6 +804,7 @@ function DownloadManager({ onNavigate, active = true }) {
                   </div>
                   <div className="browse-card-title">{series.title}</div>
                   <div className="dm-card-count">已下载 {series.completed}{series.total > 0 ? ` / ${series.total}` : ''} 集</div>
+                  <div className="dm-card-updated">上次更新：{formatSeriesUpdatedAt(series.lastUpdatedAt)}</div>
                   <div className="browse-card-tags">
                     <span className="browse-tag">{series.seriesId?.startsWith('xifan:') ? '西饭短剧' : series.seriesId?.startsWith('hema:') ? '河马短剧' : series.seriesId ? '红果短剧' : '本地任务'}</span>
                     {series.downloading + series.pending > 0 && <span className="browse-tag">进行中 {series.downloading + series.pending}</span>}
@@ -758,22 +892,48 @@ function DownloadManager({ onNavigate, active = true }) {
         </div>
       )}
 
+      {selectedSeries && scopedTasks.length > 0 && <div className="dm-pagination dm-pagination-bottom">
+        <span>当前第 {currentPage} / {pageCount} 页 · 共 {scopedTasks.length} 项</span>
+        <nav aria-label="下载任务底部分页">
+          <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
+          <button className="btn btn-outline btn-sm" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button>
+        </nav>
+      </div>}
+
       {toast && (
         <div className={`dm-toast dm-toast-${toast.type}`} role={toast.type === 'error' ? 'alert' : 'status'} onClick={() => setToast(null)}>
           {toast.text}
         </div>
       )}
 
-      {/* 合并格式选择 */}
+      {/* 合并格式与范围选择 */}
       {mergeAsk && (
         <div className="player-confirm-mask" onClick={() => setMergeAsk(false)}>
           <div className="player-confirm" role="dialog" aria-modal="true" aria-label={confirmAsk ? confirmAsk.title : '合并导出'} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="player-confirm-title" style={{ color: 'var(--accent)' }}>
               <Layers size={17} />
-              合并整部剧
+              合并已下载分集
             </div>
             <div className="player-confirm-msg">
-              <p>将《{currentSeries?.title || '所选短剧'}》的全部已下载分集合并为一个 mp4。未下载的分集不会自动补齐。</p>
+              <div className="merge-options">
+                <label className="merge-option-row">
+                  <span>合并范围</span>
+                  <select value={mergeScope} onChange={event => { setMergeScope(event.target.value); setMergeRangeError(''); }}>
+                    <option value="all">全部已下载集（{mergeCandidates.length}）</option>
+                    <option value="selected" disabled={!selected.size}>视频列表中已选集（{mergeCandidates.filter(task => selected.has(task.id)).length}）</option>
+                  </select>
+                </label>
+                <label className="merge-option-row">
+                  <span>指定集数</span>
+                  <input value={mergeRange} placeholder="留空表示全部，例如 1-50,61" onChange={event => { setMergeRange(event.target.value); setMergeRangeError(''); }} />
+                </label>
+                <label className="merge-option-row">
+                  <span>每组集数</span>
+                  <span className="merge-group-input"><input type="number" min="0" step="1" value={mergeGroupSize} onChange={event => { setMergeGroupSize(event.target.value); setMergeRangeError(''); }} /><small>0 表示不分组；最后不足一组会跳过</small></span>
+                </label>
+              </div>
+              {mergeRangeError && <p className="alert alert-error merge-range-error" role="alert">{mergeRangeError}</p>}
+              <p>《{currentSeries?.title || '所选短剧'}》当前可合并 <b>{mergeCandidates.length}</b> 集。未下载的分集不会自动补齐；指定范围只会从已下载完成的分集中筛选。</p>
               <p><b>智能快速合并</b>：格式一致时无损合并；不一致时只处理必要的音视频，耗时取决于总时长。</p>
               <p><b>兼容合并</b>：导出 H.264/AAC，已经兼容的分集无需重复转换。两种方式都保留原文件。</p>
             </div>

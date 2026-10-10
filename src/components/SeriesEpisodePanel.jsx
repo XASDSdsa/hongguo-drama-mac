@@ -6,8 +6,16 @@ import './SeriesEpisodePanel.css';
 const STATUS_TEXT = { completed: '已下载', downloading: '下载中', pending: '排队中', queued: '排队中', missing: '未下载', failed: '失败', stopped: '已停止', cancelled: '已停止' };
 const canDownload = ep => !ep.locked && Boolean(ep.vid) && Number.isSafeInteger(Number(ep.vid_index)) && Number(ep.vid_index) > 0 && ['missing', 'failed', 'stopped', 'cancelled'].includes(ep.status);
 const statusText = ep => ep.status === 'completed' ? '已下载' : ep.locked ? '已锁定' : STATUS_TEXT[ep.status] || '待更新';
+const formatUpdatedAt = value => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '未更新';
+  const date = new Date(numeric < 1e12 ? numeric * 1000 : numeric);
+  if (Number.isNaN(date.getTime())) return '未更新';
+  const pad = part => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
 
-export default function SeriesEpisodePanel({ seriesId, title, cover, active = true, revision = 0, onDownloadsChanged, onNotify }) {
+export default function SeriesEpisodePanel({ seriesId, title, cover, lastUpdatedAt = 0, active = true, revision = 0, onDownloadsChanged, onNotify }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -61,6 +69,7 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, active = tr
 
   const episodes = detail?.episodes || [];
   const poster = detail?.cover || cover;
+  const updatedAt = detail?.episodesUpdatedAt || detail?.updatedAt || lastUpdatedAt;
   useEffect(() => setCoverFailed(false), [poster]);
   const available = useMemo(() => episodes.filter(canDownload), [episodes]);
   const completed = episodes.filter(ep => ep.status === 'completed').length;
@@ -152,6 +161,7 @@ export default function SeriesEpisodePanel({ seriesId, title, cover, active = tr
       <div className="sep-meta">
         <div className="sep-title-row"><h3>{detail?.series_title || title}</h3><button className="btn btn-outline btn-sm" onClick={updateEpisodes} disabled={disabled}><RefreshCw size={14} className={updating ? 'spin' : ''} />{updating ? '正在更新…' : '更新剧集'}</button></div>
         <p className="sep-count">{source} · 共 {episodes.length} 集 · 已下载 <b>{completed}</b> 集</p>
+        <p className="sep-updated">上次更新：{formatUpdatedAt(updatedAt)}</p>
         <p className="sep-hint">绿色为已下载，勾选未下载集数可继续下载。</p>
         <div className="sep-range-row"><input className="input-field" aria-label="选择下载集数" placeholder="区间，如 1-50 或 1,3,5" value={range} disabled={disabled || !episodes.length} onChange={event => setRange(event.target.value)} onKeyDown={event => { if (isSubmitKey(event)) applyRange(range); }} /><button className="btn btn-outline" disabled={disabled || !episodes.length} onClick={() => applyRange(range)}>应用</button></div>
         <div className="sep-presets"><button className="btn btn-ghost btn-sm" disabled={disabled || !episodes.length} onClick={() => applyRange('1-10')}>前10集</button><button className="btn btn-ghost btn-sm" disabled={disabled || !episodes.length} onClick={() => applyRange('1-30')}>前30集</button><button className="btn btn-ghost btn-sm" disabled={disabled || !available.length} onClick={() => selectAvailable(available)}>选择未下载</button><button className="btn btn-ghost btn-sm" disabled={disabled || !selected.size} onClick={() => selectAvailable([])}>清空选择</button></div>

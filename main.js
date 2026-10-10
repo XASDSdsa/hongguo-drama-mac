@@ -364,7 +364,13 @@ function saveDownloadTasks() {
 let seriesRegistry = [];
 
 function loadSeriesRegistry() {
-  seriesRegistry = store.getSeries() || [];
+  const saved = store.getSeries() || [];
+  // 旧版本只保存 updatedAt；保留兼容回退，后续写入统一使用
+  // episodesUpdatedAt 记录最近一次成功拉取分集的时间。
+  seriesRegistry = saved.map((entry) => ({
+    ...entry,
+    episodesUpdatedAt: Number(entry.episodesUpdatedAt || entry.updatedAt) || 0,
+  }));
 }
 
 function saveSeriesRegistry() {
@@ -379,12 +385,16 @@ function upsertSeriesRegistry(data) {
   if (!data || !data.series_id || !Array.isArray(data.episodes) || data.episodes.length === 0) return;
   const sid = String(data.series_id);
   const idx = seriesRegistry.findIndex((s) => String(s.series_id) === sid);
+  const previous = idx === -1 ? null : seriesRegistry[idx];
+  const now = Date.now();
+  const beforeSave = seriesRegistry.slice();
   const entry = {
     series_id: sid,
-    series_title: data.series_title || '未命名短剧',
-    cover: data.cover || '',
+    // 远端偶发返回空标题/封面时，继续使用本地已知值，避免一次失败响应冲掉展示信息。
+    series_title: data.series_title || previous?.series_title || '未命名短剧',
+    cover: data.cover || previous?.cover || '',
     total: data.episodes.length,
-    web_accessible_episodes: data.web_accessible_episodes ?? null,
+    web_accessible_episodes: data.web_accessible_episodes ?? previous?.web_accessible_episodes ?? null,
     episodes: data.episodes.map((e) => ({
       vid: String(e.vid),
       vid_index: e.vid_index || 0,
@@ -393,17 +403,130 @@ function upsertSeriesRegistry(data) {
       web_available: e.web_available ?? null,
       locked: e.locked === true,
     })),
-    updatedAt: Date.now(),
+    // updatedAt 继续保留给旧版本使用；新界面读取 episodesUpdatedAt。
+    updatedAt: now,
+    episodesUpdatedAt: now,
     dismissed: false, // 用户主动移除过；再次登记时自动恢复显示
   };
   if (idx === -1) seriesRegistry.unshift(entry);
   else seriesRegistry[idx] = { ...seriesRegistry[idx], ...entry, dismissed: false };
-  saveSeriesRegistry();
+  try {
+    saveSeriesRegistry();
+  } catch (error) {
+    // 磁盘写入失败时回滚内存，避免界面看到一份下次启动会消失的假档案。
+    seriesRegistry = beforeSave;
+    throw error;
+  }
+  return seriesRegistry.find((s) => String(s.series_id) === sid) || entry;
 }
 
 /** 播放页/合并选择器可见的短剧（过滤掉被用户移除的） */
 function visibleSeries() {
   return seriesRegistry.filter((s) => !s.dismissed);
+}
+
+// 批量刷新共享锁：更新剧集只读取远端目录，不会创建下载任务。
+let refreshAllSeriesInProgress = false;
+
+function seriesEpisodeIndices(list) {
+  return new Set((Array.isArray(list) ? list : [])
+    .map((episode) => Number(episode?.vid_index))
+    .filter((index) => Number.isFinite(index) && index > 0));
+}
+
+/**
+ * 逐剧刷新远端分集目录。每一部剧独立捕获错误，失败时不写入本地档案，
+ * 这样临时网络故障不会把已有总集数/分集列表清空。
+ */
+async function refreshOneSeries(entry) {
+  const seriesId = String(entry.series_id);
+  const previousEpisodes = Array.isArray(entry.episodes) ? entry.episodes : [];
+  const previousIndices = seriesEpisodeIndices(previousEpisodes);
+  const previousTotal = Number(entry.total) || previousEpisodes.length;
+  try {
+    let data;
+    // 官网网页版可绕过 60 秒目录缓存，作为普通红果剧的强制刷新入口；
+    // 备用接口仍由 fetchEpisodeList 负责，HEMA/西饭来源则直接走各自适配器。
+    if (!/^((hema|xifan):)/.test(seriesId) && typeof hongguo.fetchEpisodeListFromWeb === 'function') {
+      try {
+        data = await hongguo.fetchEpisodeListFromWeb(seriesId);
+      } catch (webError) {
+        data = await hongguo.fetchEpisodeList(seriesId, { forceRefresh: true });
+      }
+    } else {
+      data = await hongguo.fetchEpisodeList(seriesId, { forceRefresh: true });
+    }
+    if (!data || !Array.isArray(data.episodes) || data.episodes.length === 0) {
+      throw new Error('远端没有返回有效分集列表');
+    }
+
+    // 只有拿到完整且非空列表才写入；upsert 内部还会保留空标题/封面时的旧值。
+    upsertSeriesRegistry(data);
+    const latest = seriesRegistry.find((item) => String(item.series_id) === seriesId) || entry;
+    const latestEpisodes = Array.isArray(latest.episodes) ? latest.episodes : [];
+    const latestIndices = seriesEpisodeIndices(latestEpisodes);
+    let addedCount = 0;
+    for (const index of latestIndices) if (!previousIndices.has(index)) addedCount++;
+    let removedCount = 0;
+    for (const index of previousIndices) if (!latestIndices.has(index)) removedCount++;
+    return {
+      seriesId,
+      seriesTitle: latest.series_title || entry.series_title || '未命名短剧',
+      success: true,
+      previousTotal,
+      total: latestEpisodes.length,
+      addedCount,
+      removedCount,
+      episodesUpdatedAt: Number(latest.episodesUpdatedAt || latest.updatedAt) || Date.now(),
+    };
+  } catch (error) {
+    return {
+      seriesId,
+      seriesTitle: entry.series_title || '未命名短剧',
+      success: false,
+      previousTotal,
+      total: previousEpisodes.length,
+      addedCount: 0,
+      removedCount: 0,
+      episodesUpdatedAt: Number(entry.episodesUpdatedAt || entry.updatedAt) || 0,
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function refreshAllSeries() {
+  if (refreshAllSeriesInProgress) return { success: false, error: '正在更新剧集，请稍候' };
+  refreshAllSeriesInProgress = true;
+  // 下载管理只展示有下载记录的短剧；批量更新与该页面保持一致，
+  // 不把用户仅浏览过但从未下载的档案也纳入请求。
+  const downloadedIds = new Set(downloadTasks
+    .map((task) => task.hongguoInfo?.series_id)
+    .filter((seriesId) => seriesId !== undefined && seriesId !== null)
+    .map((seriesId) => String(seriesId)));
+  const targets = visibleSeries().filter((entry) => downloadedIds.has(String(entry.series_id)));
+  const results = [];
+  let addedEpisodes = 0;
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      // 顺序请求，避免同时击穿来源站点；每一部结束后立即通知界面进度。
+      const result = await refreshOneSeries(targets[i]);
+      results.push(result);
+      if (result.success) addedEpisodes += result.addedCount;
+      sendToRenderer('series-refresh-progress', { done: i + 1, total: targets.length, result });
+    }
+    const succeeded = results.filter((result) => result.success).length;
+    const failed = results.length - succeeded;
+    return {
+      success: failed === 0,
+      total: results.length,
+      succeeded,
+      failed,
+      addedEpisodes,
+      results,
+    };
+  } finally {
+    refreshAllSeriesInProgress = false;
+  }
 }
 
 // ===== 下载队列调度 =====
@@ -885,6 +1008,16 @@ ipcMain.handle('search-resolve', async (event, seriesId) => {
   } catch (error) {
     console.error('[Search] 拉取分集失败:', error.message);
     return { success: false, error: error.message };
+  }
+});
+
+/** 批量检查所有已登记短剧的最新总集数（只更新档案，不自动下载）。 */
+ipcMain.handle('refresh-all-series', async () => {
+  try {
+    return await refreshAllSeries();
+  } catch (error) {
+    console.error('[Series] 批量更新失败:', error.message);
+    return { success: false, error: error.message, total: 0, succeeded: 0, failed: 0, addedEpisodes: 0, results: [] };
   }
 });
 
@@ -1446,6 +1579,13 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     const seriesTitle = entry?.series_title || downloadTasks.find(t => String(t.hongguoInfo?.series_id) === sid)?.hongguoInfo.series_title || '未命名短剧';
     const { dir, ordered } = collectSeriesEpisodeFiles(sid, seriesTitle);
     if (!ordered.length) return { success: false, error: '该剧还没有已下载完成的分集' };
+    const requestedIndices = Array.isArray(options?.episodeIndices)
+      ? new Set(options.episodeIndices.map(Number).filter(index => Number.isSafeInteger(index) && index > 0))
+      : null;
+    const mergeOrdered = requestedIndices
+      ? ordered.filter(item => requestedIndices.has(Number(item.vid_index)))
+      : ordered;
+    if (!mergeOrdered.length) return { success: false, error: '指定范围内没有已下载完成的分集' };
     const ffmpegPath = resolveFfmpeg('ffmpeg'), ffprobePath = resolveFfmpeg('ffprobe');
     if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到完整 FFmpeg 工具，无法检查并合并分集' };
     if (mergeTasks.some(t => t.status === 'running')) return { success: false, error: '已有合并任务正在运行，请等待完成或先取消' };
@@ -1454,9 +1594,9 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     if (!baseName || baseName === '.' || baseName === '..') return { success: false, error: '请输入有效输出名称' };
     const output = path.join(outDir, `${baseName}.mp4`);
     if (fs.existsSync(output)) return { success: false, error: `输出文件已存在：${baseName}.mp4，请先删除或换个名字` };
-    const totalBytes = ordered.reduce((sum, e) => sum + fs.statSync(e.path).size, 0);
+    const totalBytes = mergeOrdered.reduce((sum, e) => sum + fs.statSync(e.path).size, 0);
     const id = 'merge_' + randomUUID();
-    const task = { id, seriesId: sid, seriesTitle, output, outputName: `${baseName}.mp4`, total: ordered.length,
+    const task = { id, seriesId: sid, seriesTitle, output, outputName: `${baseName}.mp4`, total: mergeOrdered.length,
       done: 0, checked: 0, progress: 0, status: 'running', stage: 'checking', stageText: '检查分集', totalBytes,
       totalDuration: 0, codecWarning: '', error: '', startTime: Date.now(), elapsedSeconds: 0, speed: 0, etaSeconds: null };
     mergeTasks.unshift(task);
@@ -1465,7 +1605,7 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     const { runMerge } = require('./src/native/merge-runner');
     (async () => {
       try {
-        await runMerge({ task, ordered, outDir, ffmpegPath, ffprobePath, probe: probeVideoInfo,
+        await runMerge({ task, ordered: mergeOrdered, outDir, ffmpegPath, ffprobePath, probe: probeVideoInfo,
           pickEncoder: pickH264Encoder, compatible: !!options?.compatible,
           update: () => { const { child, ...data } = task; sendToRenderer('merge-progress', data); } });
       } catch (error) {
@@ -1478,7 +1618,7 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
         sendToRenderer(task.status === 'completed' ? 'merge-completed' : 'merge-failed', { id, path: output, error: task.error, verified: task.verified, storageWarning: task.storageWarning });
       }
     })().catch(error => console.error('[Merge] 任务通知失败:', error.message));
-    return { success: true, id, output, outputName: task.outputName, count: ordered.length, totalBytes, totalDuration: 0, codecWarning: '' };
+    return { success: true, id, output, outputName: task.outputName, count: mergeOrdered.length, totalBytes, totalDuration: 0, codecWarning: '' };
   } catch (error) { return { success: false, error: error.message }; }
 });
 
@@ -1630,6 +1770,7 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
         series_id: sid,
         series_title: seriesTitle,
         cover: (entry && entry.cover) || '',
+        episodesUpdatedAt: Number(entry?.episodesUpdatedAt || entry?.updatedAt) || 0,
         seriesDir,
         web_accessible_episodes: entry?.web_accessible_episodes ?? null,
         total: episodes.length,

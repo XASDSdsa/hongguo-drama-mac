@@ -461,12 +461,22 @@
 .dm-error { white-space: normal; overflow-wrap: anywhere; }
 .dm-task-meta { flex-wrap: wrap; }
 .dm-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dm-pagination-bottom { margin-top: 8px; border-top: 1px solid var(--border); }
 .dm-pagination nav { display: flex; align-items: center; gap: 10px; }
 .dm-container .alert .btn { margin-left: 12px; }
 @media (max-width: 900px) { .dm-header { flex-direction: column; gap: 12px; } .dm-stats { padding-top: 0; } .merge-inline { margin-left: 0; } }
 
 .dm-selection-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .dm-merge-hint { margin-top: 12px; }
+
+.merge-options { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 14px; }
+.merge-option-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; font-size: 12px; color: var(--text-secondary); }
+.merge-option-row input, .merge-option-row select { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-card); color: var(--text-primary); padding: 8px 9px; font: inherit; outline: none; }
+.merge-option-row input:focus, .merge-option-row select:focus { border-color: var(--accent); }
+.merge-group-input { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.merge-group-input input { max-width: 105px; }
+.merge-group-input small { color: var(--text-tertiary); line-height: 1.35; }
+.merge-range-error { margin: 0 0 12px; padding: 8px 10px; font-size: 12px; }
 
 .dm-back { margin-bottom: 20px; }
 .dm-title { min-width: 0; }
@@ -476,5 +486,9 @@
 .dm-series-search:focus-within { border-color: var(--accent); }
 .dm-series-search input { min-width: 0; width: 100%; border: 0; outline: none; background: transparent; color: var(--text-primary); font: inherit; }
 .dm-card-count { margin-top: 5px; font-size: 12px; color: var(--success); font-variant-numeric: tabular-nums; }
+.dm-card-updated { margin-top: 3px; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.dm-refresh-series { gap: 6px; }
+.dm-refresh-series .spin { animation: dm-spin 0.9s linear infinite; }
+@keyframes dm-spin { to { transform: rotate(360deg); } }
 .dm-video-heading { display: flex; align-items: baseline; gap: 12px; margin: 28px 0 16px; font-size: 17px; }
 .dm-video-heading span { font-size: 12px; font-weight: 400; color: var(--text-secondary); }

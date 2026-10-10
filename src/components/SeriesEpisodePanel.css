@@ -8,6 +8,7 @@
 .sep-title-row .btn { flex-shrink: 0; }
 .sep-count { margin: 9px 0 0; font-size: 14px; }
 .sep-count b { color: #2e745b; }
+.sep-updated { margin: 5px 0 0; color: var(--text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .sep-hint { color: var(--text-secondary); font-size: 12px; line-height: 1.6; margin: 8px 0; }
 .sep-range-row { display: flex; gap: 8px; margin-top: 17px; }
 .sep-range-row input { flex: 1; min-width: 0; }

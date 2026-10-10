@@ -186,5 +186,34 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     const result = await h.handlers['hongguo-download-batch']({}, { seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
     assert.equal(result.success, false); assert.equal(h.run('downloadTasks.length'), 0); assert.equal(h.run('downloadQueue.length'), 0);
   });
+  await check('bulk series refresh updates downloaded cards, timestamps and preserves failures', async () => {
+    const refreshed = { series_id: 'A', series_title: 'Short A', cover: '/a-new.jpg', episodes: [
+      { vid: 'a1', vid_index: 1, title: '第一集' },
+      { vid: 'a2', vid_index: 2, title: '第二集' },
+      { vid: 'a3', vid_index: 3, title: '第三集' },
+    ] };
+    const h = load({}, { './src/native/hongguo': {
+      fetchEpisodeListFromWeb: async sid => sid === 'A' ? refreshed : (() => { throw new Error('远端暂不可用'); })(),
+      fetchEpisodeList: async sid => sid === 'A' ? refreshed : (() => { throw new Error('远端暂不可用'); })(),
+    } });
+    const oldTime = Date.now() - 5000;
+    h.set('seriesRegistry', [
+      { series_id: 'A', series_title: 'Short A', cover: '/a.jpg', total: 2, episodes: [{ vid: 'a1', vid_index: 1 }, { vid: 'a2', vid_index: 2 }], updatedAt: oldTime },
+      { series_id: 'B', series_title: 'Short B', cover: '/b.jpg', total: 1, episodes: [{ vid: 'b1', vid_index: 1 }], episodesUpdatedAt: oldTime },
+      { series_id: 'C', series_title: '只浏览未下载', total: 1, episodes: [{ vid: 'c1', vid_index: 1 }], episodesUpdatedAt: oldTime },
+    ]);
+    const a = task('a-task', h.dir, 'completed', 'a.mp4', 1); a.hongguoInfo.series_id = 'A';
+    const b = task('b-task', h.dir, 'completed', 'b.mp4', 1); b.hongguoInfo.series_id = 'B';
+    h.set('downloadTasks', [a, b]);
+    const result = await h.handlers['refresh-all-series']({});
+    assert.equal(result.success, false); assert.equal(result.total, 2); assert.equal(result.succeeded, 1); assert.equal(result.failed, 1);
+    assert.equal(result.addedEpisodes, 1); assert.equal(result.results[0].addedCount, 1);
+    const aStored = h.run('seriesRegistry.find(s => s.series_id === "A")');
+    const bStored = h.run('seriesRegistry.find(s => s.series_id === "B")');
+    const cStored = h.run('seriesRegistry.find(s => s.series_id === "C")');
+    assert.equal(aStored.episodes.length, 3); assert.ok(aStored.episodesUpdatedAt > oldTime); assert.equal(aStored.cover, '/a-new.jpg');
+    assert.equal(bStored.episodes.length, 1); assert.equal(bStored.episodesUpdatedAt, oldTime); assert.equal(cStored.episodesUpdatedAt, oldTime);
+    assert.equal(h.run('downloadTasks.length'), 2, 'refresh must never enqueue downloads');
+  });
   assert.equal(failures, 0, `${failures} download safety regressions`);
 })().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(() => fs.rmSync(root, { recursive: true, force: true }));

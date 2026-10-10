@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.11"><img alt="版本 1.1.11" src="https://img.shields.io/badge/release-v1.1.11-c8383d?style=flat-square"></a>
+  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.12"><img alt="版本 1.1.12" src="https://img.shields.io/badge/release-v1.1.12-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
-  <img alt="v1.1.11 ad-hoc 签名，未公证" src="https://img.shields.io/badge/v1.1.11-ad--hoc%20signed-f0a04b?style=flat-square">
+  <img alt="v1.1.12 ad-hoc 签名，未公证" src="https://img.shields.io/badge/v1.1.12-ad--hoc%20signed-f0a04b?style=flat-square">
 </p>
 
 <p align="center">
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-drama-1.1.11-mac-arm64.dmg`。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-drama-1.1.12-mac-arm64.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**v1.1.11 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
+**v1.1.12 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -48,8 +48,9 @@
 | 找一部剧 | 按来源、分类与题材浏览海报，翻页查看目录，或直接搜索剧名。 |
 | 只下载想看的集数 | 在详情中选择单集、多集或输入区间；例如 `1-10`、`1,3,5`。锁定集自动跳过。 |
 | 管理下载进度 | 在下载管理中查看排队、进行中、完成和失败状态，暂停任务、重试失败项；并发数可在设置中调整。 |
+| 更新剧集总数 | 在下载管理点“更新全部剧集”，逐部读取最新分集目录并显示上次更新时间；只更新信息，不会自动下载。 |
 | 接着上次看 | 内置播放器记录分集和播放位置，支持本地播放、在线播放与自动连播。 |
-| 导出一个完整文件 | 把同一部剧已下载的分集合并为 MP4，选择剧名后点“合并整部剧”，选择智能快速或 H.264 兼容合并，无需勾选任务。 |
+| 导出一个完整文件 | 把同一部剧已下载的分集合并为 MP4，选择剧名后点“合并整部剧”，可按已选集、集数区间或每 N 集分组，选择智能快速或 H.264 兼容合并。 |
 | 处理本地视频 | 在“视频处理”中选择已下载或其他本地视频，按本地版 quchong_app 的参数进行裁剪、变速、变调、滤镜和可选 BGM 处理；横屏视频自动使用模糊背景居中适配，噪点与锐化采用 v3.7 画质档位，输出到独立目录。 |
 | 整理磁盘空间 | 查看文件占用，删除单集或整部剧，清理转码缓存；也可扫描下载目录补登记已有文件。 |
 
@@ -85,7 +86,7 @@
 
 ## 当前版本与验证范围
 
-[**v1.1.11 · 2026-10-10**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.11) 下载管理按短剧封面卡片分组，点击卡片进入完整剧集详情页；上方显示封面、全部集数和下载状态，下方继续管理视频列表。支持区间选集、补下载和单剧更新。保留此前的视频处理响应与画质适配优化。
+[**v1.1.12 · 2026-10-11**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.12) 下载管理按短剧封面卡片分组，点击卡片进入完整剧集详情页；上方显示封面、全部集数和下载状态，下方继续管理视频列表。支持区间选集、补下载、按范围或每 N 集分组合并；下载管理可一键更新全部已下载短剧的总集数，并显示每部剧上次更新时间。保留此前的视频处理响应与画质适配优化。
 
 保留 1.1.5 的“全部来源”搜索，默认同时查询红果、西饭和河马，结果标明来源；单源失败保留其他结果。
 
@@ -145,7 +146,7 @@
 <details>
 <summary><strong>源码构建和正式安装包的签名有什么不同？</strong></summary>
 
-v1.1.11 本次发行包使用 ad-hoc 签名，未自动提交 Apple 公证。默认源码构建也使用 ad-hoc 签名，不会自动使用个人开发者证书。自行构建的应用可能需要在「系统设置 → 隐私与安全性」确认打开；请先核对来源，无需全局关闭 Gatekeeper。
+v1.1.12 本次发行包使用 ad-hoc 签名，未自动提交 Apple 公证。默认源码构建也使用 ad-hoc 签名，不会自动使用个人开发者证书。自行构建的应用可能需要在「系统设置 → 隐私与安全性」确认打开；请先核对来源，无需全局关闭 Gatekeeper。
 
 </details>
 
@@ -170,13 +171,13 @@ npm run build:mac
 | 开发模式 | `npm run dev` |
 | 仅生成 Mac 应用 | `npm run build:mac:dir` |
 | 应用产物 | `dist/mac-arm64/红果短剧.app` |
-| v1.1.11 DMG | `dist/红果短剧-1.1.11-mac-arm64.dmg` |
+| v1.1.12 DMG | `dist/红果短剧-1.1.12-mac-arm64.dmg` |
 
 ### FFmpeg 的准确对应源码
 
 Mac 包内置的 FFmpeg / FFprobe 基于 **FFmpeg 9.0.2** 与 **x264 `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`** 的未修改源码编译。此构建为 **GPLv3-or-later**，仅静态链接 x264，保留 VideoToolbox，未启用 `nonfree`；动态依赖仅为 macOS 系统库，不依赖使用者的 Homebrew 环境。
 
-[对应版本的 Release](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.11) 附有**应用源码 ZIP**以及独立的 **FFmpeg/x264 完整对应源码包**，后者包含准确源码归档、构建脚本、清单与许可文本。只下载 GitHub 自动生成的项目源码归档，不能代替这一媒体工具对应源码包。
+[对应版本的 Release](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.12) 附有**应用源码 ZIP**以及独立的 **FFmpeg/x264 完整对应源码包**，后者包含准确源码归档、构建脚本、清单与许可文本。只下载 GitHub 自动生成的项目源码归档，不能代替这一媒体工具对应源码包。
 
 - [FFmpeg 来源、源码校验值与构建说明](build/ffmpeg/MACOS-NOTICE.txt)
 - [准确版本与构建配置](build/ffmpeg/MACOS-VERSIONS.txt)

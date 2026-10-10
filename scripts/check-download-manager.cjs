@@ -85,6 +85,19 @@ const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 
     merge.props.onClick(); ui.render(); assert.ok(ui.text().includes('《整部示例剧》')); assert.ok(ui.text().includes('全部已下载分集'));
     await ui.button('智能快速合并').props.onClick(); await ui.flush(); assert.equal(sent[0], 'A'); assert.equal(sent[2].compatible, false); ui.unmount();
   });
+  await test('overview refreshes every downloaded series and reports newly added episodes', async () => {
+    let calls = 0;
+    const ui = mount({
+      getDownloadTasks: async () => [task(1, 'completed')],
+      getSeriesList: async () => [{ series_id: 'A', series_title: '待更新剧', total: 2 }],
+      refreshAllSeries: async () => { calls++; return { success: true, total: 1, succeeded: 1, failed: 0, addedEpisodes: 3, results: [] }; },
+    });
+    await ui.flush();
+    const refreshButton = ui.button('更新全部剧集');
+    assert.ok(refreshButton); assert.equal(refreshButton.props.disabled, false);
+    await refreshButton.props.onClick(); await ui.flush();
+    assert.equal(calls, 1); assert.ok(ui.text().includes('新增 3 集')); ui.unmount();
+  });
   await test('task list pages at 100 while global totals and cross-page selections persist', async () => {
     const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush();
     openSeries(ui); assert.equal(rows(ui).length, 100); assert.ok(ui.text().includes('已完成 205'));
@@ -108,7 +121,7 @@ const runningMerge = () => ({ id: 'm', seriesId: 'A', status: 'running', total: 
   await test('unknown merge duration does not claim zero minutes', async () => {
     const ui = mount({ getDownloadTasks: async () => [task(1, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: 'A' }], mergeSeries: async () => ({ success: true, count: 2, totalBytes: 100000, totalDuration: 0 }) }); await ui.flush();
     openSeries(ui); ui.button('合并整部剧').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
-    assert.ok(!ui.text().includes('0 分钟')); assert.ok(ui.text().includes('开始合并 2 集')); ui.unmount();
+    assert.ok(!ui.text().includes('0 分钟')); assert.ok(ui.text().includes('已提交 1 集合并任务')); ui.unmount();
   });
   await test('overview shows only series cards and live deduplicated download counts', async () => {
     const one = task(1, 'completed'), two = task(2);
