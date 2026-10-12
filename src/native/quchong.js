@@ -21,8 +21,7 @@ const CPU_COUNT = typeof os.availableParallelism === 'function'
   : os.cpus().length;
 const DEFAULT_JOBS = Math.max(2, Math.min(4, Math.floor(CPU_COUNT / 2) || 2));
 const PROCESS_IDLE_TIMEOUT_MS = 180_000;
-const HARDWARE_ENCODERS = Object.freeze(['h264_nvenc', 'h264_amf', 'h264_qsv', 'h264_videotoolbox']);
-const ENCODER_PROBE_CACHE = new Map();
+const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : 'cpu';
 
 const DEFAULTS = Object.freeze({
   crop_ratio: 0.94,
@@ -43,7 +42,7 @@ const DEFAULTS = Object.freeze({
   bgm_volume: 0.15,
   eq_enable: true,
   resolution: '1080x1920',
-  encoder: 'auto',
+  encoder: DEFAULT_ENCODER,
   quality: 'standard',
   jobs: DEFAULT_JOBS,
 });
@@ -92,11 +91,8 @@ function rollParams(opts, random = Math.random) {
 function detectEncoder(requested, platform = process.platform, available = null) {
   if (requested !== 'auto') return requested;
   if (platform === 'darwin') return 'videotoolbox';
-  if (platform === 'win32' && Array.isArray(available)) {
-    if (available.includes('h264_nvenc')) return 'nvenc';
-    if (available.includes('h264_amf')) return 'amf';
-    if (available.includes('h264_qsv')) return 'qsv';
-  }
+  // Windows deliberately uses one deterministic encoder. Hardware vendors
+  // expose different FFmpeg backends; selecting one is an explicit user choice.
   return 'cpu';
 }
 
@@ -215,27 +211,6 @@ async function probeMedia(ffprobePath, file, signal) {
   };
 }
 
-/**
- * Return the H.264 hardware encoders advertised by this FFmpeg build.
- *
- * FFmpeg can list an encoder even when the machine does not have the matching
- * device.  The actual encode is still treated as the final capability check;
- * runJob retries with libx264 when that check fails.  The probe is cached per
- * FFmpeg path because every episode in a batch uses the same binary.
- */
-function probeHardwareEncoders(ffmpegPath) {
-  if (ENCODER_PROBE_CACHE.has(ffmpegPath)) return ENCODER_PROBE_CACHE.get(ffmpegPath);
-  const promise = new Promise((resolve) => {
-    execFile(ffmpegPath, ['-hide_banner', '-encoders'], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }, (_error, stdout = '', stderr = '') => {
-      const text = `${stdout}\n${stderr}`;
-      resolve(HARDWARE_ENCODERS.filter((name) => new RegExp(`\\b${name}\\b`).test(text)));
-    });
-  });
-  ENCODER_PROBE_CACHE.set(ffmpegPath, promise);
-  promise.catch(() => ENCODER_PROBE_CACHE.delete(ffmpegPath));
-  return promise;
-}
-
 function tailPush(state, chunk) {
   state.text += chunk.toString('utf8');
   if (state.text.length > 10000) state.text = state.text.slice(-10000);
@@ -324,37 +299,18 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
   try {
     rolled = rollParams(options);
     if (signal?.aborted) throw new Error('已取消');
-    const available = options.encoder === 'auto' ? await probeHardwareEncoders(ffmpegPath) : null;
-    const first = detectEncoder(options.encoder, process.platform, available);
-    const candidates = [first];
-    // Windows FFmpeg builds usually advertise all three hardware encoders.
-    // Try them in a deterministic order so a missing NVIDIA device can fall
-    // through to an attached AMD/Intel device before giving up on hardware.
-    if (options.encoder === 'auto' && process.platform === 'win32') {
-      for (const [name, ffmpegName] of [['nvenc', 'h264_nvenc'], ['amf', 'h264_amf'], ['qsv', 'h264_qsv']]) {
-        if (available?.includes(ffmpegName) && !candidates.includes(name)) candidates.push(name);
+    const encoder = detectEncoder(options.encoder, process.platform);
+    const command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
+    onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
+    try {
+      await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal);
+    } catch (error) {
+      if (signal?.aborted) throw new Error('已取消');
+      if (encoder !== 'cpu') {
+        throw new Error(`${encoder} 编码失败，未自动切换编码器，请检查对应显卡和驱动。\n${error.message}`);
       }
+      throw error;
     }
-    if (!candidates.includes('cpu')) candidates.push('cpu');
-    let lastError = null;
-    for (let index = 0; index < candidates.length; index += 1) {
-      const encoder = candidates[index];
-      const command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
-      onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
-      try {
-        await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal);
-        lastError = null;
-        break;
-      } catch (error) {
-        if (signal?.aborted) throw new Error('已取消');
-        lastError = error;
-        if (index >= candidates.length - 1) throw error;
-        const next = candidates[index + 1];
-        onLog?.(`[重试] ${encoder} 硬编失败，改用 ${next === 'cpu' ? 'CPU' : next}：${error.message}`);
-        try { await fsp.unlink(tmp); } catch (_) {}
-      }
-    }
-    if (lastError) throw lastError;
     if (signal?.aborted) throw new Error('已取消');
     const result = await probeMedia(ffprobePath, tmp, signal);
     const stat = await fsp.stat(tmp);
