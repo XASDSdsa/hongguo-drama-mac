@@ -34,14 +34,16 @@ fetch AMF-1.5.2.tar.gz 8a70b6dc85261e6e6e57769bd81ac1e09c0a4c96bbd5e358ffbc2dee5
 fetch zlib-1.3.2.tar.xz d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3 https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz
 X264_COMMIT=b35605ace3ddf7c1a5d67a2eb553f034aef41d55
 X264_ARCHIVE="$ARCHIVES/x264-$X264_COMMIT.tar.gz"
-if [[ ! -f "$X264_ARCHIVE" ]]; then
-  FETCH_DIR=$(mktemp -d "$ROOT/x264-fetch.XXXXXX")
-  git -C "$FETCH_DIR" init --quiet
-  git -C "$FETCH_DIR" fetch --quiet --depth 1 https://code.videolan.org/videolan/x264.git "$X264_COMMIT"
-  git -C "$FETCH_DIR" archive --format=tar --prefix="x264-$X264_COMMIT/" FETCH_HEAD | gzip -n > "$X264_ARCHIVE"
-fi
-printf '%s  %s\n' 4f1c35d11c7b09ca1a88affb914e1fc3daee888732786a66e51af4f786962c44 "$X264_ARCHIVE" | sha256sum -c -
-printf '%s  %s  %s\n' 4f1c35d11c7b09ca1a88affb914e1fc3daee888732786a66e51af4f786962c44 "x264-$X264_COMMIT.tar.gz" "https://code.videolan.org/videolan/x264.git#$X264_COMMIT" >> "$ROOT/SOURCES.txt"
+# Pin Git content rather than a generated gzip checksum, which differs across platforms.
+FETCH_DIR=$(mktemp -d "$ROOT/x264-fetch.XXXXXX")
+git -C "$FETCH_DIR" init --quiet
+git -C "$FETCH_DIR" fetch --quiet --depth 1 https://code.videolan.org/videolan/x264.git "$X264_COMMIT"
+[[ $(git -C "$FETCH_DIR" rev-parse --verify 'FETCH_HEAD^{commit}') == "$X264_COMMIT" ]]
+X264_TREE=$(git -C "$FETCH_DIR" rev-parse --verify 'FETCH_HEAD^{tree}')
+git -C "$FETCH_DIR" archive --format=tar --prefix="x264-$X264_COMMIT/" "$X264_COMMIT" | gzip -n > "$X264_ARCHIVE"
+X264_SHA=$(sha256sum "$X264_ARCHIVE" | cut -d ' ' -f 1)
+printf '%s  %s  %s\n' "$X264_SHA" "x264-$X264_COMMIT.tar.gz" "https://code.videolan.org/videolan/x264.git#$X264_COMMIT" >> "$ROOT/SOURCES.txt"
+printf 'x264 Git commit: %s\nx264 Git tree: %s\n' "$X264_COMMIT" "$X264_TREE" >> "$ROOT/SOURCES.txt"
 for archive in "$ARCHIVES"/*; do tar -xf "$archive" -C "$SOURCES"; done
 
 make -C "$SOURCES/nv-codec-headers-n12.2.72.0" PREFIX="$PREFIX" install > "$ROOT/logs/nv-codec-install.log" 2>&1
