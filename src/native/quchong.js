@@ -289,7 +289,8 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
             onLog?.(`[${value === 'end' ? '进度结束' : '编码进度'}] frame=${progressBlock.frame || 'N/A'} fps=${progressBlock.fps || 'N/A'} out_time=${progressBlock.out_time || 'N/A'} speed=${progressBlock.speed || 'N/A'}`);
             lastProgressLog = now;
           }
-          if (value === 'end') onProgress?.(99);
+          // FFmpeg also emits progress=end on failure. It is not a success
+          // signal; only media timestamps estimate encoding progress.
           progressBlock = {};
           continue;
         }
@@ -349,6 +350,10 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
       await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
     } catch (error) {
       if (signal?.aborted) throw new Error('已取消');
+      const nvencApi = encoder === 'nvenc' && error.message.match(/Driver does not support the required nvenc API version\.\s*Required:\s*([\d.]+)\s+Found:\s*([\d.]+)/i);
+      if (nvencApi) {
+        throw new Error(`NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`);
+      }
       if (encoder !== 'cpu') {
         throw new Error(`${encoder} 编码失败，未自动切换编码器，请检查对应显卡和驱动。\n${error.message}`);
       }

@@ -83,17 +83,65 @@ async function checkQuietProcess(implementation) {
   assert.equal(settled, true);
 
   child.exitCode = null;
-  const failed = context.module.exports.testRunProcess('ffmpeg', [], 100, null, null);
+  const failedProgress = [];
+  const failed = context.module.exports.testRunProcess('ffmpeg', [], 100, value => failedProgress.push(value), null);
+  child.stdout.write('frame=0\nfps=0.00\nout_time_us=N/A\nout_time=N/A\nspeed=N/A\nprogress=end\n');
+  assert.deepEqual(failedProgress, [], '零帧失败的 progress=end 不能伪装成 99%');
   child.stderr.write('No space left on device\n');
   child.exitCode = 1;
   child.emit('close', 1, null);
   await assert.rejects(failed, /ffmpeg 退出码 1[\s\S]*No space left on device/, '真实错误必须保留退出码和诊断');
 }
 
+async function checkNvencApiMismatch(implementation) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hongguo-nvenc-api-'));
+  const diagnostics = '[h264_nvenc @ test] Driver does not support the required nvenc API version. Required: 13.1 Found: 12.2\n[h264_nvenc @ test] The minimum required Nvidia driver for nvenc is 570.0 or newer\nConversion failed!\n';
+  let spawnCount = 0;
+  const context = {
+    require: name => name === 'node:child_process' ? {
+      execFile: (_file, _args, _opts, callback) => {
+        const child = new EventEmitter();
+        setImmediate(() => callback(null, JSON.stringify({ format: { duration: '10' }, streams: [{ codec_type: 'video', width: 1080, height: 1920, duration: '10' }] }), ''));
+        return child;
+      },
+      spawn: (_file, args) => {
+        spawnCount++;
+        assert.equal(args[args.indexOf('-c:v') + 1], 'h264_nvenc');
+        const child = new EventEmitter();
+        child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
+        setImmediate(() => {
+          child.stderr.write(diagnostics.slice(0, 70)); child.stderr.write(diagnostics.slice(70));
+          child.stdout.write('frame=0\nfps=0.00\nout_time_us=N/A\nout_time=N/A\nspeed=N/A\nprogress=end\n');
+          child.exitCode = 1; child.emit('close', 1, null);
+        });
+        return child;
+      },
+    } : require(name),
+    process, module: { exports: {} }, setTimeout, clearTimeout,
+  };
+  vm.runInNewContext(implementation, context);
+  const progress = [];
+  const dst = path.join(dir, 'output.mp4');
+  try {
+    await assert.rejects(context.module.exports.runJob({ ffmpegPath: 'mock-ffmpeg', ffprobePath: 'mock-ffprobe', src: path.join(dir, 'source.mp4'), dst,
+      opts: { ...quchong.DEFAULTS, encoder: 'nvenc' }, onProgress: value => progress.push(value) }), error => {
+      assert.match(error.message, /FFmpeg 需要 NVENC API 13\.1，当前显卡驱动提供 12\.2/);
+      assert.match(error.message, /与当前驱动 API 兼容的 FFmpeg 构建/);
+      assert.ok(error.message.endsWith(`ffmpeg 退出码 1\n${diagnostics}`), '友好说明必须保留退出码及原始完整诊断');
+      return true;
+    });
+    assert.equal(spawnCount, 1, 'API 版本不兼容不能触发自动更换编码器');
+    assert.deepEqual(progress, [], '初始化失败且零帧不得显示编码已完成');
+    assert.deepEqual(await fs.readdir(dir), [], '失败后不得留下成品或临时文件');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+}
+
 async function main() {
   const implementation = await fs.readFile(path.join(__dirname, '..', 'src/native/quchong.js'), 'utf8');
   await checkQuietProcess(implementation);
   console.log('PASS quiet encoding/faststart for simulated 20 minutes; real exit controls completion');
+  await checkNvencApiMismatch(implementation);
+  console.log('PASS real runJob NVENC API mismatch preserves driver versions and original diagnostics');
   assert.match(implementation, /未自动切换编码器/);
   assert.doesNotMatch(implementation, /probeHardwareEncoders|const candidates/);
   assert.ok(quchong.DEFAULTS.jobs >= 2, `默认并发数过低：${quchong.DEFAULTS.jobs}`);

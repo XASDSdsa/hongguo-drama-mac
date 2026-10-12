@@ -1812,7 +1812,10 @@ function pumpQuchongBatch(batch) {
     }).catch((error) => {
       task.status = batch.cancelled || controller.signal.aborted ? 'stopped' : 'failed';
       task.stage = task.status;
+      task.progress = 0;
       task.error = error?.message || String(error);
+      task.logBuffer = task.logBuffer || [];
+      task.logBuffer.push(`[${task.status === 'failed' ? '失败' : '停止'}] ${task.error}`);
     }).finally(() => {
       task.endTime = Date.now();
       task.updatedAt = task.endTime;

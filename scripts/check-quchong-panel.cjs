@@ -111,5 +111,32 @@ function mount(api = {}, props = {}) {
     ui.listeners.onQuchongComplete({ batchId: 'batch-a', success: true, tasks: [{ ...task, status: 'completed', stage: 'completed', progress: 100 }] }); ui.render();
     assert.ok(ui.nodes().some(node => node.type === 'em' && node.children[0] === '完成'));
   });
+  await test('failure events expose the actual error without a nearly complete progress bar', async () => {
+    const task = { id: 'task-nvenc', name: '第060集.mp4', status: 'running', stage: 'encoding', progress: 98 };
+    const saved = { id: 'batch-nvenc', status: 'running', done: 0, total: 1, tasks: [task] };
+    const error = 'FFmpeg 退出码 1\n[h264_nvenc] OpenEncodeSessionEx failed: unsupported device';
+    const ui = mount({ getQuchongTasks: async () => [saved] }); await ui.flush();
+    ui.button('恢复查看').props.onClick(); ui.render();
+    assert.ok(ui.nodes().some(node => node.props.role === 'progressbar' && node.props['aria-valuenow'] === 98));
+    ui.listeners.onQuchongTask({ batchId: saved.id, task: { ...task, status: 'failed', error } }); ui.render();
+    assert.ok(ui.nodes().some(node => node.type === 'em' && node.children[0] === '失败'));
+    assert.equal(ui.nodes().filter(node => node.props.role === 'progressbar').length, 0);
+    assert.ok(ui.nodes().some(node => node.props.role === 'alert' && node.props['aria-label'] === '第060集.mp4：失败原因' && node.children[0] === error));
+    ui.listeners.onQuchongComplete({ batchId: saved.id, success: false, tasks: [{ ...task, status: 'failed', error }] }); ui.render();
+    assert.ok(ui.nodes().some(node => node.props.role === 'alert' && node.children[0] === error));
+  });
+  await test('restored failed and stopped tasks keep their reason and terminal status', async () => {
+    const tasks = [
+      { id: 'failed', name: '失败.mp4', status: 'failed', stage: 'encoding', progress: 98, error: '输出没有视频帧，未保存文件。' },
+      { id: 'stopped', name: '停止.mp4', status: 'stopped', stage: 'encoding', progress: 76, error: '用户停止处理' },
+      { id: 'old-failed', name: '旧任务.mp4', status: 'failed', stage: 'failed', progress: 98 },
+    ];
+    const saved = { id: 'batch-old', status: 'failed', done: 0, total: 3, tasks };
+    const ui = mount({ getQuchongTasks: async () => [saved] }); await ui.flush();
+    ui.button('恢复查看').props.onClick(); ui.render();
+    assert.equal(ui.nodes().filter(node => node.props.role === 'progressbar').length, 0);
+    assert.deepEqual(ui.nodes().filter(node => node.type === 'em').map(node => node.children[0]), ['失败', '已停止', '失败']);
+    assert.deepEqual(ui.nodes().filter(node => node.props.role === 'alert').map(node => node.children[0]), ['输出没有视频帧，未保存文件。', '用户停止处理', '未记录失败原因，请查看任务日志。']);
+  });
   console.log(`Quchong panel: ${passed} passed, ${failed} failed`); process.exitCode = failed ? 1 : 0;
 })();

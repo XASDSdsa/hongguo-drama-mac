@@ -192,10 +192,17 @@ async function check(name, run) {
     const h = load(), failed = await h.start(['bad']), healthy = await h.start(['healthy']);
     const bad = h.jobs.get(failed.sources[0]), good = h.jobs.get(healthy.sources[0]);
     assert.ok(bad && good, 'independent batches must run concurrently');
-    bad.onStage('validating'); bad.reject(new Error('fixture invalid output')); await tick();
+    bad.onStage('validating'); bad.onProgress(98);
+    const diagnostic = 'fixture invalid output\n[h264_nvenc] OpenEncodeSessionEx failed: unsupported device';
+    bad.reject(new Error(diagnostic)); await tick();
     assert.equal(failed.snapshot().status, 'failed');
     assert.equal(failed.snapshot().tasks[0].stage, 'failed');
     assert.match(failed.snapshot().tasks[0].error, /fixture invalid output/);
+    assert.equal(failed.snapshot().tasks[0].progress, 0, 'failed output cannot count as batch completion progress');
+    const failureEvent = h.events.filter(item => item.channel === 'quchong-task' && item.task.id === failed.snapshot().tasks[0].id).at(-1);
+    assert.equal(failureEvent.task.error, diagnostic, 'renderer must receive the complete diagnostic');
+    assert.ok(h.events.some(item => item.channel === 'quchong-log' && item.batchId === failed.batchId && item.line.includes('[失败] ' + diagnostic)), 'terminal failure must flush stderr to the task log');
+    assert.equal(h.saved.at(-1).find(item => item.id === failed.batchId).tasks[0].error, diagnostic, 'failed snapshot must retain stderr after restarting the app');
     assert.equal(h.marks.length, 0);
     assert.equal(healthy.snapshot().tasks[0].status, 'running');
     assert.equal(good.signal.aborted, false);

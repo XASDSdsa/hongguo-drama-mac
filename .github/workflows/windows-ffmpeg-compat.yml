@@ -1,0 +1,65 @@
+name: Windows FFmpeg NVENC 12.2 build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ffmpeg:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+
+      - name: Install native compiler tools
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel git curl tar gzip xz zip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-pkgconf
+
+      - name: Build static helpers from pinned sources
+        id: helpers
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg-source-win.sh /c/ffmpeg-compat-build 4
+
+      - name: Exercise real Windows processing and concurrency
+        shell: pwsh
+        env:
+          FFMPEG_PATH: C:/ffmpeg-compat-build/artifacts/ffmpeg-9.0.2-nvenc12.2-win-x64/bin/ffmpeg.exe
+          FFPROBE_PATH: C:/ffmpeg-compat-build/artifacts/ffmpeg-9.0.2-nvenc12.2-win-x64/bin/ffprobe.exe
+        run: node scripts/check-quchong.cjs
+
+      - name: Keep binaries and corresponding source
+        if: always() && steps.helpers.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-9.0.2-nvenc12.2-win-x64
+          path: |
+            C:/ffmpeg-compat-build/artifacts/*.zip
+            C:/ffmpeg-compat-build/artifacts/*.tar.xz
+            C:/ffmpeg-compat-build/artifacts/*.sha256
+            C:/ffmpeg-compat-build/artifacts/*/BUILD-REPORT.txt
+          if-no-files-found: error
+
+      - name: Keep build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-compat-build-logs
+          path: |
+            C:/ffmpeg-compat-build/logs
+            C:/ffmpeg-compat-build/build-ffmpeg/ffbuild/config.log
+          if-no-files-found: ignore
