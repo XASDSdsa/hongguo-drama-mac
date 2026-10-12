@@ -53,7 +53,7 @@ jobs:
           if (!$archive -or !$source -or !$checksums -or !$report) { throw 'Windows FFmpeg build artifact is incomplete.' }
           $entries = Get-Content -LiteralPath $checksums.FullName
           foreach ($file in @($archive, $source)) {
-            $line = $entries | Where-Object { $_ -match ('\s' + [regex]::Escape($file.Name) + '$') } | Select-Object -First 1
+            $line = $entries | Where-Object { $_ -match ('\s\*?' + [regex]::Escape($file.Name) + '$') } | Select-Object -First 1
             if (!$line) { throw "Missing archive checksum: $($file.Name)" }
             $expected = ($line -split '\s+')[0].ToLowerInvariant()
             $actual = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -72,7 +72,7 @@ jobs:
           $innerSums = Join-Path $ffmpeg.Directory.Parent.FullName 'SHA256SUMS'
           $innerEntries = Get-Content -LiteralPath $innerSums
           foreach ($item in @(@{ file = $ffmpeg; name = 'bin/ffmpeg.exe' }, @{ file = $ffprobe; name = 'bin/ffprobe.exe' })) {
-            $line = $innerEntries | Where-Object { $_ -match ('\s' + [regex]::Escape($item.name) + '$') } | Select-Object -First 1
+            $line = $innerEntries | Where-Object { $_ -match ('\s\*?' + [regex]::Escape($item.name) + '$') } | Select-Object -First 1
             if (!$line) { throw "Missing executable checksum: $($item.name)" }
             $expected = ($line -split '\s+')[0].ToLowerInvariant()
             $actual = (Get-FileHash -LiteralPath $item.file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
