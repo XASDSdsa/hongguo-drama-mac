@@ -19,9 +19,10 @@ function mount(api = {}, props = {}) {
   const listeners = {};
   const defaults = {
     quchongDefaults: async () => ({ jobs: 1 }), getSettings: async () => ({ root: '/tmp' }), getQuchongTasks: async () => [],
+    quchongSetConcurrency: async jobs => ({ success: true, jobs }),
     quchongStart: async () => ({ success: true, batchId: 'batch-new', tasks: [] }), quchongCancel: async id => { listeners.cancelled = id; return { success: true }; },
   };
-  for (const name of ['onQuchongTask', 'onQuchongProgress', 'onQuchongLog', 'onQuchongComplete', 'onQuchongHistoryChanged']) {
+  for (const name of ['onQuchongTask', 'onQuchongProgress', 'onQuchongLog', 'onQuchongComplete', 'onQuchongHistoryChanged', 'onQuchongConcurrencyChanged']) {
     defaults[name] = cb => { listeners[name] = cb; return () => { if (listeners[name] === cb) delete listeners[name]; }; };
   }
   const compile = () => {
@@ -44,6 +45,35 @@ function mount(api = {}, props = {}) {
 (async () => {
   let passed = 0, failed = 0;
   const test = async (name, run) => { try { await run(); passed++; } catch (error) { failed++; console.error(`FAIL ${name}: ${error.stack}`); } };
+  await test('parallel setting is persisted, shared and used for submission', async () => {
+    let savedJobs = 3, payload;
+    const ui = mount({
+      quchongDefaults: async () => ({ jobs: savedJobs }),
+      quchongSetConcurrency: async jobs => { savedJobs = jobs; return { success: true, jobs }; },
+      quchongSelectVideos: async () => ['/tmp/one.mp4', '/tmp/two.mp4'],
+      quchongStart: async value => { payload = value; return { success: true, batchId: 'parallel', tasks: [] }; },
+    });
+    await ui.flush();
+    const select = () => ui.nodes().find(n => n.props['aria-label'] === '去重并发数');
+    assert.equal(select().props.value, 3);
+    await select().props.onChange({ target: { value: '4' } }); await ui.flush();
+    assert.equal(savedJobs, 4);
+    await ui.button('添加文件').props.onClick(); await ui.flush();
+    await ui.button('开始处理').props.onClick(); await ui.flush();
+    assert.equal(payload.opts.jobs, 4);
+    ui.listeners.onQuchongConcurrencyChanged({ jobs: 6 }); await ui.flush();
+    assert.equal(select().props.value, 6);
+    ui.setProps({ active: false }); savedJobs = 2; ui.setProps({ active: true }); await ui.flush();
+    assert.equal(select().props.value, 2);
+  });
+  await test('failed concurrency save preserves the last effective value', async () => {
+    const ui = mount({ quchongSetConcurrency: async () => ({ success: false, error: 'disk full' }) });
+    await ui.flush();
+    const select = () => ui.nodes().find(n => n.props['aria-label'] === '去重并发数');
+    await select().props.onChange({ target: { value: '8' } }); await ui.flush();
+    assert.equal(select().props.value, 1);
+    assert.equal(select().props.disabled, false);
+  });
   await test('ignores unrelated events until a batch is explicitly started', async () => {
     const ui = mount({ getQuchongTasks: async () => [] });
     ui.listeners.onQuchongTask?.({ batchId: 'other', task: { id: 'x', status: 'running' } }); ui.render();

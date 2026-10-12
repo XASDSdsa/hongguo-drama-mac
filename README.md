@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.22"><img alt="版本 1.1.22" src="https://img.shields.io/badge/release-v1.1.22-c8383d?style=flat-square"></a>
+  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.23"><img alt="版本 1.1.23" src="https://img.shields.io/badge/release-v1.1.23-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.22-mac-arm64.dmg`。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.23-mac-arm64.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**v1.1.22 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
+**v1.1.23 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -66,6 +66,8 @@
 
 下载管理按短剧卡片分组。点进短剧后，上方是完整分集选择器，下方是该剧的视频列表；每个视频都会显示下载状态和去重状态。初次下载的视频明确显示“未去重”，点击视频列表表头的“一键去重”会只提交本剧已下载且尚未去重的文件，并在对应行显示排队、处理进度、完成或失败。
 
+视频列表表头可直接选择 1～8 个并发去重任务，与“视频处理”页共用并保存该设置。界面分别显示实际处理中和等待数量，每条视频独立更新进度。提高并发立即补充等待任务；降低并发会等待现有任务完成，不中断视频。多个批次共享全局 8 个处理槽位；运行期间也可追加新下载的视频。
+
 原始下载文件保留，去重输出写入独立的“处理后”目录。当前页面不再放置启动、暂停、重试、更多操作或合并成品入口，避免把下载状态和视频处理状态混在一起。
 
 ## 三个搜索来源，清楚的可用范围
@@ -85,6 +87,8 @@
 “漫画”是图文阅读内容，不是视频；需要视频类内容时，请选择“漫剧”。
 
 ## 当前版本与验证范围
+
+[**v1.1.23**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.23) 在下载管理的视频列表表头增加去重并发设置，与视频处理页同步保存并即时生效。显示实际运行和等待数量，支持处理期间追加新下载的视频，防止运行或排队中的视频被重复提交，并修复旧任务快照覆盖新任务进度的问题。
 
 [**v1.1.22**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.22) 撤掉按静默时长终止去重的规则。编码、写入 MP4 索引、校验和保存按真实事件显示；只有成功退出、校验并保存后才标记已去重。进度以视频流时长估算，日志记录实际帧数、速度与媒体时间。Windows 内置 FFmpeg 从 7.1 升至固定 9.0.2，包含 [apad 滤镜源调度修复](https://ffmpeg.org/pipermail/ffmpeg-cvslog/2024-October/145933.html)，保留既定显卡编码器选择和并发设置。真实媒体回归覆盖循环 BGM、长音频、音画偏移、默认 1080p 完整滤镜及两个并行任务；CI 不具备用户的 NVIDIA、AMD、Intel 显卡，硬件编码仍需对应设备实测。
 

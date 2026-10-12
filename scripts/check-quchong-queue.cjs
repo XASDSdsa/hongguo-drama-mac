@@ -18,13 +18,15 @@ let serial = 0;
 function load() {
   const dir = path.join(temp, String(++serial));
   fs.mkdirSync(dir);
-  const handlers = {}, events = [], marks = [], saved = [], jobs = new Map();
+  const handlers = {}, events = [], marks = [], saved = [], jobs = new Map(), starts = [];
+  let settings = { quchong_jobs: 2 };
   const app = new EventEmitter();
   Object.assign(app, { getVersion: () => 'test', getPath: () => dir,
     commandLine: { appendSwitch() {} }, whenReady: () => ({ then() {} }) });
   const electron = { app, ipcMain: { handle: (name, fn) => { handlers[name] = fn; } },
     protocol: { registerSchemesAsPrivileged() {} } };
   const quchong = { ...native, runJob(options) {
+    starts.push(options.src);
     return new Promise((resolve, reject) => {
       const job = { ...options, resolve: () => resolve({ path: options.dst }), reject };
       jobs.set(options.src, job);
@@ -33,7 +35,7 @@ function load() {
   } };
   const context = vm.createContext({
     require: name => name === 'electron' ? electron : name === './src/native/quchong' ? quchong
-      : name === './src/store' ? { saveQuchongTasks: tasks => saved.push(copy(tasks)) } : req(name),
+      : name === './src/store' ? { getSettings: () => settings, saveSettings: value => { settings = value; }, saveQuchongTasks: tasks => saved.push(copy(tasks)) } : req(name),
     __dirname: path.dirname(sourcePath), process, Buffer, URL, URLSearchParams, AbortController,
     AbortSignal, setTimeout, clearTimeout, setImmediate, clearImmediate,
     console: { log() {}, warn() {}, error() {} },
@@ -43,11 +45,11 @@ function load() {
   context.sendToRenderer = (channel, payload) => events.push({ channel, ...copy(payload) });
   context.markPipelineDeduped = (src, dst) => marks.push({ src, dst });
   const snapshots = () => copy(handlers['get-quchong-tasks']());
-  return { handlers, events, jobs, marks, saved, snapshots,
-    async start(names, concurrency = 2) {
+  return { handlers, events, jobs, marks, saved, starts, snapshots, get settings() { return settings; },
+    async start(names, concurrency) {
       const sources = names.map(name => path.join(dir, name + '.mp4'));
       sources.forEach(file => fs.writeFileSync(file, 'fixture'));
-      const result = await handlers['quchong-start']({}, { sources, outputDir: path.join(dir, 'out'), opts: { jobs: concurrency } });
+      const result = await handlers['quchong-start']({}, { sources, outputDir: path.join(dir, 'out'), opts: concurrency === undefined ? {} : { jobs: concurrency } });
       assert.equal(result.success, true, result.error);
       await tick();
       return { ...result, sources, snapshot: () => snapshots().find(batch => batch.id === result.batchId) };
@@ -61,6 +63,102 @@ async function check(name, run) {
 }
 
 (async () => {
+  await check('one batch starts the configured number of jobs and fills each freed slot', async () => {
+    const h = load();
+    const batch = await h.start(['episode-1', 'episode-2', 'episode-3', 'episode-4'], 2);
+    const name = source => path.basename(source, '.mp4');
+    assert.deepEqual(h.starts.map(name), ['episode-1', 'episode-2'], 'configured jobs must be started immediately');
+    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 2);
+
+    h.jobs.get(batch.sources[0]).resolve();
+    await tick();
+    assert.deepEqual(h.starts.map(name), ['episode-1', 'episode-2', 'episode-3'], 'the next queued job must start as soon as a slot is free');
+    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 2);
+  });
+
+  await check('global eight-process cap still lets independent batches overlap', async () => {
+    const h = load();
+    const first = await h.start(['first-1', 'first-2', 'first-3', 'first-4', 'first-5', 'first-6'], 8);
+    const second = await h.start(['second-1', 'second-2', 'second-3', 'second-4'], 8);
+    const name = source => path.basename(source, '.mp4');
+    assert.equal(h.starts.length, 8, 'two batches should share eight global slots');
+    assert.deepEqual(h.starts.map(name), [
+      'first-1', 'first-2', 'first-3', 'first-4', 'first-5', 'first-6', 'second-1', 'second-2',
+    ]);
+    assert.equal(first.snapshot().tasks.filter(task => task.status === 'running').length, 6);
+    assert.equal(second.snapshot().tasks.filter(task => task.status === 'running').length, 2);
+
+    h.jobs.get(first.sources[0]).resolve();
+    await tick();
+    assert.equal(name(h.starts.at(-1)), 'second-3', 'a freed global slot must be assigned to another batch');
+    assert.equal(second.snapshot().tasks.filter(task => task.status === 'running').length, 3);
+  });
+
+  await check('dedup concurrency is persisted, validated, and applies to queued work', async () => {
+    const h = load();
+    const defaults = await h.handlers['quchong-defaults']();
+    assert.equal(defaults.jobs, 2, 'saved concurrency should be returned as the default');
+    const batch = await h.start(['setting-1', 'setting-2', 'setting-3', 'setting-4'], 2);
+    assert.equal(h.starts.length, 2);
+    const changed = await h.handlers['quchong-set-concurrency']({}, 4);
+    assert.deepEqual(copy(changed), { success: true, jobs: 4 });
+    assert.equal(h.settings.quchong_jobs, 4);
+    assert.equal((await h.handlers['quchong-defaults']()).jobs, 4);
+    await tick();
+    assert.equal(h.starts.length, 4, 'raising the limit should fill newly available slots');
+    for (const value of [0, -1, 9, 1.5, '4', null, NaN]) {
+      const invalid = await h.handlers['quchong-set-concurrency']({}, value);
+      assert.equal(invalid.success, false, `invalid concurrency accepted: ${String(value)}`);
+      assert.equal((await h.handlers['quchong-defaults']()).jobs, 4, 'invalid values must not overwrite the saved setting');
+    }
+    for (const source of batch.sources) h.jobs.get(source)?.resolve();
+    await tick();
+    const next = await h.start(['saved-1', 'saved-2', 'saved-3', 'saved-4', 'saved-5']);
+    assert.equal(next.snapshot().concurrency, 4);
+    assert.equal(next.snapshot().tasks.filter(task => task.status === 'running').length, 4, 'submissions without jobs should use the saved concurrency');
+  });
+
+  await check('lowering concurrency lets active work finish before starting the next queued job', async () => {
+    const h = load();
+    const batch = await h.start(['lower-1', 'lower-2', 'lower-3', 'lower-4', 'lower-5', 'lower-6'], 4);
+    const result = await h.handlers['quchong-set-concurrency']({}, 1);
+    assert.equal(result.success, true);
+    assert.equal(batch.snapshot().concurrency, 1);
+    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 4, 'lowering the limit must not cancel running work');
+    assert.ok([...h.jobs.values()].every(job => !job.signal.aborted));
+    for (const source of batch.sources.slice(0, 3)) {
+      h.jobs.get(source).resolve();
+      await tick();
+      assert.equal(h.starts.length, 4, 'queued work must wait until active work falls below the new limit');
+    }
+    h.jobs.get(batch.sources[3]).resolve();
+    await tick();
+    assert.equal(h.starts.length, 5);
+    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 1);
+    h.jobs.get(batch.sources[4]).resolve();
+    await tick();
+    assert.equal(h.starts.length, 6);
+    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 1);
+  });
+
+  await check('active and queued source files cannot be submitted twice while unrelated batches keep running', async () => {
+    const h = load();
+    const first = await h.start(['reserved-active', 'reserved-queued'], 1);
+    const other = await h.start(['independent']);
+    for (const src of first.sources) {
+      const result = await h.handlers['quchong-start']({}, { sources: [src], outputDir: path.dirname(src), opts: { jobs: 2 } });
+      assert.equal(result.success, false);
+      assert.match(result.error, /已在去重队列中/);
+    }
+    await tick();
+    assert.equal(h.starts.length, 2, 'duplicate submissions must not create another FFmpeg job');
+    assert.equal(h.snapshots().length, 2, 'duplicate submissions must not create another batch');
+    assert.equal(first.snapshot().tasks[0].status, 'running');
+    assert.equal(first.snapshot().tasks[1].status, 'pending');
+    assert.equal(other.snapshot().tasks[0].status, 'running');
+    assert.ok([...h.jobs.values()].every(job => !job.signal.aborted));
+  });
+
   await check('stages stay running and persist; only resolved output becomes deduped', async () => {
     const h = load(), batch = await h.start(['episode']);
     const job = h.jobs.get(batch.sources[0]);

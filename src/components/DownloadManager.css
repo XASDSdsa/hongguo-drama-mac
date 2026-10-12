@@ -391,3 +391,9 @@
 @keyframes dm-spin { to { transform: rotate(360deg); } }
 .dm-video-heading { display: flex; align-items: baseline; gap: 12px; margin: 28px 0 16px; font-size: 17px; }
 .dm-video-heading span { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+.dm-dedup-toolbar { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+.dm-dedup-count { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.dm-dedup-count b { color: var(--accent); font-weight: 700; }
+.dm-dedup-concurrency { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.dm-dedup-concurrency select { min-width: 48px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font: inherit; }
+@media (max-width: 700px) { .dm-video-heading { align-items: flex-start; flex-direction: column; } .dm-dedup-toolbar { margin-left: 0; } }

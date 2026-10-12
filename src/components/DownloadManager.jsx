@@ -27,6 +27,21 @@ const DEDUP_STAGE_TEXT = {
   validating: '校验输出', saving: '保存文件',
 };
 
+const DEDUP_ACTIVE_STATES = new Set(['running', 'processing']);
+const DEDUP_QUEUED_STATES = new Set(['pending', 'queued']);
+const DEDUP_FINISHED_STATES = new Set(['completed']);
+const DEDUP_MAX_CONCURRENCY = 8;
+
+function normalizeDedupJobs(value, fallback = 1) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(1, Math.min(DEDUP_MAX_CONCURRENCY, Math.round(number)));
+}
+
+function dedupRuntimeState(task) {
+  return String(task?.status || task?.stage || '').toLowerCase();
+}
+
 function sortTasks(list) {
   const key = task => task.hongguoInfo?.series_id != null ? `series:${task.hongguoInfo.series_id}` : `task:${task.id}`;
   const groups = new Map();
@@ -79,6 +94,8 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [dedupRuntime, setDedupRuntime] = useState({});
   const [dedupStarting, setDedupStarting] = useState(false);
+  const [dedupJobs, setDedupJobs] = useState(null);
+  const [dedupJobsSaving, setDedupJobsSaving] = useState(false);
   const [page, setPage] = useState(1);
   const [orderVersion, setOrderVersion] = useState(0);
   const [loadError, setLoadError] = useState('');
@@ -91,7 +108,12 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0 });
   const taskIndex = useRef(new Map());
-  const dedupBatchRef = useRef(null);
+  const dedupBatchRef = useRef(new Map());
+  const dedupJobsRef = useRef(null);
+  const dedupJobsRevision = useRef(0);
+  const dedupSubmittingRef = useRef(false);
+  const selectedSeriesIdRef = useRef(null);
+  selectedSeriesIdRef.current = selectedSeries?.seriesId;
   const seriesCards = useMemo(() => groupDownloadSeries(tasks, seriesList), [tasks, seriesList]);
   const currentSeries = selectedSeries && (seriesCards.find(series => series.key === selectedSeries.key) || selectedSeries);
   const scopedTasks = useMemo(() => selectedSeries
@@ -120,8 +142,6 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     setSelected(new Set());
     setPage(1);
     setConfirmAsk(null);
-    dedupBatchRef.current = null;
-    setDedupStarting(false);
     setDedupRuntime({});
     setPipelineStatus(null);
   };
@@ -148,15 +168,41 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
         if (!alive || !Array.isArray(snapshots)) return;
         const paths = new Set(scopedTasks.map(task => task.savePath || task.path).filter(Boolean));
         const next = {};
+        // 后端已按批次创建时间倒序返回，同一源保留最新批次。
         snapshots.forEach(batch => (batch.tasks || []).forEach(task => {
-          if (task.src && paths.has(task.src)) next[task.src] = { ...task, batchId: batch.id };
+          if (task.src && paths.has(task.src) && !next[task.src]) next[task.src] = { ...task, batchId: batch.id };
         }));
-        setDedupRuntime(next);
+        setDedupRuntime(previous => {
+          for (const [src, task] of Object.entries(previous)) {
+            if (paths.has(src) && (!next[src] || (Number(task.updatedAt) || 0) > (Number(next[src].updatedAt) || 0))) next[src] = task;
+          }
+          return next;
+        });
       } catch (_) { /* 去重历史不可用时仍显示未去重 */ }
     };
     load();
     return () => { alive = false; };
   }, [active, selectedSeries?.seriesId, scopedTasks, orderVersion]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    let alive = true;
+    setDedupJobs(null);
+    const applyJobs = value => {
+      if (!alive) return;
+      const jobs = normalizeDedupJobs(value, dedupJobsRef.current);
+      dedupJobsRef.current = jobs;
+      setDedupJobs(jobs);
+    };
+    const revision = dedupJobsRevision.current;
+    Promise.resolve(window.electronAPI.quchongDefaults?.()).then(defaults => {
+      if (revision === dedupJobsRevision.current) applyJobs(defaults?.jobs);
+    }).catch(() => {});
+    const off = typeof window.electronAPI.onQuchongConcurrencyChanged === 'function'
+      ? window.electronAPI.onQuchongConcurrencyChanged(data => { dedupJobsRevision.current++; applyJobs(data?.jobs); })
+      : undefined;
+    return () => { alive = false; off?.(); };
+  }, [active]);
 
   useEffect(() => {
     const content = containerRef.current?.closest('.main-content');
@@ -284,7 +330,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
       }),
       ...(typeof window.electronAPI.onQuchongTask === 'function' ? [window.electronAPI.onQuchongTask((data) => {
         if (!data?.task?.src) return;
-        setDedupRuntime(previous => ({ ...previous, [data.task.src]: { ...data.task, batchId: data.batchId } }));
+        setDedupRuntime(previous => ({ ...previous, [data.task.src]: { ...data.task, updatedAt: data.task.updatedAt || Date.now(), batchId: data.batchId } }));
       })] : []),
       ...(typeof window.electronAPI.onQuchongProgress === 'function' ? [window.electronAPI.onQuchongProgress((data) => {
         if (!data?.taskId) return;
@@ -292,18 +338,20 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
           const entry = Object.entries(previous).find(([, task]) => task.id === data.taskId);
           if (!entry) return previous;
           const [src, task] = entry;
-          return { ...previous, [src]: { ...task, progress: data.progress, stage: data.stage || task.stage, updatedAt: data.updatedAt || task.updatedAt, status: data.progress >= 100 ? 'completed' : 'running' } };
+          return { ...previous, [src]: { ...task, progress: data.progress, stage: data.stage || task.stage, updatedAt: data.updatedAt || Date.now(), status: 'running' } };
         });
       })] : []),
       ...(typeof window.electronAPI.onQuchongComplete === 'function' ? [window.electronAPI.onQuchongComplete(async (data) => {
-        if (dedupBatchRef.current && String(data?.batchId) === String(dedupBatchRef.current)) {
-          setDedupStarting(false);
-          dedupBatchRef.current = null;
-          if (selectedSeries?.seriesId && typeof window.electronAPI.getSeriesPipelineStatus === 'function') {
-            const status = await window.electronAPI.getSeriesPipelineStatus(selectedSeries.seriesId).catch(() => null);
+        const batchId = data?.batchId == null ? '' : String(data.batchId);
+        if (batchId && dedupBatchRef.current.has(batchId)) {
+          const seriesId = dedupBatchRef.current.get(batchId);
+          dedupBatchRef.current.delete(batchId);
+          if (seriesId && selectedSeriesIdRef.current === seriesId && typeof window.electronAPI.getSeriesPipelineStatus === 'function') {
+            const status = await window.electronAPI.getSeriesPipelineStatus(seriesId).catch(() => null);
+            if (selectedSeriesIdRef.current !== seriesId) return;
             if (status?.success !== false) setPipelineStatus(status);
           }
-          showToast(data?.success ? '本剧去重完成' : '本剧去重结束，部分视频失败', data?.success ? 'success' : 'error');
+          if (selectedSeriesIdRef.current === seriesId) showToast(data?.success ? '本批视频去重完成' : '本批去重结束，部分视频失败', data?.success ? 'success' : 'error');
         }
       })] : []),
     ];
@@ -385,25 +433,53 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     () => new Map((pipelineStatus?.episodes || []).map(item => [Number(item.episodeIndex), item])),
     [pipelineStatus]
   );
-  const dedupCandidates = useMemo(() => scopedTasks.filter((task) => {
-    if (task.status !== 'completed' || !task.savePath) return false;
-    const index = Number(task.hongguoInfo?.vid_index);
-    const record = pipelineEpisodeMap.get(index);
-    if (record?.deduped || ['deduped', 'segmented', 'ready'].includes(String(record?.status || ''))) return false;
-    const runtime = dedupRuntime[task.savePath];
-    return !runtime || !['pending', 'queued', 'running', 'processing'].includes(String(runtime.status || runtime.stage || ''));
-  }), [scopedTasks, pipelineEpisodeMap, dedupRuntime]);
-  const dedupRunningCount = useMemo(() => scopedTasks.filter((task) => {
-    const runtime = dedupRuntime[task.savePath];
-    return runtime && ['pending', 'queued', 'running', 'processing'].includes(String(runtime.status || runtime.stage || ''));
-  }).length, [scopedTasks, dedupRuntime]);
+  const dedupCandidates = useMemo(() => {
+    const seen = new Set();
+    return scopedTasks.filter((task) => {
+      if (task.status !== 'completed' || !task.savePath) return false;
+      const index = Number(task.hongguoInfo?.vid_index);
+      const record = pipelineEpisodeMap.get(index);
+      if (record?.deduped || ['deduped', 'segmented', 'ready'].includes(String(record?.status || ''))) return false;
+      const runtime = dedupRuntime[task.savePath];
+      const state = dedupRuntimeState(runtime);
+      if (seen.has(task.savePath) || (runtime && (
+        DEDUP_ACTIVE_STATES.has(state) || DEDUP_QUEUED_STATES.has(state) || DEDUP_FINISHED_STATES.has(state)
+      ))) return false;
+      seen.add(task.savePath);
+      return true;
+    });
+  }, [scopedTasks, pipelineEpisodeMap, dedupRuntime]);
+  const dedupSourcePaths = useMemo(() => new Set(scopedTasks.map(task => task.savePath).filter(Boolean)), [scopedTasks]);
+  const dedupRunningCount = useMemo(() => Object.entries(dedupRuntime).filter(([src, task]) =>
+    dedupSourcePaths.has(src) && DEDUP_ACTIVE_STATES.has(dedupRuntimeState(task))).length, [dedupSourcePaths, dedupRuntime]);
+  const dedupQueuedCount = useMemo(() => Object.entries(dedupRuntime).filter(([src, task]) =>
+    dedupSourcePaths.has(src) && DEDUP_QUEUED_STATES.has(dedupRuntimeState(task))).length, [dedupSourcePaths, dedupRuntime]);
+
+  const changeDedupJobs = useCallback(async value => {
+    const jobs = normalizeDedupJobs(value, dedupJobsRef.current);
+    if (dedupJobsSaving || jobs == null) return;
+    dedupJobsRevision.current++;
+    setDedupJobsSaving(true);
+    try {
+      const result = await window.electronAPI.quchongSetConcurrency(jobs);
+      if (!result?.success) throw new Error(result?.error || '保存去重并发数失败');
+      const savedJobs = normalizeDedupJobs(result.jobs, jobs);
+      dedupJobsRef.current = savedJobs;
+      setDedupJobs(savedJobs);
+    } catch (error) {
+      showToast(error?.message || '保存去重并发数失败', 'error');
+    } finally {
+      setDedupJobsSaving(false);
+    }
+  }, [dedupJobsSaving, showToast]);
 
   const startDedup = useCallback(async () => {
-    if (!selectedSeries?.seriesId || dedupStarting) return;
+    if (!selectedSeries?.seriesId || dedupSubmittingRef.current || dedupJobs == null || dedupJobsSaving) return;
     if (!dedupCandidates.length) {
       showToast('当前没有待去重的视频', 'success');
       return;
     }
+    dedupSubmittingRef.current = true;
     setDedupStarting(true);
     try {
       const [defaults, settings] = await Promise.all([
@@ -418,20 +494,29 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
         sources: dedupCandidates.map(task => task.savePath),
         outputDir,
         bgm: null,
-        opts: defaults || {},
+        opts: { ...(defaults || {}), jobs: dedupJobsRef.current },
       });
       if (!result?.success) throw new Error(result?.error || '提交去重任务失败');
-      dedupBatchRef.current = result.batchId;
-      setDedupRuntime(previous => ({
-        ...previous,
-        ...(result.tasks || []).reduce((all, task) => ({ ...all, [task.src]: { ...task, batchId: result.batchId } }), {}),
-      }));
+      if (result.batchId != null) dedupBatchRef.current.set(String(result.batchId), String(selectedSeries.seriesId));
+      if (selectedSeriesIdRef.current !== selectedSeries.seriesId) return;
+      setDedupRuntime(previous => {
+        const next = { ...previous };
+        for (const task of result.tasks || []) {
+          const live = previous[task.src];
+          next[task.src] = live?.id === task.id && !DEDUP_QUEUED_STATES.has(dedupRuntimeState(live))
+            ? live : { ...task, batchId: result.batchId };
+        }
+        return next;
+      });
       showToast(`已提交 ${dedupCandidates.length} 个视频去重`);
     } catch (error) {
-      setDedupStarting(false);
       showToast(error?.message || '提交去重任务失败', 'error');
+    } finally {
+      // 提交锁只保护 IPC 请求，批次运行期间仍允许追加新下载的视频。
+      dedupSubmittingRef.current = false;
+      setDedupStarting(false);
     }
-  }, [currentSeries, dedupCandidates, dedupStarting, selectedSeries, showToast]);
+  }, [currentSeries, dedupCandidates, dedupJobs, dedupJobsSaving, selectedSeries, showToast]);
 
   // Progress updates change row values, not the established series/episode order.
   const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [orderVersion, selectedSeries]);
@@ -479,7 +564,19 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
         onNotify={showToast}
       />}
 
-      {selectedSeries && <div className="dm-video-heading"><div>视频列表 <span>{scopedTasks.length} 个任务</span></div><button className="btn btn-primary btn-sm" onClick={startDedup} disabled={dedupStarting || dedupRunningCount > 0 || dedupCandidates.length === 0} title="处理本剧所有已下载但尚未去重的视频">{dedupStarting || dedupRunningCount > 0 ? `去重中 ${dedupRunningCount}` : '一键去重'}</button></div>}
+      {selectedSeries && <div className="dm-video-heading">
+        <div>视频列表 <span>{scopedTasks.length} 个任务</span></div>
+        <div className="dm-dedup-toolbar">
+          <span className="dm-dedup-count">处理中 <b>{dedupRunningCount}</b> · 等待 <b>{dedupQueuedCount}</b></span>
+          <label className="dm-dedup-concurrency">去重并发
+            <select aria-label="去重并发数" value={dedupJobs ?? ''} disabled={dedupJobs == null || dedupJobsSaving} onChange={event => changeDedupJobs(event.target.value)}>
+              {dedupJobs == null && <option value="">读取中…</option>}
+              {Array.from({ length: DEDUP_MAX_CONCURRENCY }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <button className="btn btn-primary btn-sm" onClick={startDedup} disabled={dedupStarting || dedupJobs == null || dedupJobsSaving || dedupCandidates.length === 0} title="处理本剧所有已下载但尚未去重的视频">{dedupStarting ? '提交中…' : '一键去重'}</button>
+        </div>
+      </div>}
       {!selectedSeries && <div className="dm-toolbar">
         {!selectedSeries && (
           <button

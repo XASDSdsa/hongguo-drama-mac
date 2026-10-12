@@ -143,6 +143,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 本地视频处理（去重）
   quchongDefaults: () => ipcRenderer.invoke('quchong-defaults'),
+  quchongSetConcurrency: (jobs) => ipcRenderer.invoke('quchong-set-concurrency', jobs),
   getQuchongTasks: () => ipcRenderer.invoke('get-quchong-tasks'),
   quchongSelectVideos: () => ipcRenderer.invoke('quchong-select-videos'),
   quchongSelectAudio: () => ipcRenderer.invoke('quchong-select-audio'),
@@ -172,6 +173,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('quchong-history-changed', listener);
     return () => ipcRenderer.removeListener('quchong-history-changed', listener);
+  },
+  onQuchongConcurrencyChanged: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('quchong-concurrency-changed', listener);
+    return () => ipcRenderer.removeListener('quchong-concurrency-changed', listener);
   },
 
   // 一键启动 / 一键暂停 / 队列状态

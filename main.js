@@ -133,6 +133,8 @@ function getDefaultSettings() {
     // 文件命名模板：可用变量 剧名(series_title) 集数(vid_index) 标题(ep_title)
     name_format: '剧名 集数',
     max_concurrent: 3,
+    // 视频去重同时运行的 FFmpeg 数量（1~8），下载管理和视频处理共用。
+    quchong_jobs: quchong.DEFAULTS.jobs,
     // 看完一集后自动删除本地文件（边看边清，避免占用磁盘）
     auto_delete_watched: false,
     // 兼容模式：本机无法解码 HEVC 时自动转码为 H.264（解决「黑屏有声」）
@@ -268,7 +270,9 @@ function getCurrentSettings() {
   // 保证并发数合法
   const mc = parseInt(merged.max_concurrent, 10);
   MAX_CONCURRENT_DOWNLOADS = Number.isInteger(mc) && mc >= 1 && mc <= 10 ? mc : 3;
-  return { ...merged, max_concurrent: MAX_CONCURRENT_DOWNLOADS };
+  const jobs = merged.quchong_jobs;
+  return { ...merged, max_concurrent: MAX_CONCURRENT_DOWNLOADS,
+    quchong_jobs: Number.isInteger(jobs) && jobs >= 1 && jobs <= 8 ? jobs : quchong.DEFAULTS.jobs };
 }
 
 // 净化文件夹/文件名称（移除非法字符、结尾的点和空格）
@@ -1848,10 +1852,33 @@ function cancelAllQuchongBatches() {
 
 ipcMain.handle('quchong-defaults', async () => ({
   ...quchong.DEFAULTS,
+  jobs: getCurrentSettings().quchong_jobs,
   // Resolve Windows hardware once when the processing screen loads. The
   // selected encoder is then reused by every task in this app session.
   encoder: await quchong.resolveEncoder(quchong.DEFAULTS.encoder),
 }));
+
+// 下载管理与视频处理页使用同一个去重并发设置；修改后立即填充空闲槽位。
+ipcMain.handle('quchong-set-concurrency', async (_event, value) => {
+  const jobs = value;
+  if (!Number.isInteger(jobs) || jobs < 1 || jobs > QUCHONG_MAX_ACTIVE) {
+    return { success: false, error: `去重并发数必须是 1-${QUCHONG_MAX_ACTIVE} 的整数` };
+  }
+  try {
+    store.saveSettings({ ...getCurrentSettings(), quchong_jobs: jobs });
+    for (const batch of quchongBatches.values()) {
+      if (!batch.finished) {
+        batch.concurrency = jobs;
+        persistQuchongBatch(batch);
+      }
+    }
+    pumpAllQuchongBatches();
+    sendToRenderer('quchong-concurrency-changed', { jobs });
+    return { success: true, jobs };
+  } catch (error) {
+    return { success: false, error: error?.message || '去重并发设置保存失败' };
+  }
+});
 
 ipcMain.handle('get-quchong-tasks', () => getQuchongSnapshots());
 
@@ -1886,7 +1913,7 @@ ipcMain.handle('quchong-start', async (_event, payload = {}) => {
     }
     const outputDir = path.resolve(payload.outputDir);
     await fsp.mkdir(outputDir, { recursive: true });
-    const opts = quchong.validateOptions(payload.opts || {});
+    const opts = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...payload.opts });
     const bgm = payload.bgm ? path.resolve(String(payload.bgm)) : null;
     if (bgm) {
       const stat = await fsp.stat(bgm).catch(() => null);
@@ -1895,6 +1922,11 @@ ipcMain.handle('quchong-start', async (_event, payload = {}) => {
     const ffmpegPath = resolveFfmpeg('ffmpeg');
     const ffprobePath = resolveFfmpeg('ffprobe');
     if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
+
+    const pendingSources = new Set([...quchongBatches.values()].flatMap(batch => batch.tasks
+      .filter(task => ['pending', 'running'].includes(task.status)).map(task => quchongPathKey(task.src))));
+    const duplicate = sources.find(file => pendingSources.has(quchongPathKey(file)));
+    if (duplicate) return { success: false, error: `视频已在去重队列中：${path.basename(duplicate)}` };
 
     const id = randomUUID();
     const destinations = allocateQuchongDestinations(sources, outputDir);

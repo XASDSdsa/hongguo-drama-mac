@@ -29,6 +29,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
   const [outputDir, setOutputDir] = useState('');
   const [bgm, setBgm] = useState('');
   const [opts, setOpts] = useState(fallbackDefaults);
+  const [jobsSaving, setJobsSaving] = useState(false);
   const [batchId, setBatchId] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -45,6 +46,20 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
   }, []);
 
   useEffect(() => {
+    if (!active) return undefined;
+    let alive = true;
+    let changed = false;
+    const off = window.electronAPI.onQuchongConcurrencyChanged?.(({ jobs }) => {
+      changed = true;
+      if (alive) setOpts(previous => ({ ...previous, jobs }));
+    });
+    window.electronAPI.quchongDefaults?.().then(defaults => {
+      if (alive && !changed && defaults?.jobs) setOpts(previous => ({ ...previous, jobs: defaults.jobs }));
+    }).catch(() => {});
+    return () => { alive = false; off?.(); };
+  }, [active]);
+
+  useEffect(() => {
     let alive = true;
     Promise.all([
       window.electronAPI.quchongDefaults?.(),
@@ -52,7 +67,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
       window.electronAPI.getQuchongTasks?.(),
     ]).then(([defaults, settings, savedHistory]) => {
       if (!alive) return;
-      if (defaults) setOpts((value) => ({ ...value, ...defaults }));
+      if (defaults) setOpts((value) => ({ ...value, ...defaults, jobs: value.jobs }));
       if (settings?.root) setOutputDir(`${settings.root}/红果短剧/处理后`);
       if (Array.isArray(savedHistory)) setHistory(savedHistory);
     }).catch(() => {});
@@ -196,6 +211,17 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
   };
 
   const update = (key, value) => setOpts((previous) => ({ ...previous, [key]: value }));
+  const changeJobs = async value => {
+    const jobs = Number(value);
+    setJobsSaving(true);
+    try {
+      const result = await window.electronAPI.quchongSetConcurrency(jobs);
+      if (!result?.success) throw new Error(result?.error || '保存去重并发数失败');
+      update('jobs', result.jobs);
+    } catch (error) {
+      setNotice(error.message || '保存去重并发数失败');
+    } finally { setJobsSaving(false); }
+  };
   const chooseOutput = async () => {
     const folder = await window.electronAPI.selectFolder();
     if (folder) setOutputDir(folder);
@@ -261,7 +287,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
           <label>分辨率<select value={opts.resolution} onChange={(event) => update('resolution', event.target.value)}><option value="1080x1920">1080 × 1920</option><option value="720x1280">720 × 1280</option></select></label>
           <label>编码器<select value={opts.encoder} onChange={(event) => update('encoder', event.target.value)}><option value="auto">自动识别一次并固定</option><option value="cpu">CPU/libx264</option><option value="videotoolbox">VideoToolbox（Mac）</option><option value="nvenc">NVENC（NVIDIA）</option><option value="amf">AMF（AMD）</option><option value="qsv">QSV（Intel）</option></select></label>
           <label>画质<select value={opts.quality} onChange={(event) => update('quality', event.target.value)}><option value="standard">标准</option><option value="lean">省空间</option></select></label>
-          <label>并发数<input type="number" min="1" max="8" value={opts.jobs} onChange={(event) => update('jobs', Number(event.target.value))} /></label>
+          <label>去重并发数<select aria-label="去重并发数" value={opts.jobs} disabled={jobsSaving} onChange={event => changeJobs(event.target.value)}>{Array.from({ length: 8 }, (_, i) => i + 1).map(jobs => <option key={jobs} value={jobs}>{jobs}</option>)}</select></label>
           <label>裁剪比例<input type="number" min="0.85" max="1" step="0.01" value={opts.crop_ratio} onChange={(event) => update('crop_ratio', Number(event.target.value))} /></label>
           <label>速度下限<input type="number" min="1" max="1.1" step="0.01" value={opts.speed_min} onChange={(event) => update('speed_min', Number(event.target.value))} /></label>
           <label>速度上限<input type="number" min="1" max="1.1" step="0.01" value={opts.speed_max} onChange={(event) => update('speed_max', Number(event.target.value))} /></label>
@@ -280,14 +306,14 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
         <div className="qc-checks"><label><input type="checkbox" checked={opts.black_intro} onChange={(event) => update('black_intro', event.target.checked)} /> 黑片头</label><label><input type="checkbox" checked={opts.vignette} onChange={(event) => update('vignette', event.target.checked)} /> 暗角</label><label><input type="checkbox" checked={opts.eq_enable} onChange={(event) => update('eq_enable', event.target.checked)} /> 音频均衡</label></div>
       </section>
 
-      <div className="qc-footer"><button className="btn btn-primary" onClick={start} disabled={running}><Play size={15} /> 开始处理</button><button className="btn" onClick={cancel} disabled={!running}><Square size={14} /> 停止</button><button className="btn" onClick={() => { setFiles([]); setTasks([]); setLogs([]); setNotice(''); }} disabled={running}><Trash2 size={14} /> 清空</button></div>
-      {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">{completed}/{tasks.length} 完成</span></div>{tasks.map((task) => {
+      <div className="qc-footer"><button className="btn btn-primary" onClick={start} disabled={running || jobsSaving}><Play size={15} /> 开始处理</button><button className="btn" onClick={cancel} disabled={!running}><Square size={14} /> 停止</button><button className="btn" onClick={() => { setFiles([]); setTasks([]); setLogs([]); setNotice(''); }} disabled={running}><Trash2 size={14} /> 清空</button></div>
+      {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">处理中 {tasks.filter(task => ['running', 'processing'].includes(task.status)).length} · 等待 {tasks.filter(task => ['pending', 'queued'].includes(task.status)).length} · {completed}/{tasks.length} 完成</span></div>{tasks.map((task) => {
         const stage = task.stage || task.status;
         const encoding = ['encoding', 'processing', 'running'].includes(stage);
         const label = encoding ? `编码约 ${Math.round(task.progress || 0)}%` : stageText[stage] || '等待';
         return <div className="qc-progress-row" key={task.id}><span title={task.name}>{fileName(task.name)}</span><div className="qc-progress" role="progressbar" aria-label={task.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={encoding || stage === 'completed' ? task.progress || 0 : undefined} aria-valuetext={label}><i style={{ width: `${task.progress || 0}%` }} /></div><em>{label}</em></div>;
       })}{logs.length > 0 && <pre className="qc-log">{logs.join('\n')}</pre>}</section>}
-      {!!history.length && <section className="qc-card qc-history-card"><div className="qc-card-title"><span>处理任务快照</span><span className="qc-hint">保留最近 {Math.min(history.length, 50)} 批</span></div>{history.slice(0, 12).map((batch) => <div className="qc-history-row" key={batch.id}><div><b>{batch.status === 'completed' ? '已完成' : batch.status === 'stopped' ? '已停止' : batch.status === 'failed' ? '部分失败' : '排队中'}</b><span>{batch.done || 0}/{batch.total || 0} 个视频 · {batch.createdAt ? new Date(batch.createdAt).toLocaleString() : '未知时间'}</span></div><button className="btn btn-sm" onClick={() => restoreSnapshot(batch)}>恢复查看</button></div>)}</section>}
+      {!!history.length && <section className="qc-card qc-history-card"><div className="qc-card-title"><span>处理任务快照</span><span className="qc-hint">保留最近 {Math.min(history.length, 50)} 批</span></div>{history.slice(0, 12).map((batch) => <div className="qc-history-row" key={batch.id}><div><b>{batch.status === 'completed' ? '已完成' : batch.status === 'stopped' ? '已停止' : batch.status === 'failed' ? '部分失败' : batch.status === 'running' ? '处理中' : '排队中'}</b><span>{batch.done || 0}/{batch.total || 0} 个视频 · {batch.createdAt ? new Date(batch.createdAt).toLocaleString() : '未知时间'}</span></div><button className="btn btn-sm" onClick={() => restoreSnapshot(batch)}>恢复查看</button></div>)}</section>}
     </div>
   );
 }
