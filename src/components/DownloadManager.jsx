@@ -519,11 +519,17 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   }, [currentSeries, dedupCandidates, dedupJobs, dedupJobsSaving, selectedSeries, showToast]);
 
   // Progress updates change row values, not the established series/episode order.
-  const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [orderVersion, selectedSeries]);
+  // Keep the page index list in sync with task updates. Progress/status events
+  // replace task objects without necessarily changing orderVersion; omitting
+  // scopedTasks here left new downloads invisible until another navigation.
+  const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [scopedTasks, selectedSeries, orderVersion]);
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks]);
   taskIndex.current = taskById;
   const pageCount = Math.max(1, Math.ceil(sortedIds.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
+  useEffect(() => {
+    setPage(previous => Math.min(Math.max(1, previous), pageCount));
+  }, [pageCount]);
   const visibleTasks = sortedIds.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(id => taskById.get(id)).filter(Boolean);
   const visibleTaskIds = visibleTasks.map(task => task.id);
   const allPageSelected = visibleTaskIds.length > 0 && visibleTaskIds.every(id => selected.has(id));
