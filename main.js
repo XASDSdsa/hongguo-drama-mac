@@ -29,6 +29,9 @@ const APP_VERSION = app.getVersion() || '1.0.0';
 const APP_TITLE = '红果短剧';
 
 let mainWindow = null;
+// Window teardown can race with long-running download/transcode tasks.  Once
+// close starts, renderer events are no longer useful and must not be sent.
+let rendererClosing = false;
 let storageError = null;
 store.setErrorHandler?.(payload => {
   storageError = payload;
@@ -1073,8 +1076,22 @@ async function executeHongguoDownload(task) {
 
 // 向渲染进程发送事件
 function sendToRenderer(channel, payload) {
-  if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload);
+  const window = mainWindow;
+  if (rendererClosing || !window) return false;
+  try {
+    if (typeof window.isDestroyed === 'function' && window.isDestroyed()) return false;
+    const contents = window.webContents;
+    if (!contents) return false;
+    if (typeof contents.isDestroyed === 'function' && contents.isDestroyed()) return false;
+    contents.send(channel, payload);
+    return true;
+  } catch (error) {
+    // Electron throws when a close/destroy race wins between the checks above
+    // and webContents.send().  Ignore only that lifecycle error; unexpected
+    // send failures still surface so they are diagnosable.
+    const message = String(error?.message || error || '');
+    if (/object has been destroyed|webcontents.*destroy|render.?frame.*destroy|disposed/i.test(message)) return false;
+    throw error;
   }
 }
 
@@ -4233,6 +4250,7 @@ ipcMain.handle('open-external-url', async (event, url) => {
 
 // ===== 窗口创建 =====
 function createWindow() {
+  rendererClosing = false;
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 750,
@@ -4252,6 +4270,7 @@ function createWindow() {
       sandbox: false,
     },
   });
+  const createdWindow = mainWindow;
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.webContents.once('did-finish-load', () => {
@@ -4266,11 +4285,17 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, 'dist-react', 'index.html'));
   }
 
-  mainWindow.on('closed', () => {
+  createdWindow.on('close', () => {
+    if (mainWindow === createdWindow) rendererClosing = true;
+  });
+
+  createdWindow.on('closed', () => {
+    // Detach the destroyed window before cancelling jobs.  Their finally
+    // handlers may emit a last progress event while the renderer is gone.
+    if (mainWindow === createdWindow) mainWindow = null;
     clearOnlineCache();
     for (const job of compatPreparing.values()) { job.cancelled = true; job.controller.abort(); }
     cancelAllQuchongBatches();
-    mainWindow = null;
   });
 }
 

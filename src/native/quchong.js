@@ -8,8 +8,21 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+
+// Keep the number of FFmpeg processes bounded.  A single x264 process already
+// uses several codec threads, so running one process per CPU core can make the
+// desktop unresponsive.  Two to four concurrent episodes is a good default;
+// users can still change it in the processing screen.
+const CPU_COUNT = typeof os.availableParallelism === 'function'
+  ? os.availableParallelism()
+  : os.cpus().length;
+const DEFAULT_JOBS = Math.max(2, Math.min(4, Math.floor(CPU_COUNT / 2) || 2));
+const PROCESS_IDLE_TIMEOUT_MS = 180_000;
+const HARDWARE_ENCODERS = Object.freeze(['h264_nvenc', 'h264_amf', 'h264_qsv', 'h264_videotoolbox']);
+const ENCODER_PROBE_CACHE = new Map();
 
 const DEFAULTS = Object.freeze({
   crop_ratio: 0.94,
@@ -32,7 +45,7 @@ const DEFAULTS = Object.freeze({
   resolution: '1080x1920',
   encoder: 'auto',
   quality: 'standard',
-  jobs: 1,
+  jobs: DEFAULT_JOBS,
 });
 
 function validateOptions(input = {}) {
@@ -55,7 +68,7 @@ function validateOptions(input = {}) {
     throw new Error('参数下限不能大于上限');
   }
   if (!['1080x1920', '720x1280'].includes(opts.resolution)) throw new Error('分辨率无效');
-  if (!['auto', 'cpu', 'videotoolbox', 'nvenc'].includes(opts.encoder)) throw new Error('编码器无效');
+  if (!['auto', 'cpu', 'videotoolbox', 'nvenc', 'amf', 'qsv'].includes(opts.encoder)) throw new Error('编码器无效');
   if (!['standard', 'lean'].includes(opts.quality)) throw new Error('画质选项无效');
   for (const key of ['vignette', 'black_intro', 'eq_enable']) {
     if (typeof opts[key] !== 'boolean') throw new Error(`参数无效：${key}`);
@@ -76,13 +89,21 @@ function rollParams(opts, random = Math.random) {
   };
 }
 
-function detectEncoder(requested, platform = process.platform) {
+function detectEncoder(requested, platform = process.platform, available = null) {
   if (requested !== 'auto') return requested;
-  return platform === 'darwin' ? 'videotoolbox' : 'cpu';
+  if (platform === 'darwin') return 'videotoolbox';
+  if (platform === 'win32' && Array.isArray(available)) {
+    if (available.includes('h264_nvenc')) return 'nvenc';
+    if (available.includes('h264_amf')) return 'amf';
+    if (available.includes('h264_qsv')) return 'qsv';
+  }
+  return 'cpu';
 }
 
 function encoderArgs(name, lean, width, height) {
   if (name === 'nvenc') return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', lean ? '24' : '21'];
+  if (name === 'amf') return ['-c:v', 'h264_amf', '-quality', lean ? 'speed' : 'balanced'];
+  if (name === 'qsv') return ['-c:v', 'h264_qsv', '-global_quality', lean ? '25' : '21'];
   if (name === 'videotoolbox') {
     let bitrate = Math.max(1500, Math.floor(width * height * 0.00386));
     if (lean) bitrate = Math.floor(bitrate / 2);
@@ -194,6 +215,27 @@ async function probeMedia(ffprobePath, file, signal) {
   };
 }
 
+/**
+ * Return the H.264 hardware encoders advertised by this FFmpeg build.
+ *
+ * FFmpeg can list an encoder even when the machine does not have the matching
+ * device.  The actual encode is still treated as the final capability check;
+ * runJob retries with libx264 when that check fails.  The probe is cached per
+ * FFmpeg path because every episode in a batch uses the same binary.
+ */
+function probeHardwareEncoders(ffmpegPath) {
+  if (ENCODER_PROBE_CACHE.has(ffmpegPath)) return ENCODER_PROBE_CACHE.get(ffmpegPath);
+  const promise = new Promise((resolve) => {
+    execFile(ffmpegPath, ['-hide_banner', '-encoders'], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }, (_error, stdout = '', stderr = '') => {
+      const text = `${stdout}\n${stderr}`;
+      resolve(HARDWARE_ENCODERS.filter((name) => new RegExp(`\\b${name}\\b`).test(text)));
+    });
+  });
+  ENCODER_PROBE_CACHE.set(ffmpegPath, promise);
+  promise.catch(() => ENCODER_PROBE_CACHE.delete(ffmpegPath));
+  return promise;
+}
+
 function tailPush(state, chunk) {
   state.text += chunk.toString('utf8');
   if (state.text.length > 10000) state.text = state.text.slice(-10000);
@@ -204,25 +246,39 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal) {
     const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const errors = { text: '' };
     let output = '';
-    let timer = null;
+    let abortKillTimer = null;
+    let watchdogTimer = null;
+    let watchdogTriggered = false;
     let settled = false;
     const finish = (error) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      if (abortKillTimer) clearTimeout(abortKillTimer);
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       if (signal) signal.removeEventListener('abort', abort);
       error ? reject(error) : resolve();
+    };
+    const touchWatchdog = () => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        if (settled || child.exitCode != null) return;
+        watchdogTriggered = true;
+        child.kill('SIGTERM');
+        abortKillTimer = setTimeout(() => { if (child.exitCode == null) child.kill('SIGKILL'); }, 2000);
+      }, PROCESS_IDLE_TIMEOUT_MS);
     };
     const abort = () => {
       if (child.exitCode != null) return;
       child.kill('SIGTERM');
-      timer = setTimeout(() => { if (child.exitCode == null) child.kill('SIGKILL'); }, 2000);
+      abortKillTimer = setTimeout(() => { if (child.exitCode == null) child.kill('SIGKILL'); }, 2000);
     };
     if (signal) {
       if (signal.aborted) abort();
       else signal.addEventListener('abort', abort, { once: true });
     }
+    touchWatchdog();
     child.stdout.on('data', (chunk) => {
+      touchWatchdog();
       output += chunk.toString('utf8');
       const lines = output.split(/\r?\n/);
       output = lines.pop() || '';
@@ -232,10 +288,11 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal) {
         if (Number.isFinite(value) && duration > 0) onProgress?.(Math.max(0, Math.min(99, value / 1e6 / duration * 100)));
       }
     });
-    child.stderr.on('data', (chunk) => tailPush(errors, chunk));
+    child.stderr.on('data', (chunk) => { touchWatchdog(); tailPush(errors, chunk); });
     child.once('error', (error) => finish(error));
     child.once('close', (code, sig) => {
       if (signal?.aborted) return finish(new Error('已取消'));
+      if (watchdogTriggered) return finish(new Error(`ffmpeg 长时间无输出（超过 ${Math.round(PROCESS_IDLE_TIMEOUT_MS / 1000)} 秒），已自动终止；可能是硬件编码不可用或输入文件异常`));
       if (code !== 0) return finish(new Error(`ffmpeg 退出码 ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}\n${errors.text.slice(-6000)}`));
       finish();
     });
@@ -266,20 +323,38 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
   let rolled;
   try {
     rolled = rollParams(options);
-    let encoder = detectEncoder(options.encoder);
-    let command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
-    onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
-    try {
-      await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal);
-    } catch (error) {
-      if (signal?.aborted) throw new Error('已取消');
-      if (options.encoder !== 'auto' || encoder === 'cpu') throw error;
-      onLog?.(`[重试] 硬编失败，改用 CPU：${error.message}`);
-      try { await fsp.unlink(tmp); } catch (_) {}
-      encoder = 'cpu';
-      command = buildCommand({ src, dst: tmp, bgm, opts: { ...options, encoder }, rolled, media, encoder });
-      await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal);
+    if (signal?.aborted) throw new Error('已取消');
+    const available = options.encoder === 'auto' ? await probeHardwareEncoders(ffmpegPath) : null;
+    const first = detectEncoder(options.encoder, process.platform, available);
+    const candidates = [first];
+    // Windows FFmpeg builds usually advertise all three hardware encoders.
+    // Try them in a deterministic order so a missing NVIDIA device can fall
+    // through to an attached AMD/Intel device before giving up on hardware.
+    if (options.encoder === 'auto' && process.platform === 'win32') {
+      for (const [name, ffmpegName] of [['nvenc', 'h264_nvenc'], ['amf', 'h264_amf'], ['qsv', 'h264_qsv']]) {
+        if (available?.includes(ffmpegName) && !candidates.includes(name)) candidates.push(name);
+      }
     }
+    if (!candidates.includes('cpu')) candidates.push('cpu');
+    let lastError = null;
+    for (let index = 0; index < candidates.length; index += 1) {
+      const encoder = candidates[index];
+      const command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
+      onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
+      try {
+        await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal);
+        lastError = null;
+        break;
+      } catch (error) {
+        if (signal?.aborted) throw new Error('已取消');
+        lastError = error;
+        if (index >= candidates.length - 1) throw error;
+        const next = candidates[index + 1];
+        onLog?.(`[重试] ${encoder} 硬编失败，改用 ${next === 'cpu' ? 'CPU' : next}：${error.message}`);
+        try { await fsp.unlink(tmp); } catch (_) {}
+      }
+    }
+    if (lastError) throw lastError;
     if (signal?.aborted) throw new Error('已取消');
     const result = await probeMedia(ffprobePath, tmp, signal);
     const stat = await fsp.stat(tmp);

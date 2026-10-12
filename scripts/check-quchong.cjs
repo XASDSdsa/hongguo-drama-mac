@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const assert = require('node:assert/strict');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const quchong = require('../src/native/quchong');
@@ -17,6 +18,17 @@ async function makeMedia(file, input, duration, audio = false) {
 }
 
 async function main() {
+  const implementation = await fs.readFile(path.join(__dirname, '..', 'src/native/quchong.js'), 'utf8');
+  assert.match(implementation, /PROCESS_IDLE_TIMEOUT_MS\s*=\s*180_000/);
+  assert.match(implementation, /长时间无输出/);
+  assert.ok(quchong.DEFAULTS.jobs >= 2, `默认并发数过低：${quchong.DEFAULTS.jobs}`);
+  assert.equal(quchong.detectEncoder('auto', 'win32', ['h264_nvenc']), 'nvenc');
+  assert.equal(quchong.detectEncoder('auto', 'win32', ['h264_amf']), 'amf');
+  assert.equal(quchong.detectEncoder('auto', 'win32', ['h264_qsv']), 'qsv');
+  assert.equal(quchong.detectEncoder('auto', 'win32', []), 'cpu');
+  assert.deepEqual(quchong.encoderArgs('nvenc', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_nvenc']);
+  assert.deepEqual(quchong.encoderArgs('amf', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_amf']);
+  assert.deepEqual(quchong.encoderArgs('qsv', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_qsv']);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hongguo-quchong-'));
   try {
     const src = path.join(dir, 'source.mp4');
