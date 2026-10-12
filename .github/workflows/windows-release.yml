@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag to receive the Windows assets
         required: true
-        default: v1.1.20
+        default: v1.1.21
 
 permissions:
   contents: write

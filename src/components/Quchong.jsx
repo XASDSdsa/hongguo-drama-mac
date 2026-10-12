@@ -6,7 +6,7 @@ const fallbackDefaults = {
   crop_ratio: 0.94, speed_min: 1.03, speed_max: 1.05, pitch_min: 1.04, pitch_max: 1.07,
   rotation_max: 0.008, rgb_shift: 2, noise_min: 4, noise_max: 7, contrast: 1.06, saturation: 1.25, hue_range: 12,
   vignette: true, black_intro: true, eq_enable: true, orig_volume: 0.5, bgm_volume: 0.15,
-  resolution: '1080x1920', encoder: 'cpu', quality: 'standard', jobs: 2,
+  resolution: '1080x1920', encoder: 'auto', quality: 'standard', jobs: 2,
 };
 
 function fileName(file) {
@@ -257,7 +257,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
         <div className="qc-card-title"><span>处理参数</span><span className="qc-hint">默认值与本地版一致</span></div>
         <div className="qc-options">
           <label>分辨率<select value={opts.resolution} onChange={(event) => update('resolution', event.target.value)}><option value="1080x1920">1080 × 1920</option><option value="720x1280">720 × 1280</option></select></label>
-          <label>编码器<select value={opts.encoder} onChange={(event) => update('encoder', event.target.value)}><option value="cpu">CPU（Windows 默认）</option><option value="auto">自动（仅 Mac）</option><option value="videotoolbox">VideoToolbox（Mac）</option><option value="nvenc">NVENC（NVIDIA）</option><option value="amf">AMF（AMD）</option><option value="qsv">QSV（Intel）</option></select></label>
+          <label>编码器<select value={opts.encoder} onChange={(event) => update('encoder', event.target.value)}><option value="auto">自动识别一次并固定</option><option value="cpu">CPU/libx264</option><option value="videotoolbox">VideoToolbox（Mac）</option><option value="nvenc">NVENC（NVIDIA）</option><option value="amf">AMF（AMD）</option><option value="qsv">QSV（Intel）</option></select></label>
           <label>画质<select value={opts.quality} onChange={(event) => update('quality', event.target.value)}><option value="standard">标准</option><option value="lean">省空间</option></select></label>
           <label>并发数<input type="number" min="1" max="8" value={opts.jobs} onChange={(event) => update('jobs', Number(event.target.value))} /></label>
           <label>裁剪比例<input type="number" min="0.85" max="1" step="0.01" value={opts.crop_ratio} onChange={(event) => update('crop_ratio', Number(event.target.value))} /></label>

@@ -1840,7 +1840,12 @@ function cancelAllQuchongBatches() {
   }
 }
 
-ipcMain.handle('quchong-defaults', () => ({ ...quchong.DEFAULTS }));
+ipcMain.handle('quchong-defaults', async () => ({
+  ...quchong.DEFAULTS,
+  // Resolve Windows hardware once when the processing screen loads. The
+  // selected encoder is then reused by every task in this app session.
+  encoder: await quchong.resolveEncoder(quchong.DEFAULTS.encoder),
+}));
 
 ipcMain.handle('get-quchong-tasks', () => getQuchongSnapshots());
 

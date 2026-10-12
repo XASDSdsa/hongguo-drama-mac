@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.20"><img alt="版本 1.1.20" src="https://img.shields.io/badge/release-v1.1.20-c8383d?style=flat-square"></a>
+  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.21"><img alt="版本 1.1.21" src="https://img.shields.io/badge/release-v1.1.21-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.20-mac-arm64.dmg`。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.21-mac-arm64.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**v1.1.20 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
+**v1.1.21 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -86,7 +86,9 @@
 
 ## 当前版本与验证范围
 
-[**v1.1.20**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.20) 将 Windows 去重改为固定使用 CPU/libx264，不再自动探测或切换编码器；手动选择 NVENC、AMF、QSV 时只使用所选编码器，失败直接报告。保留并发处理、98% 无输出保护和窗口关闭崩溃修复。
+[**v1.1.21**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.21) Windows 首次启动读取显卡名称并固定编码器：NVIDIA 使用 NVENC、AMD 使用 AMF、Intel 使用 QSV；没有可用硬件时使用 CPU/libx264。任务期间不探测、不切换、不回退，并使用速度优先 preset。
+
+[**v1.1.20**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.20) 将 Windows 去重改为固定使用 CPU/libx264，不再自动探测或切换编码器；手动选择 NVENC、AMF、QSV 时只使用所选编码器，失败直接报告。
 
 [**v1.1.19**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.19) 修复 Windows 去重在窗口关闭时的主进程崩溃与 98% 卡死，并增加硬件编码选项。
 

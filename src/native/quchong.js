@@ -21,7 +21,8 @@ const CPU_COUNT = typeof os.availableParallelism === 'function'
   : os.cpus().length;
 const DEFAULT_JOBS = Math.max(2, Math.min(4, Math.floor(CPU_COUNT / 2) || 2));
 const PROCESS_IDLE_TIMEOUT_MS = 180_000;
-const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : 'cpu';
+const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : process.platform === 'win32' ? 'auto' : 'cpu';
+let windowsAdapterPromise = null;
 
 const DEFAULTS = Object.freeze({
   crop_ratio: 0.94,
@@ -88,24 +89,44 @@ function rollParams(opts, random = Math.random) {
   };
 }
 
-function detectEncoder(requested, platform = process.platform, available = null) {
+function detectEncoder(requested, platform = process.platform, adapters = '') {
   if (requested !== 'auto') return requested;
   if (platform === 'darwin') return 'videotoolbox';
-  // Windows deliberately uses one deterministic encoder. Hardware vendors
-  // expose different FFmpeg backends; selecting one is an explicit user choice.
+  if (platform === 'win32') {
+    const names = Array.isArray(adapters) ? adapters.join('\n') : String(adapters || '');
+    if (/nvidia/i.test(names)) return 'nvenc';
+    if (/(amd|radeon)/i.test(names)) return 'amf';
+    if (/(intel|uhd|iris|arc)/i.test(names)) return 'qsv';
+  }
   return 'cpu';
 }
 
+function readWindowsAdapters() {
+  if (windowsAdapterPromise) return windowsAdapterPromise;
+  windowsAdapterPromise = new Promise((resolve) => {
+    execFile('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      '$ErrorActionPreference="SilentlyContinue"; (Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join "`n"',
+    ], { encoding: 'utf8', timeout: 5000 }, (_error, stdout = '') => resolve(String(stdout)));
+  });
+  return windowsAdapterPromise;
+}
+
+async function resolveEncoder(requested, platform = process.platform) {
+  if (requested !== 'auto' || platform !== 'win32') return detectEncoder(requested, platform);
+  return detectEncoder(requested, platform, await readWindowsAdapters());
+}
+
 function encoderArgs(name, lean, width, height) {
-  if (name === 'nvenc') return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', lean ? '24' : '21'];
-  if (name === 'amf') return ['-c:v', 'h264_amf', '-quality', lean ? 'speed' : 'balanced'];
-  if (name === 'qsv') return ['-c:v', 'h264_qsv', '-global_quality', lean ? '25' : '21'];
+  if (name === 'nvenc') return ['-c:v', 'h264_nvenc', '-preset', 'p1', '-cq', lean ? '24' : '21'];
+  if (name === 'amf') return ['-c:v', 'h264_amf', '-quality', 'speed'];
+  if (name === 'qsv') return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', lean ? '25' : '21'];
   if (name === 'videotoolbox') {
     let bitrate = Math.max(1500, Math.floor(width * height * 0.00386));
     if (lean) bitrate = Math.floor(bitrate / 2);
     return ['-c:v', 'h264_videotoolbox', '-b:v', `${bitrate}k`, '-maxrate', `${Math.floor(bitrate * 1.5)}k`, '-bufsize', `${bitrate * 2}k`];
   }
-  return ['-c:v', 'libx264', '-preset', 'fast', '-crf', lean ? '23' : '20'];
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', lean ? '23' : '20'];
 }
 
 function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) {
@@ -299,7 +320,7 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
   try {
     rolled = rollParams(options);
     if (signal?.aborted) throw new Error('已取消');
-    const encoder = detectEncoder(options.encoder, process.platform);
+    const encoder = await resolveEncoder(options.encoder, process.platform);
     const command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
     onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
     try {
@@ -326,4 +347,4 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
   }
 }
 
-module.exports = { DEFAULTS, validateOptions, rollParams, detectEncoder, encoderArgs, buildCommand, probeMedia, runJob };
+module.exports = { DEFAULTS, validateOptions, rollParams, detectEncoder, resolveEncoder, encoderArgs, buildCommand, probeMedia, runJob };
