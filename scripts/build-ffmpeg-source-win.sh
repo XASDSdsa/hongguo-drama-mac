@@ -74,7 +74,7 @@ cd "$ROOT/build-ffmpeg"
   --extra-version=hongguo-nvenc12.2 \
   --disable-autodetect --disable-shared --enable-static --disable-doc --disable-debug --disable-ffplay \
   --enable-gpl --enable-version3 --enable-libx264 --enable-libvpl --enable-ffnvcodec --enable-nvenc --enable-amf \
-  --enable-d3d11va --enable-dxva2 --enable-zlib --enable-w32threads --disable-pthreads \
+  --enable-d3d11va --enable-dxva2 --enable-zlib --enable-schannel --enable-w32threads --disable-pthreads \
   --pkg-config-flags=--static --extra-cflags="-I$PREFIX/include" \
   --extra-ldflags="-L$PREFIX/lib -static -static-libgcc -static-libstdc++" --extra-libs=-lstdc++ \
   > "$ROOT/logs/ffmpeg-configure.log" 2>&1
@@ -117,7 +117,7 @@ for tool in "$ARTIFACTS/$NAME/bin/ffmpeg.exe" "$ARTIFACTS/$NAME/bin/ffprobe.exe"
   cat "$ROOT/imports.txt" >> "$REPORT"
   while IFS= read -r dep; do
     case "${dep,,}" in
-      kernel32.dll|msvcrt.dll|ucrtbase.dll|advapi32.dll|bcrypt.dll|crypt32.dll|gdi32.dll|ole32.dll|oleaut32.dll|shell32.dll|shlwapi.dll|user32.dll|userenv.dll|ws2_32.dll|secur32.dll|d3d11.dll|dxgi.dll|dxva2.dll|setupapi.dll|version.dll|winmm.dll|imm32.dll|ntdll.dll|api-ms-win-*.dll) ;;
+      kernel32.dll|msvcrt.dll|ucrtbase.dll|advapi32.dll|bcrypt.dll|crypt32.dll|ncrypt.dll|gdi32.dll|ole32.dll|oleaut32.dll|shell32.dll|shlwapi.dll|user32.dll|userenv.dll|ws2_32.dll|secur32.dll|d3d11.dll|dxgi.dll|dxva2.dll|setupapi.dll|version.dll|winmm.dll|imm32.dll|ntdll.dll|psapi.dll|avicap32.dll|msvfw32.dll|api-ms-win-*.dll) ;;
       *) echo "Unexpected non-system dependency: $dep" >&2; exit 1;;
     esac
   done < "$ROOT/imports.txt"
