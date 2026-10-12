@@ -32,6 +32,15 @@ jobs:
       - name: Prepare Windows FFmpeg
         run: node scripts/setup-ffmpeg.js
 
+      - name: Check processing with bundled Windows FFmpeg
+        env:
+          FFMPEG_PATH: ${{ github.workspace }}/build/ffmpeg/ffmpeg.exe
+          FFPROBE_PATH: ${{ github.workspace }}/build/ffmpeg/ffprobe.exe
+        shell: bash
+        run: |
+          "$FFMPEG_PATH" -version
+          node scripts/check-quchong.cjs
+
       - name: Build local whisper.cpp and prepare tiny model
         shell: bash
         run: |
@@ -58,6 +67,7 @@ jobs:
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs
           node scripts/check-quchong-panel.cjs
+          node scripts/check-quchong-queue.cjs
           node scripts/check-renderer-lifecycle.cjs
           node scripts/check-pipeline-gate.cjs
           node scripts/check-whisper-adapter.cjs

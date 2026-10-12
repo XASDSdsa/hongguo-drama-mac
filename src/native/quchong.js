@@ -20,7 +20,6 @@ const CPU_COUNT = typeof os.availableParallelism === 'function'
   ? os.availableParallelism()
   : os.cpus().length;
 const DEFAULT_JOBS = Math.max(2, Math.min(4, Math.floor(CPU_COUNT / 2) || 2));
-const PROCESS_IDLE_TIMEOUT_MS = 180_000;
 const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : process.platform === 'win32' ? 'auto' : 'cpu';
 let windowsAdapterPromise = null;
 
@@ -191,12 +190,17 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
     const separator = source.includes('amix=') ? ',' : '';
     filters.push(`${source}${separator}aformat=channel_layouts=stereo,aresample=async=1[a]`);
   }
-  const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', ...inputs, '-filter_complex', filters.join(';'), '-map', '[v]'];
+  // The info-level mov muxer message is the only reliable start signal for
+  // faststart's second pass; media timestamp progress stops during that pass.
+  const args = ['-hide_banner', '-loglevel', 'info', '-nostdin', '-y', ...inputs, '-filter_complex', filters.join(';'), '-map', '[v]'];
   if (audioOutput) args.push('-map', '[a]', '-shortest');
   args.push('-fps_mode', 'passthrough', '-pix_fmt', 'yuv420p', ...encoderArgs(encoder, opts.quality === 'lean', width, height));
   if (audioOutput) args.push('-c:a', 'aac', '-b:a', '128k');
   args.push('-map_metadata', '-1', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', dst);
-  return { args, rolled: r, duration: (media.duration + Math.max(0, media.video_start - media.audio_start)) / speed + intro };
+  // Audio/container duration can exceed the video. -shortest finishes at the
+  // transformed video end, so the progress denominator must use that stream.
+  const videoDuration = media.video_duration > 0 ? media.video_duration : media.duration;
+  return { args, rolled: r, duration: videoDuration / speed + videoDelay };
 }
 
 function execJson(ffprobePath, args, signal) {
@@ -215,14 +219,18 @@ function execJson(ffprobePath, args, signal) {
 }
 
 async function probeMedia(ffprobePath, file, signal) {
-  const data = await execJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,start_time,width,height:stream_disposition=attached_pic', '-of', 'json', file], signal);
+  const data = await execJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration,start_time:stream=codec_type,start_time,duration,width,height:stream_disposition=attached_pic', '-of', 'json', file], signal);
   const streams = Array.isArray(data.streams) ? data.streams : [];
   const videos = streams.filter((s) => s.codec_type === 'video' && !s.disposition?.attached_pic);
   const audios = streams.filter((s) => s.codec_type === 'audio');
   const start = (list) => Number.isFinite(Number(list[0]?.start_time)) ? Number(list[0].start_time) : 0;
   const duration = Number(data.format?.duration);
+  const streamDuration = Number(videos[0]?.duration);
+  const formatStart = Number(data.format?.start_time) || 0;
   return {
     duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
+    video_duration: Number.isFinite(streamDuration) && streamDuration > 0
+      ? streamDuration : Math.max(0, (duration || 0) - Math.max(0, start(videos) - formatStart)),
     has_video: videos.length > 0,
     has_audio: audios.length > 0,
     video_width: Number(videos[0]?.width) || 0,
@@ -237,31 +245,22 @@ function tailPush(state, chunk) {
   if (state.text.length > 10000) state.text = state.text.slice(-10000);
 }
 
-function runProcess(ffmpegPath, args, duration, onProgress, signal) {
+function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onLog) {
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const errors = { text: '' };
     let output = '';
     let abortKillTimer = null;
-    let watchdogTimer = null;
-    let watchdogTriggered = false;
+    let finalizing = false;
+    let progressBlock = {};
+    let lastProgressLog = null;
     let settled = false;
     const finish = (error) => {
       if (settled) return;
       settled = true;
       if (abortKillTimer) clearTimeout(abortKillTimer);
-      if (watchdogTimer) clearTimeout(watchdogTimer);
       if (signal) signal.removeEventListener('abort', abort);
       error ? reject(error) : resolve();
-    };
-    const touchWatchdog = () => {
-      if (watchdogTimer) clearTimeout(watchdogTimer);
-      watchdogTimer = setTimeout(() => {
-        if (settled || child.exitCode != null) return;
-        watchdogTriggered = true;
-        child.kill('SIGTERM');
-        abortKillTimer = setTimeout(() => { if (child.exitCode == null) child.kill('SIGKILL'); }, 2000);
-      }, PROCESS_IDLE_TIMEOUT_MS);
     };
     const abort = () => {
       if (child.exitCode != null) return;
@@ -272,23 +271,44 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal) {
       if (signal.aborted) abort();
       else signal.addEventListener('abort', abort, { once: true });
     }
-    touchWatchdog();
+    // A quiet process can still be draining an encoder, writing the trailer,
+    // or moving a large MP4's index. Only cancellation or an actual process
+    // failure may end the job; elapsed time and percentages are not failures.
     child.stdout.on('data', (chunk) => {
-      touchWatchdog();
       output += chunk.toString('utf8');
       const lines = output.split(/\r?\n/);
       output = lines.pop() || '';
       for (const line of lines) {
-        if (!line.startsWith('out_time_us=')) continue;
-        const value = Number(line.slice(12));
-        if (Number.isFinite(value) && duration > 0) onProgress?.(Math.max(0, Math.min(99, value / 1e6 / duration * 100)));
+        const separator = line.indexOf('=');
+        if (separator < 0) continue;
+        const key = line.slice(0, separator), value = line.slice(separator + 1);
+        progressBlock[key] = value;
+        if (key === 'progress') {
+          const now = Date.now();
+          if (value === 'end' || lastProgressLog === null || now - lastProgressLog >= 10_000) {
+            onLog?.(`[${value === 'end' ? '进度结束' : '编码进度'}] frame=${progressBlock.frame || 'N/A'} fps=${progressBlock.fps || 'N/A'} out_time=${progressBlock.out_time || 'N/A'} speed=${progressBlock.speed || 'N/A'}`);
+            lastProgressLog = now;
+          }
+          if (value === 'end') onProgress?.(99);
+          progressBlock = {};
+          continue;
+        }
+        if (key !== 'out_time_us') continue;
+        const elapsed = Number(value);
+        if (Number.isFinite(elapsed) && duration > 0) onProgress?.(Math.max(0, Math.min(99, elapsed / 1e6 / duration * 100)));
       }
     });
-    child.stderr.on('data', (chunk) => { touchWatchdog(); tailPush(errors, chunk); });
+    child.stderr.on('data', (chunk) => {
+      tailPush(errors, chunk);
+      if (!finalizing && /Starting second pass: moving the moov atom/i.test(errors.text)) {
+        finalizing = true;
+        onLog?.('[收尾] FFmpeg 正在将 MP4 播放索引移至文件开头');
+        onStage?.('finalizing');
+      }
+    });
     child.once('error', (error) => finish(error));
     child.once('close', (code, sig) => {
       if (signal?.aborted) return finish(new Error('已取消'));
-      if (watchdogTriggered) return finish(new Error(`ffmpeg 长时间无输出（超过 ${Math.round(PROCESS_IDLE_TIMEOUT_MS / 1000)} 秒），已自动终止；可能是硬件编码不可用或输入文件异常`));
       if (code !== 0) return finish(new Error(`ffmpeg 退出码 ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}\n${errors.text.slice(-6000)}`));
       finish();
     });
@@ -303,11 +323,12 @@ async function sameFileOrPath(src, dst) {
   } catch (_) { return false; }
 }
 
-async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, signal, onProgress, onLog }) {
+async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, signal, onProgress, onLog, onStage }) {
   const options = validateOptions(opts);
   if (!path.isAbsolute(src) || !path.isAbsolute(dst)) throw new Error('输入和输出路径必须是绝对路径');
   if (await sameFileOrPath(src, dst)) throw new Error('输入与输出指向同一文件，已拒绝覆盖');
   if (fs.existsSync(dst)) throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
+  onStage?.('probing');
   const media = await probeMedia(ffprobePath, src, signal);
   if (!media.has_video) throw new Error(`输入没有可用视频轨：${src}`);
   if (bgm) {
@@ -323,8 +344,9 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
     const encoder = await resolveEncoder(options.encoder, process.platform);
     const command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
     onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
+    onStage?.('encoding');
     try {
-      await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal);
+      await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
     } catch (error) {
       if (signal?.aborted) throw new Error('已取消');
       if (encoder !== 'cpu') {
@@ -333,10 +355,12 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
       throw error;
     }
     if (signal?.aborted) throw new Error('已取消');
+    onStage?.('validating');
     const result = await probeMedia(ffprobePath, tmp, signal);
     const stat = await fsp.stat(tmp);
     if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
     if (signal?.aborted) throw new Error('已取消');
+    onStage?.('saving');
     try { await fsp.link(tmp, dst); }
     catch (error) { if (error.code === 'EEXIST') throw new Error(`输出已存在，已拒绝覆盖：${dst}`); throw error; }
     onProgress?.(100);

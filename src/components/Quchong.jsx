@@ -16,6 +16,8 @@ function fileName(file) {
 const stageText = {
   queued: '排队中', processing: '处理中', completed: '完成',
   failed: '失败', stopped: '已停止', running: '处理中', pending: '排队中',
+  probing: '读取视频', encoding: '编码中', finalizing: '写入 MP4 索引',
+  validating: '校验输出', saving: '保存文件',
 };
 
 export default function Quchong({ active = true, target = null, onNavigate }) {
@@ -279,7 +281,12 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
       </section>
 
       <div className="qc-footer"><button className="btn btn-primary" onClick={start} disabled={running}><Play size={15} /> 开始处理</button><button className="btn" onClick={cancel} disabled={!running}><Square size={14} /> 停止</button><button className="btn" onClick={() => { setFiles([]); setTasks([]); setLogs([]); setNotice(''); }} disabled={running}><Trash2 size={14} /> 清空</button></div>
-      {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">{completed}/{tasks.length} 完成</span></div>{tasks.map((task) => { const stage = task.stage || task.status; const label = stage === 'processing' || stage === 'running' ? `${Math.round(task.progress || 0)}%` : stageText[stage] || '等待'; return <div className="qc-progress-row" key={task.id}><span title={task.name}>{fileName(task.name)}</span><div className="qc-progress"><i style={{ width: `${task.progress || 0}%` }} /></div><em>{label}</em></div>; })}{logs.length > 0 && <pre className="qc-log">{logs.join('\n')}</pre>}</section>}
+      {(tasks.length > 0 || logs.length > 0) && <section className="qc-card qc-progress-card"><div className="qc-card-title"><span>任务进度</span><span className="qc-hint">{completed}/{tasks.length} 完成</span></div>{tasks.map((task) => {
+        const stage = task.stage || task.status;
+        const encoding = ['encoding', 'processing', 'running'].includes(stage);
+        const label = encoding ? `编码约 ${Math.round(task.progress || 0)}%` : stageText[stage] || '等待';
+        return <div className="qc-progress-row" key={task.id}><span title={task.name}>{fileName(task.name)}</span><div className="qc-progress" role="progressbar" aria-label={task.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={encoding || stage === 'completed' ? task.progress || 0 : undefined} aria-valuetext={label}><i style={{ width: `${task.progress || 0}%` }} /></div><em>{label}</em></div>;
+      })}{logs.length > 0 && <pre className="qc-log">{logs.join('\n')}</pre>}</section>}
       {!!history.length && <section className="qc-card qc-history-card"><div className="qc-card-title"><span>处理任务快照</span><span className="qc-hint">保留最近 {Math.min(history.length, 50)} 批</span></div>{history.slice(0, 12).map((batch) => <div className="qc-history-row" key={batch.id}><div><b>{batch.status === 'completed' ? '已完成' : batch.status === 'stopped' ? '已停止' : batch.status === 'failed' ? '部分失败' : '排队中'}</b><span>{batch.done || 0}/{batch.total || 0} 个视频 · {batch.createdAt ? new Date(batch.createdAt).toLocaleString() : '未知时间'}</span></div><button className="btn btn-sm" onClick={() => restoreSnapshot(batch)}>恢复查看</button></div>)}</section>}
     </div>
   );

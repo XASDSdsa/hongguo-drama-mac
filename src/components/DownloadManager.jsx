@@ -22,6 +22,11 @@ const STATUS_ORDER = {
   completed: 4,
 };
 
+const DEDUP_STAGE_TEXT = {
+  probing: '读取视频', encoding: '编码中', finalizing: '写入 MP4 索引',
+  validating: '校验输出', saving: '保存文件',
+};
+
 function sortTasks(list) {
   const key = task => task.hongguoInfo?.series_id != null ? `series:${task.hongguoInfo.series_id}` : `task:${task.id}`;
   const groups = new Map();
@@ -592,7 +597,8 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
             const runtimeStage = String(runtime?.status || runtime?.stage || '');
             const dedupInProgress = !isDeduped && ['pending', 'queued', 'running', 'processing'].includes(runtimeStage);
             const dedupFailed = !isDeduped && ['failed', 'stopped', 'cancelled'].includes(runtimeStage);
-            const dedupLabel = task.status !== 'completed' ? '等待下载' : isDeduped ? '已去重' : dedupInProgress ? (runtimeStage === 'pending' || runtimeStage === 'queued' ? '等待去重' : '去重中') : dedupFailed ? '去重失败' : '未去重';
+            const dedupLabel = task.status !== 'completed' ? '等待下载' : isDeduped ? '已去重' : dedupInProgress ? (runtimeStage === 'pending' || runtimeStage === 'queued' ? '等待去重' : DEDUP_STAGE_TEXT[runtime?.stage] || '去重中') : dedupFailed ? '去重失败' : '未去重';
+            const showDedupPercent = dedupInProgress && ['encoding', 'processing', 'running'].includes(runtime?.stage || runtimeStage);
             const dedupPct = Math.max(0, Math.min(100, Number(runtime?.progress || 0)));
             return (
               <div key={task.id} className={`dm-task ${isSel ? 'selected' : ''}`} onClick={() => toggleSelect(task.id)}>
@@ -615,11 +621,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
                   </div>
                   <div className={`dm-dedup-status ${isDeduped ? 'is-deduped' : dedupInProgress ? 'is-deduping' : dedupFailed ? 'is-dedup-failed' : 'is-dedup-pending'}`}>
                     <span>去重：{dedupLabel}</span>
-                    {dedupInProgress && <span className="dm-dedup-percent">{dedupPct}%</span>}
                   </div>
-                  {dedupInProgress && <div className="dm-progress dm-dedup-progress" aria-label={`第 ${task.hongguoInfo?.vid_index || ''} 集去重进度`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={dedupPct}>
+                  {dedupInProgress && <div className="dm-progress dm-dedup-progress" aria-label={`第 ${task.hongguoInfo?.vid_index || ''} 集去重进度`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={showDedupPercent ? dedupPct : undefined} aria-valuetext={showDedupPercent ? `编码约 ${dedupPct}%` : dedupLabel}>
                     <div className="dm-progress-bar"><div className="dm-progress-fill" style={{ width: `${dedupPct}%` }} /></div>
-                    <span className="dm-pct">{dedupPct}%</span>
+                    {showDedupPercent && <span className="dm-pct">约 {dedupPct}%</span>}
                   </div>}
                   {(task.status === 'downloading' || task.status === 'pending') && (
                     <div className="dm-progress">

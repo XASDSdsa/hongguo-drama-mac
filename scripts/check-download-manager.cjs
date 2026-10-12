@@ -99,5 +99,24 @@ const openSeries = ui => { const card = ui.find(n => n.props['data-series-key'] 
     assert.ok(ui.text().includes('去重：已去重')); assert.ok(ui.text().includes('去重：去重失败')); ui.unmount();
   });
 
+  await test('finalization remains running without claiming a percent or allowing duplicate submission', async () => {
+    const runtime = { id: 'q1', src: '/videos/第1集.mp4', status: 'running', stage: 'encoding', progress: 98 };
+    const ui = mount({
+      getDownloadTasks: async () => [task(1)], getSeriesList: async () => [{ series_id: 'A', series_title: '示例剧', total: 1 }],
+      getQuchongTasks: async () => [{ id: 'batch-a', tasks: [runtime] }],
+    });
+    await ui.flush(); openSeries(ui); await ui.flush();
+    assert.ok(ui.text().includes('98%'));
+    for (const [stage, label] of [['finalizing', '写入 MP4 索引'], ['validating', '校验输出'], ['saving', '保存文件']]) {
+      ui.emit('onQuchongTask', { batchId: 'batch-a', task: { ...runtime, stage } }); await ui.flush();
+      assert.ok(ui.text().includes(`去重：${label}`));
+      assert.ok(!ui.text().includes('98%'));
+      assert.ok(!ui.text().includes('去重：已去重'));
+      assert.ok(ui.button('去重中 1').props.disabled);
+      assert.ok(ui.find(node => node.props.role === 'progressbar' && node.props['aria-valuenow'] === undefined && node.props['aria-valuetext'] === label));
+    }
+    ui.unmount();
+  });
+
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
 })();

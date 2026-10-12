@@ -1777,6 +1777,12 @@ function pumpQuchongBatch(batch) {
       bgm: batch.bgm,
       opts: batch.opts,
       signal: controller.signal,
+      onStage: (stage) => {
+        task.stage = stage;
+        task.updatedAt = Date.now();
+        emitQuchongTask(batch, task);
+        persistQuchongBatch(batch);
+      },
       onProgress: (progress) => {
         task.progress = progress;
         task.updatedAt = Date.now();

@@ -66,5 +66,20 @@ function mount(api = {}, props = {}) {
     // No implicit claim: only a previously restored/submitted batch is reloaded.
     assert.equal(ui.nodes().filter(node => node.type === 'em').length, 0);
   });
+  await test('real finalization stages replace the estimated encoding percent until completion', async () => {
+    const task = { id: 'task-a', name: 'a.mp4', status: 'running', stage: 'encoding', progress: 98 };
+    const saved = { id: 'batch-a', status: 'running', done: 0, total: 1, tasks: [task] };
+    const ui = mount({ getQuchongTasks: async () => [saved] }); await ui.flush();
+    ui.button('恢复查看').props.onClick(); ui.render();
+    assert.ok(ui.nodes().some(node => node.type === 'em' && node.children[0] === '编码约 98%'));
+    for (const [stage, label] of [['finalizing', '写入 MP4 索引'], ['validating', '校验输出'], ['saving', '保存文件']]) {
+      ui.listeners.onQuchongTask({ batchId: 'batch-a', task: { ...task, stage } }); ui.render();
+      assert.ok(ui.nodes().some(node => node.type === 'em' && node.children[0] === label));
+      assert.ok(ui.nodes().some(node => node.props.role === 'progressbar' && node.props['aria-valuenow'] === undefined && node.props['aria-valuetext'] === label));
+      assert.equal(ui.button('停止').props.disabled, false);
+    }
+    ui.listeners.onQuchongComplete({ batchId: 'batch-a', success: true, tasks: [{ ...task, status: 'completed', stage: 'completed', progress: 100 }] }); ui.render();
+    assert.ok(ui.nodes().some(node => node.type === 'em' && node.children[0] === '完成'));
+  });
   console.log(`Quchong panel: ${passed} passed, ${failed} failed`); process.exitCode = failed ? 1 : 0;
 })();

@@ -4,6 +4,9 @@ const os = require('node:os');
 const assert = require('node:assert/strict');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const quchong = require('../src/native/quchong');
 
 const execFileAsync = promisify(execFile);
@@ -17,10 +20,80 @@ async function makeMedia(file, input, duration, audio = false) {
   await execFileAsync(ffmpeg, args);
 }
 
+async function runJobCase(label, options) {
+  console.log(`RUN ${label}`);
+  const result = await quchong.runJob({ ...options, onStage: (stage) => {
+    console.log(`  ${label}: ${stage}`);
+    options.onStage?.(stage);
+  } });
+  console.log(`PASS ${label}`);
+  return result;
+}
+
+async function checkQuietProcess(implementation) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  const kills = [];
+  child.kill = (signal) => { kills.push(signal); return true; };
+  let now = 0;
+  const timers = new Set();
+  const advance = (ms) => {
+    now += ms;
+    for (const timer of [...timers]) {
+      if (timer.due <= now) { timers.delete(timer); timer.fn(); }
+    }
+  };
+  const context = {
+    require: (name) => name === 'node:child_process' ? { ...require(name), spawn: () => child } : require(name),
+    process, module: { exports: {} }, Date: { now: () => now },
+    setTimeout: (fn, ms) => { const timer = { fn, due: now + ms }; timers.add(timer); return timer; },
+    clearTimeout: (timer) => timers.delete(timer),
+  };
+  vm.runInNewContext(`${implementation}\nmodule.exports.testRunProcess = runProcess;`, context);
+  const stages = [], progress = [], logs = [];
+  let settled = false;
+  const run = context.module.exports.testRunProcess('ffmpeg', [], 100, (value) => progress.push(value), null,
+    (stage) => stages.push(stage), (line) => logs.push(line));
+  run.then(() => { settled = true; }, () => { settled = true; });
+  const sample = 'frame=2352\nfps=23.5\nout_time_us=98000000\nout_time=00:01:38.000000\nspeed=1.5x\nprogress=continue\n';
+  child.stdout.write(sample);
+  child.stdout.write(sample);
+  assert.equal(logs.length, 1, '重复 progress 块不能刷屏日志');
+  assert.match(logs[0], /frame=2352 fps=23.5 out_time=00:01:38.000000 speed=1.5x/);
+  advance(600_000);
+  await Promise.resolve();
+  assert.equal(settled, false, '静默十分钟不能把仍运行的长视频判失败');
+  assert.deepEqual(kills, [], '静默不能触发终止编码');
+  assert.deepEqual(stages, [], '98% 不能被猜测为正在收尾');
+  child.stderr.write('[mp4 @ test] Starting second pass: moving the mo');
+  child.stderr.write('ov atom to the beginning of the file\n');
+  advance(600_000);
+  assert.deepEqual(stages, ['finalizing'], '收尾状态必须来自真实 muxer 日志');
+  assert.deepEqual(kills, [], '大文件 faststart 静默期间不能被终止');
+  child.stdout.write('out_time_us=99900000\nprogress=end\n');
+  await Promise.resolve();
+  assert.equal(settled, false, 'progress=end 不等于进程已成功退出');
+  assert.equal(progress.at(-1), 99, '落盘验证前不能报告 100%');
+  assert.equal(logs.length, 3, '真实faststart和progress=end必须立即记录日志');
+  child.exitCode = 0;
+  child.emit('close', 0, null);
+  await run;
+  assert.equal(settled, true);
+
+  child.exitCode = null;
+  const failed = context.module.exports.testRunProcess('ffmpeg', [], 100, null, null);
+  child.stderr.write('No space left on device\n');
+  child.exitCode = 1;
+  child.emit('close', 1, null);
+  await assert.rejects(failed, /ffmpeg 退出码 1[\s\S]*No space left on device/, '真实错误必须保留退出码和诊断');
+}
+
 async function main() {
   const implementation = await fs.readFile(path.join(__dirname, '..', 'src/native/quchong.js'), 'utf8');
-  assert.match(implementation, /PROCESS_IDLE_TIMEOUT_MS\s*=\s*180_000/);
-  assert.match(implementation, /长时间无输出/);
+  await checkQuietProcess(implementation);
+  console.log('PASS quiet encoding/faststart for simulated 20 minutes; real exit controls completion');
   assert.match(implementation, /未自动切换编码器/);
   assert.doesNotMatch(implementation, /probeHardwareEncoders|const candidates/);
   assert.ok(quchong.DEFAULTS.jobs >= 2, `默认并发数过低：${quchong.DEFAULTS.jobs}`);
@@ -41,23 +114,83 @@ async function main() {
     const audioOnlyOutput = path.join(dir, 'audio-only-output.mp4');
     const silent = path.join(dir, 'silent.mp4');
     const silentOutput = path.join(dir, 'silent-output.mp4');
+    const longAudio = path.join(dir, 'long-audio.mp4');
+    const longAudioOutput = path.join(dir, 'long-audio-output.mp4');
+    const delayedVideo = path.join(dir, 'delayed-video.mp4');
+    const delayedOutput = path.join(dir, 'delayed-output.mp4');
+    const portrait = path.join(dir, 'portrait.mp4');
     await makeMedia(src, 'testsrc2=size=320x180:rate=24', 1.2, true);
     await makeMedia(silent, 'testsrc2=size=320x180:rate=24', 1.2, false);
+    await makeMedia(portrait, 'testsrc2=size=180x320:rate=24', 1.2, true);
     await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=44100', '-t', '2', '-c:a', 'aac', bgm]);
+    await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=1.2', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', longAudio]);
+    await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-itsoffset', '0.5', '-i', src, '-i', src, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', delayedVideo]);
     const opts = {
       ...quchong.DEFAULTS, encoder: 'cpu', quality: 'lean', resolution: '720x1280',
       speed_min: 1, speed_max: 1, pitch_min: 1, pitch_max: 1,
       rotation_max: 0.004, rgb_shift: 0, noise_min: 0, noise_max: 0,
       hue_range: 0, vignette: false, black_intro: false, eq_enable: false,
     };
-    await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst: audioOnlyOutput, opts });
-    await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst, bgm, opts });
+    const stages = [], progress = [];
+    await runJobCase('source audio', { ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst: audioOnlyOutput, opts,
+      onStage: (stage) => stages.push(stage), onProgress: (value) => progress.push(value) });
+    assert.deepEqual(stages, ['probing', 'encoding', 'finalizing', 'validating', 'saving'], '真实编码必须依次进入收尾、验证和保存阶段');
+    assert.equal(progress.at(-1), 100);
+    assert.ok(progress.slice(0, -1).every((value) => value < 100), '文件验证保存前不得完成');
+    await runJobCase('source audio with looping BGM', { ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst, bgm, opts });
     const output = await quchong.probeMedia(ffprobe, dst);
     if (!output.has_video || !output.has_audio) throw new Error('合成输出缺少音视频轨道');
     if (output.video_width !== 720 || output.video_height !== 1280) throw new Error(`输出尺寸错误：${output.video_width}x${output.video_height}`);
-    await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src: silent, dst: silentOutput, bgm, opts });
+    await runJobCase('silent video with looping BGM', { ffmpegPath: ffmpeg, ffprobePath: ffprobe, src: silent, dst: silentOutput, bgm, opts });
     const silentResult = await quchong.probeMedia(ffprobe, silentOutput);
     if (!silentResult.has_video || !silentResult.has_audio) throw new Error('无原音+BGM 输出缺少音频轨道');
+    const longAudioMedia = await quchong.probeMedia(ffprobe, longAudio);
+    assert.ok(longAudioMedia.duration > 3.9 && longAudioMedia.video_duration < 1.3);
+    const command = quchong.buildCommand({ src: longAudio, dst: longAudioOutput, opts, media: longAudioMedia, encoder: 'cpu' });
+    assert.equal(command.duration, longAudioMedia.video_duration, '进度估时不能取更长的音频/容器时长');
+    await runJobCase('short video with longer audio and looping BGM', { ffmpegPath: ffmpeg, ffprobePath: ffprobe, src: longAudio, dst: longAudioOutput, bgm, opts });
+    const longAudioResult = await quchong.probeMedia(ffprobe, longAudioOutput);
+    assert.ok(longAudioResult.duration < 1.7, '长音频与循环 BGM 不能使视频任务无限运行');
+    const shifted = { ...longAudioMedia, has_audio: false, video_start: 5, audio_start: 0 };
+    assert.equal(quchong.buildCommand({ src, dst, opts, media: shifted, encoder: 'cpu' }).duration, shifted.video_duration,
+      '无声视频的非零起始时间已归零，不能重复计入进度时长');
+    const delayedMedia = await quchong.probeMedia(ffprobe, delayedVideo);
+    const delayedCommand = quchong.buildCommand({ src: delayedVideo, dst: delayedOutput, opts, media: delayedMedia, encoder: 'cpu' });
+    assert.ok(delayedMedia.video_start >= 0.49);
+    assert.ok(Math.abs(delayedCommand.duration - delayedMedia.video_duration - 0.5) < 0.02, '有声视频偏移只应累计一次');
+    await runJobCase('video delayed by 0.5 seconds with looping BGM', { ffmpegPath: ffmpeg, ffprobePath: ffprobe, src: delayedVideo, dst: delayedOutput, bgm, opts });
+    const delayedResult = await quchong.probeMedia(ffprobe, delayedOutput);
+    assert.ok(Math.abs(delayedResult.video_duration - delayedCommand.duration) < 0.1, '音画偏移样本输出时长错误');
+    // Exercise exactly the production 1080p defaults, including noise, RGB
+    // shift, rotation, vignette, pitch/EQ and black intro, on concurrent jobs.
+    // The hardware is pinned to CPU so the same test runs on every CI host.
+    const defaultOpts = { ...quchong.DEFAULTS, encoder: 'cpu' };
+    let active = 0, peakActive = 0;
+    const parallel = await Promise.all([0, 1].map(async (index) => {
+      const target = path.join(dir, `default-parallel-${index}.mp4`);
+      const progress = [], stages = [];
+      const result = await runJobCase(`default 1080p filters, parallel job ${index + 1}`, { ffmpegPath: ffmpeg, ffprobePath: ffprobe, src: portrait,
+        dst: target, opts: defaultOpts,
+        onProgress: (value) => progress.push(value),
+        onStage: (stage) => {
+          stages.push(stage);
+          if (stage === 'encoding') { active += 1; peakActive = Math.max(peakActive, active); }
+          if (stage === 'saving') active -= 1;
+        } });
+      const info = await quchong.probeMedia(ffprobe, target);
+      assert.equal(info.video_width, 1080);
+      assert.equal(info.video_height, 1920);
+      assert.equal(info.has_audio, true);
+      assert.equal(progress.at(-1), 100);
+      assert.deepEqual(stages, ['probing', 'encoding', 'finalizing', 'validating', 'saving']);
+      const source = await quchong.probeMedia(ffprobe, portrait);
+      assert.ok(Math.abs(info.video_duration - source.video_duration / result.rolled.SPEED - 0.3) < 0.1,
+        '默认变速+黑片头的输出时长错误');
+      return result;
+    }));
+    assert.equal(peakActive, 2, '默认完整滤镜必须支持两个并行任务');
+    assert.equal(parallel.length, 2);
+    console.log('PASS default 1080p filters with two concurrent jobs');
     try {
       await quchong.runJob({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, src, dst, opts });
       throw new Error('输出覆盖保护失效');

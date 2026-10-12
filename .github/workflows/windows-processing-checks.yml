@@ -1,0 +1,39 @@
+name: Windows processing checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/**']
+    paths:
+      - src/native/quchong.js
+      - scripts/check-quchong.cjs
+      - scripts/setup-ffmpeg.js
+      - .github/workflows/windows-processing-checks.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check-processing:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+
+      - name: Prepare bundled Windows FFmpeg
+        run: node scripts/setup-ffmpeg.js
+
+      # Hosted runners do not expose NVENC, AMF or QSV hardware. These checks
+      # exercise real media, filters, CPU encoding, MP4 output and cancellation.
+      - name: Check processing with bundled Windows FFmpeg
+        env:
+          FFMPEG_PATH: ${{ github.workspace }}/build/ffmpeg/ffmpeg.exe
+          FFPROBE_PATH: ${{ github.workspace }}/build/ffmpeg/ffprobe.exe
+        shell: bash
+        run: |
+          "$FFMPEG_PATH" -version
+          node scripts/check-quchong.cjs
