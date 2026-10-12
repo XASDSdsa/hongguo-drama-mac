@@ -35,7 +35,7 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)。Windows 下载 `hongguo-downloader-1.1.25-Setup.exe`，免安装用同版本的 `portable.exe` 或 `win-x64.zip`。Mac 继续使用已发布的 arm64 `.dmg`。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)。Windows 下载 `hongguo-downloader-1.1.25-Setup.exe`，免安装用同版本的 `portable.exe` 或 `win-x64.zip`。Mac 下载 `hongguo-downloader-1.1.25-mac-arm64.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
@@ -88,7 +88,7 @@
 
 ## 当前版本与验证范围
 
-[**v1.1.25**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.25) 修复 Windows「一键去重」点击没有反应。应用打开时使用 Chromium 已经读到的显卡信息选择 NVIDIA、AMD、Intel 或 CPU 编码器，不再在点击时运行 PowerShell。下载管理的分页与当前任务保持同步。本次只发布 Windows 安装包，继续内置 FFmpeg 9.0.2（NVENC API 12.2）。
+[**v1.1.25**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.25) 同时发布 Windows 安装包和 Mac arm64 DMG。修复 Windows「一键去重」点击没有反应：应用打开时使用 Chromium 已经读到的显卡信息选择 NVIDIA、AMD、Intel 或 CPU 编码器，不再在点击时运行 PowerShell。Mac 仍使用 VideoToolbox。下载管理的分页与当前任务保持同步。Windows 安装包继续内置 FFmpeg 9.0.2（NVENC API 12.2）。
 
 [**v1.1.24**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.24) 修复 Windows NVENC 第一帧编码前失败：此前 Gyan FFmpeg 9.0.2 要求 API 13.1，部分用户驱动仅提供 API 12.2。现从固定源码编译 FFmpeg 9.0.2，固定使用 NVENC 12.2 头文件，保留 9.0.2 的滤镜调度修复和 NVIDIA/AMD/Intel 既定编码器方案，不自动切换编码器。安装脚本校验压缩包和两个程序的 SHA256，防止同版本旧构建混入；失败日志和任务快照显示完整原因，零帧失败不再显示 99% 进度或标记已去重。并发 1～8 路继续支持。Windows/macOS 的实际媒体、双路 1080p 和队列回归由发布工作流验证；CI 没有独立显卡，NVENC、AMF、QSV 的实机验证范围仍有限。
 
