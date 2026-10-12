@@ -6,9 +6,8 @@
  *   clone 仓库后执行一次本脚本，即可把 ffmpeg.exe / ffprobe.exe 放到
  *   build/ffmpeg/，之后 `npm run build` 会通过 extraResources 打进安装包。
  *
- * 若下载失败，也可以自行从 https://www.gyan.dev/ffmpeg/builds/ 下载
- * 9.0.2 essentials 版，把 bin 目录里的 ffmpeg.exe 与 ffprobe.exe 复制到
- * build/ffmpeg/ 即可。
+ * Windows 工具链固定使用 WINDOWS-BUILD.json 中兼容 NVENC API 12.2 的构建。
+ * 同一 FFmpeg 版本的其他构建不能替代它；压缩包和两个程序均校验 SHA256。
  *
  * 用法：node scripts/setup-ffmpeg.js
  */
@@ -20,22 +19,22 @@ const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEST = path.join(ROOT, 'build', 'ffmpeg');
-const ZIP = path.join(ROOT, 'build', 'ffmpeg-essentials.zip');
+const ZIP = path.join(ROOT, 'build', 'ffmpeg-windows.zip');
 const TMP = path.join(ROOT, 'build', '_ffmpeg_tmp');
-const VERSION = '9.0.2';
-const ZIP_SHA256 = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba';
+const BUILD = JSON.parse(fs.readFileSync(path.join(DEST, 'WINDOWS-BUILD.json'), 'utf8'));
 
 const URL =
   // A mirror may serve the same pinned archive, never a different version.
   process.env.FFMPEG_ZIP_URL ||
-  `https://github.com/GyanD/codexffmpeg/releases/download/${VERSION}/ffmpeg-${VERSION}-essentials_build.zip`;
+  BUILD.url;
 
-function hasPinnedVersion(file, name) {
+function hasPinnedBinary(file, name) {
   try {
     if (!fs.existsSync(file) || fs.statSync(file).size <= 1024 * 1024) return false;
+    if (createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== BUILD.binaries[`${name}.exe`]) return false;
     const output = execFileSync(file, ['-version'], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
     const reported = output.match(new RegExp(`^${name} version ([^\\s]+)`))?.[1];
-    return reported?.split('-')[0] === VERSION;
+    return reported === BUILD.buildVersion;
   } catch (_) { return false; }
 }
 
@@ -83,18 +82,18 @@ function download(url, dest, redirects = 0) {
     missing.forEach((f) => console.warn('  - ' + f));
   }
 
-  if (hasPinnedVersion(ffmpegExe, 'ffmpeg') && hasPinnedVersion(ffprobeExe, 'ffprobe')) {
-    console.log(`FFmpeg / FFprobe ${VERSION} 已就绪：${DEST}`);
+  if (hasPinnedBinary(ffmpegExe, 'ffmpeg') && hasPinnedBinary(ffprobeExe, 'ffprobe')) {
+    console.log(`FFmpeg / FFprobe ${BUILD.buildVersion} 已就绪：${DEST}`);
     return;
   }
 
   fs.mkdirSync(DEST, { recursive: true });
   fs.mkdirSync(path.dirname(ZIP), { recursive: true });
 
-  console.log(`正在下载固定版本 FFmpeg ${VERSION} essentials…`);
+  console.log(`正在下载兼容构建 FFmpeg ${BUILD.buildVersion}…`);
   await download(URL, ZIP);
   const digest = createHash('sha256').update(fs.readFileSync(ZIP)).digest('hex');
-  if (digest !== ZIP_SHA256) throw new Error(`FFmpeg ${VERSION} 压缩包 SHA256 校验失败，未替换现有工具`);
+  if (digest !== BUILD.sha256) throw new Error(`FFmpeg ${BUILD.buildVersion} 压缩包 SHA256 校验失败，未替换现有工具`);
   console.log('下载完成：' + (fs.statSync(ZIP).size / 1048576).toFixed(1) + 'MB');
 
   console.log('正在解压…');
@@ -118,12 +117,22 @@ function download(url, dest, redirects = 0) {
   const srcFf = find(TMP, 'ffmpeg.exe');
   const srcFp = find(TMP, 'ffprobe.exe');
   if (!srcFf || !srcFp) throw new Error('压缩包里没找到 ffmpeg.exe / ffprobe.exe');
-  if (!hasPinnedVersion(srcFf, 'ffmpeg') || !hasPinnedVersion(srcFp, 'ffprobe')) {
-    throw new Error(`解压后的 FFmpeg / FFprobe 版本不匹配：需要 ${VERSION}`);
+  if (!hasPinnedBinary(srcFf, 'ffmpeg') || !hasPinnedBinary(srcFp, 'ffprobe')) {
+    throw new Error(`解压后的 FFmpeg / FFprobe 构建或 SHA256 不匹配：需要 ${BUILD.buildVersion}`);
   }
 
   fs.copyFileSync(srcFf, ffmpegExe);
   fs.copyFileSync(srcFp, ffprobeExe);
+  const copyMetadata = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const source = path.join(dir, entry.name);
+      if (entry.isDirectory()) copyMetadata(source);
+      else if (entry.isFile() && (/\.txt$/i.test(entry.name) || entry.name === 'SHA256SUMS')) {
+        fs.copyFileSync(source, path.join(DEST, entry.name));
+      }
+    }
+  };
+  copyMetadata(TMP);
 
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.rmSync(ZIP, { force: true });
@@ -133,6 +142,6 @@ function download(url, dest, redirects = 0) {
   console.log('  ' + ffprobeExe + '  ' + (fs.statSync(ffprobeExe).size / 1048576).toFixed(1) + 'MB');
 })().catch((e) => {
   console.error('失败：' + e.message);
-  console.error(`可手动下载 FFmpeg ${VERSION} essentials 并把 ffmpeg.exe / ffprobe.exe 放进 build/ffmpeg/`);
+  console.error(`请使用 WINDOWS-BUILD.json 指定的兼容构建：${BUILD.url}`);
   process.exit(1);
 });

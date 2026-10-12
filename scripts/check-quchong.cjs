@@ -95,7 +95,7 @@ async function checkQuietProcess(implementation) {
 
 async function checkNvencApiMismatch(implementation) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hongguo-nvenc-api-'));
-  const diagnostics = '[h264_nvenc @ test] Driver does not support the required nvenc API version. Required: 13.1 Found: 12.2\n[h264_nvenc @ test] The minimum required Nvidia driver for nvenc is 570.0 or newer\nConversion failed!\n';
+  const diagnostics = '[h264_nvenc @ test] Driver does not support the required nvenc API version. Required: 13.1 Found: 12.2\n[h264_nvenc @ test] The minimum required Nvidia driver for nvenc is 610.00 or newer\nConversion failed!\n';
   let spawnCount = 0;
   const context = {
     require: name => name === 'node:child_process' ? {

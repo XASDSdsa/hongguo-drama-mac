@@ -11,6 +11,7 @@ build/ffmpeg/*
 !build/ffmpeg/*.txt
 !build/ffmpeg/COPYING.*
 !build/ffmpeg/LICENSE.md
+!build/ffmpeg/WINDOWS-BUILD.json
 
 # 本地 whisper.cpp 二进制和模型（由 setup:whisper 准备，不进入源码仓库）
 build/whisper/

@@ -23,18 +23,18 @@ Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 
 ## 内置可执行程序
 
-### Windows FFmpeg（GPLv3）
+### Windows FFmpeg（GPLv3-or-later）
 
 | 项 | 说明 |
 |---|---|
 | 文件 | `resources/bin/ffmpeg.exe`、`resources/bin/ffprobe.exe` |
-| 版本 | FFmpeg 7.1-essentials_build |
-| 来源 | https://www.gyan.dev/ffmpeg/builds/ |
-| 构建参数 | 含 `--enable-gpl --enable-version3 --enable-libx264 --enable-libx265` |
-| **许可证** | **GNU General Public License v3.0** |
-| 源码 | https://ffmpeg.org/download.html · https://github.com/FFmpeg/FFmpeg |
+| 版本 | FFmpeg 9.0.2-hongguo-nvenc12.2 |
+| 来源 | 本仓库 `scripts/build-ffmpeg-source-win.sh`，固定源码构建 |
+| 构建参数 | 含 `--enable-gpl --enable-version3 --enable-libx264 --enable-libvpl --enable-nvenc --enable-amf` |
+| **许可证** | **GNU General Public License v3.0 or later** |
+| 完整对应源码 | https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/ffmpeg-9.0.2-nvenc12.2 |
 
-用途：为「一键合并」提供分片拼接，为「兼容模式」提供格式转码
+用途：视频去重、分片拼接及「兼容模式」格式转码
 （解决部分电脑无法硬件解码 HEVC 导致的「黑屏有声」）。
 
 随软件分发的许可证全文位于 `resources/bin/`：
@@ -46,6 +46,11 @@ Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 - `FFMPEG-NOTICE.txt` —— 本项目的补充说明与源码获取方式
 
 FFmpeg 是独立的第三方程序，本软件仅通过命令行调用其公开接口，未修改其源码。
+
+静态依赖包括 x264（GPLv2-or-later）、libvpl 2.17.0（MIT）、zlib 1.3.2（zlib 许可）；
+构建时使用 nv-codec-headers n12.2.72.0（MIT）和 AMF 1.5.2 头文件（MIT）。
+各依赖许可证、NVENC 头文件许可、准确版本与构建配置随 Windows 程序附带。
+完整对应源码包同时包含这些依赖和准确构建脚本。libvpl 仅修正旧 MSVC shim 的条件，准确补丁也随源码包附带。未启用 nonfree，PE 导入仅包含 Windows 系统库；硬件编码使用已安装的相应显卡驱动。
 
 ---
 

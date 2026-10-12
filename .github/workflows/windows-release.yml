@@ -4,11 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub release tag to receive the Windows assets
+        description: Git tag to build and publish
         required: true
-        default: v1.1.23
+        default: v1.1.24
+      ffmpeg_run_id:
+        description: Successful Windows NVENC 12.2 FFmpeg build run
+        required: true
+        default: '38249008141'
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -29,8 +34,73 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Prepare Windows FFmpeg
+      - name: Download tested Windows FFmpeg build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-9.0.2-nvenc12.2-win-x64
+          run-id: ${{ inputs.ffmpeg_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/ffmpeg-compat
+
+      - name: Verify and prepare pinned Windows FFmpeg
+        shell: pwsh
         run: |
+          $artifactDir = Join-Path $env:RUNNER_TEMP 'ffmpeg-compat'
+          $archive = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64.zip' -File -Recurse | Select-Object -First 1
+          $source = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64-source.tar.xz' -File -Recurse | Select-Object -First 1
+          $checksums = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64.sha256' -File -Recurse | Select-Object -First 1
+          $report = Get-ChildItem -LiteralPath $artifactDir -Filter 'BUILD-REPORT.txt' -File -Recurse | Select-Object -First 1
+          if (!$archive -or !$source -or !$checksums -or !$report) { throw 'Windows FFmpeg build artifact is incomplete.' }
+          $entries = Get-Content -LiteralPath $checksums.FullName
+          foreach ($file in @($archive, $source)) {
+            $line = $entries | Where-Object { $_ -match ('\s' + [regex]::Escape($file.Name) + '$') } | Select-Object -First 1
+            if (!$line) { throw "Missing archive checksum: $($file.Name)" }
+            $expected = ($line -split '\s+')[0].ToLowerInvariant()
+            $actual = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "SHA256 mismatch: $($file.Name)" }
+          }
+          $reportText = Get-Content -LiteralPath $report.FullName -Raw
+          foreach ($required in @('NVENC API: 12.2', 'NVENCAPI_MAJOR_VERSION 12', 'NVENCAPI_MINOR_VERSION 2', 'h264_nvenc', 'h264_amf', 'h264_qsv')) {
+            if ($reportText -notmatch [regex]::Escape($required)) { throw "Build report does not confirm $required" }
+          }
+          $expanded = Join-Path $env:RUNNER_TEMP 'ffmpeg-expanded'
+          New-Item -ItemType Directory -Path $expanded -Force | Out-Null
+          tar.exe -xf $archive.FullName -C $expanded
+          $ffmpeg = Get-ChildItem -LiteralPath $expanded -Filter 'ffmpeg.exe' -File -Recurse | Select-Object -First 1
+          $ffprobe = Get-ChildItem -LiteralPath $expanded -Filter 'ffprobe.exe' -File -Recurse | Select-Object -First 1
+          if (!$ffmpeg -or !$ffprobe) { throw 'FFmpeg executables are missing from the build archive.' }
+          $innerSums = Join-Path $ffmpeg.Directory.Parent.FullName 'SHA256SUMS'
+          $innerEntries = Get-Content -LiteralPath $innerSums
+          foreach ($item in @(@{ file = $ffmpeg; name = 'bin/ffmpeg.exe' }, @{ file = $ffprobe; name = 'bin/ffprobe.exe' })) {
+            $line = $innerEntries | Where-Object { $_ -match ('\s' + [regex]::Escape($item.name) + '$') } | Select-Object -First 1
+            if (!$line) { throw "Missing executable checksum: $($item.name)" }
+            $expected = ($line -split '\s+')[0].ToLowerInvariant()
+            $actual = (Get-FileHash -LiteralPath $item.file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "Executable SHA256 mismatch: $($item.name)" }
+          }
+          $dest = Join-Path $env:GITHUB_WORKSPACE 'build/ffmpeg'
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          $reported = (& $ffmpeg.FullName -version | Select-Object -First 1)
+          if ($reported -notmatch 'ffmpeg version 9\.0\.2-hongguo-nvenc12\.2(\s|$)') { throw "FFmpeg version is not the pinned NVENC 12.2 build: $reported" }
+          Copy-Item -LiteralPath $ffmpeg.FullName -Destination (Join-Path $dest 'ffmpeg.exe') -Force
+          Copy-Item -LiteralPath $ffprobe.FullName -Destination (Join-Path $dest 'ffprobe.exe') -Force
+          Copy-Item -LiteralPath $innerSums -Destination (Join-Path $dest 'SHA256SUMS') -Force
+          Copy-Item -LiteralPath $report.FullName -Destination (Join-Path $dest 'BUILD-REPORT.txt') -Force
+          Get-ChildItem -LiteralPath $ffmpeg.Directory.Parent.FullName -Filter '*.txt' -File -Recurse | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dest $_.Name) -Force }
+          $sourceList = Get-ChildItem -LiteralPath $ffmpeg.Directory.Parent.FullName -Filter 'SOURCES.txt' -File -Recurse | Select-Object -First 1
+          if ($sourceList) { Copy-Item -LiteralPath $sourceList.FullName -Destination (Join-Path $dest 'SOURCES.txt') -Force }
+          $build = @{
+            version = '9.0.2'
+            buildVersion = '9.0.2-hongguo-nvenc12.2'
+            url = 'https://github.com/XASDSdsa/hongguo-drama-mac/releases/download/ffmpeg-9.0.2-nvenc12.2/ffmpeg-9.0.2-nvenc12.2-win-x64.zip'
+            sha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            binaries = @{
+              'ffmpeg.exe' = (Get-FileHash -LiteralPath $ffmpeg.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              'ffprobe.exe' = (Get-FileHash -LiteralPath $ffprobe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          $json = $build | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText((Join-Path $dest 'WINDOWS-BUILD.json'), $json, [System.Text.UTF8Encoding]::new($false))
           node scripts/check-ffmpeg-setup.cjs
           node scripts/setup-ffmpeg.js
 
@@ -51,7 +121,7 @@ jobs:
           src="$RUNNER_TEMP/whisper.cpp"
           build="$RUNNER_TEMP/whisper-build"
           git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp.git "$src"
-          cmake -S "$src" -B "$build" -A x64 -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake -S "$src" -B "$build" -A x64 -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DGGML_OPENMP=OFF -DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
           cmake --build "$build" --config Release --target whisper-cli
           bin=$(find "$build" -type f -iname whisper-cli.exe | head -n 1)
           test -n "$bin"
@@ -60,6 +130,8 @@ jobs:
           echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  build/whisper/models/ggml-tiny.bin" | sha256sum -c -
           cp "$src/LICENSE" build/whisper/WHISPER-LICENSE.txt
           WHISPER_CPP_BIN="$bin" WHISPER_CPP_MODEL="$PWD/build/whisper/models/ggml-tiny.bin" node scripts/setup-whisper.js
+          build/ffmpeg/ffmpeg.exe -hide_banner -loglevel error -f lavfi -i anullsrc=r=16000:cl=mono -t 1 -c:a pcm_s16le "$RUNNER_TEMP/whisper-smoke.wav"
+          build/whisper/win32-x64/whisper-cli.exe -m build/whisper/models/ggml-tiny.bin -f "$RUNNER_TEMP/whisper-smoke.wav" -ng -t 2 -nt -np -l en
 
       - name: Run Windows-safe checks
         shell: bash
@@ -99,6 +171,41 @@ jobs:
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
           } | Set-Content -Encoding ascii dist/release/hongguo-downloader-${{ inputs.tag }}-windows.sha256
+
+      - name: Publish pinned FFmpeg build and corresponding source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'ffmpeg-9.0.2-nvenc12.2'
+          gh release view $tag --repo '${{ github.repository }}' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            $notes = 'FFmpeg 9.0.2 compiled from the matching sources with NVENC API 12.2. The successful Windows build run verified the bundled encoder set and real processing/concurrency. Corresponding complete sources, build report, licenses and SHA256 are attached. Hosted Windows CI has no physical GPU, so runtime hardware encoding still requires a supported GPU and driver.'
+            gh release create $tag --repo '${{ github.repository }}' --title 'Windows FFmpeg 9.0.2 · NVENC API 12.2' --notes $notes --prerelease --latest=false
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create the pinned FFmpeg release.' }
+          }
+          $compat = Join-Path $env:RUNNER_TEMP 'ffmpeg-compat'
+          $releaseAssets = @(
+            (Get-ChildItem -LiteralPath $compat -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64.zip' -File -Recurse | Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -LiteralPath $compat -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64-source.tar.xz' -File -Recurse | Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -LiteralPath $compat -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64.sha256' -File -Recurse | Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -LiteralPath $compat -Filter 'BUILD-REPORT.txt' -File -Recurse | Select-Object -First 1 -ExpandProperty FullName)
+          )
+          gh release upload $tag @releaseAssets --repo '${{ github.repository }}' --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the pinned FFmpeg build and source.' }
+
+      - name: Create application release if needed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ inputs.tag }}'
+          gh release view $tag --repo '${{ github.repository }}' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            $notes = '修复 Windows NVENC 零帧失败：FFmpeg 9.0.2 固定使用 NVENC API 12.2；修复失败日志和 99% 假进度；支持 1～8 路并发去重；内置 Whisper tiny 模型已完成加载测试。更新请替换完整程序目录，用户任务数据保留。CI 未使用实体显卡，硬件编码仍需在用户电脑验证。'
+            gh release create $tag --repo '${{ github.repository }}' --title '红果短剧下载器 v1.1.24' --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create the application release.' }
+          }
 
       - name: Upload Windows assets to the release
         env:

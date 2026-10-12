@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.23"><img alt="版本 1.1.23" src="https://img.shields.io/badge/release-v1.1.23-c8383d?style=flat-square"></a>
+  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.24"><img alt="版本 1.1.24" src="https://img.shields.io/badge/release-v1.1.24-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.23-mac-arm64.dmg`。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)。Windows 下载 `hongguo-downloader-1.1.24-Setup.exe`，免安装用同版本的 `portable.exe` 或 `win-x64.zip`。Mac 下载该版本的 arm64 `.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**v1.1.23 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
+**v1.1.24 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -50,7 +50,7 @@
 | 管理下载进度 | 在下载管理中查看排队、进行中、完成和失败状态，暂停任务、重试失败项；并发数可在设置中调整。 |
 | 更新剧集总数 | 在下载管理点“更新全部剧集”，逐部读取最新分集目录并显示上次更新时间；只更新信息，不会自动下载。 |
 | 接着上次看 | 内置播放器记录分集和播放位置，支持本地播放、在线播放与自动连播。 |
-| 制作可发布成品 | 进入下载管理点开一部短剧，按页面顶部的“下载 → 去重 → 分组/拼接 → 最终成品 → 发布素材”顺序操作。点击“去重处理本剧”会自动带入当前剧已下载且尚未处理的分集；完成后在同一页按范围或每 N 集生成成品。 |
+| 批量去重已下载视频 | 在下载管理点开短剧，点击视频列表表头的“一键去重”；只处理已下载且未去重的分集，各行实时显示状态与进度。 |
 | 处理本地视频 | “视频处理”仍支持独立文件模式；从某部短剧详情进入时会自动绑定该剧，输出到该剧的处理目录，不覆盖原文件。 |
 | 整理磁盘空间 | 查看文件占用，删除单集或整部剧，清理转码缓存；也可扫描下载目录补登记已有文件。 |
 
@@ -87,6 +87,8 @@
 “漫画”是图文阅读内容，不是视频；需要视频类内容时，请选择“漫剧”。
 
 ## 当前版本与验证范围
+
+[**v1.1.24**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.24) 修复 Windows NVENC 第一帧编码前失败：此前 Gyan FFmpeg 9.0.2 要求 API 13.1，部分用户驱动仅提供 API 12.2。现从固定源码编译 FFmpeg 9.0.2，固定使用 NVENC 12.2 头文件，保留 9.0.2 的滤镜调度修复和 NVIDIA/AMD/Intel 既定编码器方案，不自动切换编码器。安装脚本校验压缩包和两个程序的 SHA256，防止同版本旧构建混入；失败日志和任务快照显示完整原因，零帧失败不再显示 99% 进度或标记已去重。并发 1～8 路继续支持。Windows/macOS 的实际媒体、双路 1080p 和队列回归由发布工作流验证；CI 没有独立显卡，NVENC、AMF、QSV 的实机验证范围仍有限。
 
 [**v1.1.23**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.23) 在下载管理的视频列表表头增加去重并发设置，与视频处理页同步保存并即时生效。显示实际运行和等待数量，支持处理期间追加新下载的视频，防止运行或排队中的视频被重复提交，并修复旧任务快照覆盖新任务进度的问题。
 
@@ -190,6 +192,8 @@ npm run build:mac
 | v1.1.12 DMG | `dist/红果短剧-1.1.12-mac-arm64.dmg` |
 
 ### FFmpeg 的准确对应源码
+
+Windows 包使用 **FFmpeg 9.0.2-hongguo-nvenc12.2**，固定 nv-codec-headers n12.2.72.0，并保留 NVENC、AMF、QSV 和 CPU 编码器。该构建和完整对应源码包位于[固定依赖发行页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/ffmpeg-9.0.2-nvenc12.2)，准确 SHA256 位于 `build/ffmpeg/WINDOWS-BUILD.json`；构建脚本是 `scripts/build-ffmpeg-source-win.sh`。包内附带实际构建报告及依赖许可，静态链接依赖已包含，使用时无需安装 MSYS2。
 
 Mac 包内置的 FFmpeg / FFprobe 基于 **FFmpeg 9.0.2** 与 **x264 `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`** 的未修改源码编译。此构建为 **GPLv3-or-later**，仅静态链接 x264，保留 VideoToolbox，未启用 `nonfree`；动态依赖仅为 macOS 系统库，不依赖使用者的 Homebrew 环境。
 
