@@ -49,6 +49,14 @@ for archive in "$ARCHIVES"/*; do tar -xf "$archive" -C "$SOURCES"; done
 make -C "$SOURCES/nv-codec-headers-n12.2.72.0" PREFIX="$PREFIX" install > "$ROOT/logs/nv-codec-install.log" 2>&1
 mkdir -p "$PREFIX/include/AMF"
 cp -r "$SOURCES/AMF-1.5.2/amf/public/include/core" "$SOURCES/AMF-1.5.2/amf/public/include/components" "$PREFIX/include/AMF/"
+# The legacy MSVC shim must not replace the secure CRT functions provided by MinGW.
+VPL_DEFS="$SOURCES/libvpl-2.17.0/libvpl/src/windows/mfx_dispatcher_defs.h"
+grep -Fxq '#if _MSC_VER < 1400' "$VPL_DEFS"
+cp "$VPL_DEFS" "$ROOT/mfx_dispatcher_defs.h.original"
+sed -i 's/^#if _MSC_VER < 1400$/#if defined(_MSC_VER) \&\& _MSC_VER < 1400/' "$VPL_DEFS"
+diff -u --label a/libvpl/src/windows/mfx_dispatcher_defs.h --label b/libvpl/src/windows/mfx_dispatcher_defs.h \
+  "$ROOT/mfx_dispatcher_defs.h.original" "$VPL_DEFS" > "$ROOT/libvpl-mingw-secure-crt.patch" || [[ $? == 1 ]]
+printf 'libvpl patch: restrict legacy MSVC secure-CRT shims to defined _MSC_VER (build script).\n' >> "$ROOT/SOURCES.txt"
 cmake -S "$SOURCES/libvpl-2.17.0" -B "$ROOT/build-vpl" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF \
@@ -125,7 +133,7 @@ done
 (cd "$ARTIFACTS/$NAME" && sha256sum bin/ffmpeg.exe bin/ffprobe.exe) > "$ARTIFACTS/$NAME/SHA256SUMS"
 cp "$ROOT/SOURCES.txt" "$ARTIFACTS/$NAME/"
 mkdir -p "$ROOT/corresponding-source"
-cp "$SCRIPT" "$ROOT/SOURCES.txt" "$ROOT/corresponding-source/"
+cp "$SCRIPT" "$ROOT/SOURCES.txt" "$ROOT/libvpl-mingw-secure-crt.patch" "$ROOT/corresponding-source/"
 cp "$REPORT" "$ROOT/corresponding-source/BUILD-REPORT.txt"
 cp ffbuild/config.log config.h config_components.h "$ROOT/corresponding-source/"
 cp -r "$ARCHIVES" "$ROOT/corresponding-source/"
