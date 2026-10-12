@@ -25,7 +25,7 @@ async function runJobCase(label, options) {
   const result = await quchong.runJob({ ...options, onStage: (stage) => {
     console.log(`  ${label}: ${stage}`);
     options.onStage?.(stage);
-  } });
+  }, onLog: (line) => { console.log(`  ${label}: ${line}`); options.onLog?.(line); } });
   console.log(`PASS ${label}`);
   return result;
 }
