@@ -31,6 +31,35 @@ const DEDUP_ACTIVE_STATES = new Set(['running', 'processing']);
 const DEDUP_QUEUED_STATES = new Set(['pending', 'queued']);
 const DEDUP_FINISHED_STATES = new Set(['completed']);
 const DEDUP_MAX_CONCURRENCY = 8;
+const VIDEO_PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+const SERIES_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
+
+function PaginationControls({ ariaLabel, page, pageCount, pageSize, pageSizeOptions, onPageChange, onPageSizeChange }) {
+  const [jump, setJump] = useState('');
+  const currentPage = Math.min(Math.max(Number(page) || 1, 1), pageCount);
+  const submitJump = () => {
+    const value = Number.parseInt(jump, 10);
+    if (!Number.isFinite(value)) return;
+    onPageChange(Math.min(Math.max(value, 1), pageCount));
+    setJump('');
+  };
+  return (
+    <nav className="dm-pagination-controls" aria-label={ariaLabel}>
+      <label className="dm-page-size">每页
+        <select aria-label="每页条数" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>
+          {pageSizeOptions.map(value => <option key={value} value={value}>{value} 条</option>)}
+        </select>
+      </label>
+      <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)}>上一页</button>
+      <span>第 {currentPage} / {pageCount} 页</span>
+      <label className="dm-page-jump">跳至
+        <input aria-label="跳转页码" type="number" min="1" max={pageCount} value={jump} placeholder={String(currentPage)} onChange={event => setJump(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') submitJump(); }} />
+      </label>
+      <button className="btn btn-outline btn-sm" onClick={submitJump} disabled={!jump.trim()}>跳转</button>
+      <button className="btn btn-outline btn-sm" disabled={currentPage >= pageCount} onClick={() => onPageChange(currentPage + 1)}>下一页</button>
+    </nav>
+  );
+}
 
 function normalizeDedupJobs(value, fallback = 1) {
   const number = Number(value);
@@ -80,8 +109,6 @@ function fmtBytes(bytes) {
   return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
-const PAGE_SIZE = 100;
-const SERIES_PAGE_SIZE = 30;
 const safePathSegment = value => String(value || '当前短剧').replace(/[\\/:*?"<>|]/g, '_').trim() || '当前短剧';
 
 function DownloadManager({ onNavigate, active = true, target = null }) {
@@ -93,6 +120,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const [seriesRefresh, setSeriesRefresh] = useState({ active: false, done: 0, total: 0 });
   const [selectedSeries, setSelectedSeries] = useState(null);
   const [seriesPage, setSeriesPage] = useState(1);
+  const [seriesPageSize, setSeriesPageSize] = useState(30);
   const [seriesQuery, setSeriesQuery] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [confirmAsk, setConfirmAsk] = useState(null); // 删除确认（可勾选删除本地文件）
@@ -102,6 +130,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const [dedupJobs, setDedupJobs] = useState(null);
   const [dedupJobsSaving, setDedupJobsSaving] = useState(false);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [orderVersion, setOrderVersion] = useState(0);
   const [loadError, setLoadError] = useState('');
   const containerRef = useRef(null);
@@ -125,9 +154,12 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     ? tasks.filter(task => downloadSeriesKey(task) === selectedSeries.key)
     : tasks, [tasks, selectedSeries]);
   const filteredSeries = seriesCards.filter(series => series.title.toLocaleLowerCase().includes(seriesQuery.trim().toLocaleLowerCase()));
-  const seriesPageCount = Math.max(1, Math.ceil(filteredSeries.length / SERIES_PAGE_SIZE));
+  const seriesPageCount = Math.max(1, Math.ceil(filteredSeries.length / seriesPageSize));
   const currentSeriesPage = Math.min(seriesPage, seriesPageCount);
-  const visibleSeries = filteredSeries.slice((currentSeriesPage - 1) * SERIES_PAGE_SIZE, currentSeriesPage * SERIES_PAGE_SIZE);
+  const visibleSeries = filteredSeries.slice((currentSeriesPage - 1) * seriesPageSize, currentSeriesPage * seriesPageSize);
+  useEffect(() => {
+    setSeriesPage(previous => Math.min(Math.max(1, previous), seriesPageCount));
+  }, [seriesPageCount]);
 
   useEffect(() => {
     if (!active || !target?.seriesId || !seriesCards.length) return;
@@ -540,12 +572,12 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [scopedTasks, selectedSeries, orderVersion]);
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks]);
   taskIndex.current = taskById;
-  const pageCount = Math.max(1, Math.ceil(sortedIds.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(sortedIds.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   useEffect(() => {
     setPage(previous => Math.min(Math.max(1, previous), pageCount));
   }, [pageCount]);
-  const visibleTasks = sortedIds.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(id => taskById.get(id)).filter(Boolean);
+  const visibleTasks = sortedIds.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(id => taskById.get(id)).filter(Boolean);
   const visibleTaskIds = visibleTasks.map(task => task.id);
   const allPageSelected = visibleTaskIds.length > 0 && visibleTaskIds.every(id => selected.has(id));
 
@@ -646,13 +678,9 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
           {selected.size > 0 && <button className="btn btn-outline btn-sm" onClick={deleteSelected}>
             <Trash2 size={14} />删除选中
           </button>}
-        <span>共 {scopedTasks.length} 项 · 当前 {(currentPage - 1) * PAGE_SIZE + 1}-{Math.min(currentPage * PAGE_SIZE, scopedTasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
+        <span>共 {scopedTasks.length} 项 · 当前 {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, scopedTasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
         </div>
-        <nav aria-label="下载任务分页">
-          <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
-          <span>第 {currentPage} / {pageCount} 页</span>
-          <button className="btn btn-outline btn-sm" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button>
-        </nav>
+        <PaginationControls ariaLabel="下载任务分页" page={currentPage} pageCount={pageCount} pageSize={pageSize} pageSizeOptions={VIDEO_PAGE_SIZE_OPTIONS} onPageChange={setPage} onPageSizeChange={value => { setPageSize(value); setPage(1); }} />
       </div>}
 
       {!selectedSeries ? (
@@ -690,11 +718,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
               ))}
             </div>
           )}
-          {seriesPageCount > 1 && <nav className="browse-pager" aria-label="短剧分页">
-            <button className="btn btn-outline btn-sm" disabled={currentSeriesPage <= 1} onClick={() => setSeriesPage(currentSeriesPage - 1)}>上一页</button>
-            <span>第 {currentSeriesPage} / {seriesPageCount} 页</span>
-            <button className="btn btn-outline btn-sm" disabled={currentSeriesPage >= seriesPageCount} onClick={() => setSeriesPage(currentSeriesPage + 1)}>下一页</button>
-          </nav>}
+          {filteredSeries.length > 0 && <div className="dm-pagination dm-series-pagination">
+            <span>共 {filteredSeries.length} 部短剧</span>
+            <PaginationControls ariaLabel="短剧分页" page={currentSeriesPage} pageCount={seriesPageCount} pageSize={seriesPageSize} pageSizeOptions={SERIES_PAGE_SIZE_OPTIONS} onPageChange={setSeriesPage} onPageSizeChange={value => { setSeriesPageSize(value); setSeriesPage(1); }} />
+          </div>}
         </>
       ) : scopedTasks.length === 0 ? (
         <div className="dm-empty">
@@ -775,10 +802,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
 
       {selectedSeries && scopedTasks.length > 0 && <div className="dm-pagination dm-pagination-bottom">
         <span>当前第 {currentPage} / {pageCount} 页 · 共 {scopedTasks.length} 项</span>
-        <nav aria-label="下载任务底部分页">
-          <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
-          <button className="btn btn-outline btn-sm" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button>
-        </nav>
+        <PaginationControls ariaLabel="下载任务底部分页" page={currentPage} pageCount={pageCount} pageSize={pageSize} pageSizeOptions={VIDEO_PAGE_SIZE_OPTIONS} onPageChange={setPage} onPageSizeChange={value => { setPageSize(value); setPage(1); }} />
       </div>}
 
       {toast && (

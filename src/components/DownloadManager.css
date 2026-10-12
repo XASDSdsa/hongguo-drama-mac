@@ -373,6 +373,10 @@
 .dm-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .dm-pagination-bottom { margin-top: 8px; border-top: 1px solid var(--border); }
 .dm-pagination nav { display: flex; align-items: center; gap: 10px; }
+.dm-pagination-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dm-page-size, .dm-page-jump { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.dm-page-size select, .dm-page-jump input { height: 30px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font: inherit; padding: 4px 7px; }
+.dm-page-jump input { width: 56px; }
 .dm-container .alert .btn { margin-left: 12px; }
 @media (max-width: 900px) { .dm-header { flex-direction: column; gap: 12px; } .dm-stats { padding-top: 0; } }
 
