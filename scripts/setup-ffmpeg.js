@@ -2,12 +2,12 @@
  * setup-ffmpeg.js —— 打包前置：下载并放置内置 ffmpeg
  *
  * 为什么需要：
- *   一键合并功能依赖 ffmpeg，但它体积较大（约 167MB），不纳入版本管理。
+ *   视频去重、合并与兼容转码依赖 ffmpeg，二进制不纳入版本管理。
  *   clone 仓库后执行一次本脚本，即可把 ffmpeg.exe / ffprobe.exe 放到
  *   build/ffmpeg/，之后 `npm run build` 会通过 extraResources 打进安装包。
  *
  * 若下载失败，也可以自行从 https://www.gyan.dev/ffmpeg/builds/ 下载
- * essentials 版，把 bin 目录里的 ffmpeg.exe 与 ffprobe.exe 复制到
+ * 9.0.2 essentials 版，把 bin 目录里的 ffmpeg.exe 与 ffprobe.exe 复制到
  * build/ffmpeg/ 即可。
  *
  * 用法：node scripts/setup-ffmpeg.js
@@ -15,19 +15,28 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const { createHash } = require('node:crypto');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEST = path.join(ROOT, 'build', 'ffmpeg');
 const ZIP = path.join(ROOT, 'build', 'ffmpeg-essentials.zip');
 const TMP = path.join(ROOT, 'build', '_ffmpeg_tmp');
+const VERSION = '9.0.2';
+const ZIP_SHA256 = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba';
 
 const URL =
+  // A mirror may serve the same pinned archive, never a different version.
   process.env.FFMPEG_ZIP_URL ||
-  'https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip';
+  `https://github.com/GyanD/codexffmpeg/releases/download/${VERSION}/ffmpeg-${VERSION}-essentials_build.zip`;
 
-function exists(p) {
-  try { return fs.existsSync(p) && fs.statSync(p).size > 1024 * 1024; } catch (_) { return false; }
+function hasPinnedVersion(file, name) {
+  try {
+    if (!fs.existsSync(file) || fs.statSync(file).size <= 1024 * 1024) return false;
+    const output = execFileSync(file, ['-version'], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
+    const reported = output.match(new RegExp(`^${name} version ([^\\s]+)`))?.[1];
+    return reported?.split('-')[0] === VERSION;
+  } catch (_) { return false; }
 }
 
 function download(url, dest, redirects = 0) {
@@ -74,16 +83,18 @@ function download(url, dest, redirects = 0) {
     missing.forEach((f) => console.warn('  - ' + f));
   }
 
-  if (exists(ffmpegExe) && exists(ffprobeExe)) {
-    console.log('ffmpeg 已就绪：' + DEST);
+  if (hasPinnedVersion(ffmpegExe, 'ffmpeg') && hasPinnedVersion(ffprobeExe, 'ffprobe')) {
+    console.log(`FFmpeg / FFprobe ${VERSION} 已就绪：${DEST}`);
     return;
   }
 
   fs.mkdirSync(DEST, { recursive: true });
   fs.mkdirSync(path.dirname(ZIP), { recursive: true });
 
-  console.log('正在下载 ffmpeg essentials（约 88MB）…');
+  console.log(`正在下载固定版本 FFmpeg ${VERSION} essentials…`);
   await download(URL, ZIP);
+  const digest = createHash('sha256').update(fs.readFileSync(ZIP)).digest('hex');
+  if (digest !== ZIP_SHA256) throw new Error(`FFmpeg ${VERSION} 压缩包 SHA256 校验失败，未替换现有工具`);
   console.log('下载完成：' + (fs.statSync(ZIP).size / 1048576).toFixed(1) + 'MB');
 
   console.log('正在解压…');
@@ -107,6 +118,9 @@ function download(url, dest, redirects = 0) {
   const srcFf = find(TMP, 'ffmpeg.exe');
   const srcFp = find(TMP, 'ffprobe.exe');
   if (!srcFf || !srcFp) throw new Error('压缩包里没找到 ffmpeg.exe / ffprobe.exe');
+  if (!hasPinnedVersion(srcFf, 'ffmpeg') || !hasPinnedVersion(srcFp, 'ffprobe')) {
+    throw new Error(`解压后的 FFmpeg / FFprobe 版本不匹配：需要 ${VERSION}`);
+  }
 
   fs.copyFileSync(srcFf, ffmpegExe);
   fs.copyFileSync(srcFp, ffprobeExe);
@@ -119,6 +133,6 @@ function download(url, dest, redirects = 0) {
   console.log('  ' + ffprobeExe + '  ' + (fs.statSync(ffprobeExe).size / 1048576).toFixed(1) + 'MB');
 })().catch((e) => {
   console.error('失败：' + e.message);
-  console.error('可手动下载 ffmpeg essentials 并把 ffmpeg.exe / ffprobe.exe 放进 build/ffmpeg/');
+  console.error(`可手动下载 FFmpeg ${VERSION} essentials 并把 ffmpeg.exe / ffprobe.exe 放进 build/ffmpeg/`);
   process.exit(1);
 });

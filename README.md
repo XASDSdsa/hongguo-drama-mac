@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.21"><img alt="版本 1.1.21" src="https://img.shields.io/badge/release-v1.1.21-c8383d?style=flat-square"></a>
+  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.22"><img alt="版本 1.1.22" src="https://img.shields.io/badge/release-v1.1.22-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.21-mac-arm64.dmg`。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `hongguo-downloader-1.1.22-mac-arm64.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**v1.1.21 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
+**v1.1.22 本次构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -86,11 +86,15 @@
 
 ## 当前版本与验证范围
 
+[**v1.1.22**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.22) 撤掉按静默时长终止去重的规则。编码、写入 MP4 索引、校验和保存按真实事件显示；只有成功退出、校验并保存后才标记已去重。进度以视频流时长估算，日志记录实际帧数、速度与媒体时间。Windows 内置 FFmpeg 从 7.1 升至固定 9.0.2，包含 [apad 滤镜源调度修复](https://ffmpeg.org/pipermail/ffmpeg-cvslog/2024-October/145933.html)，保留既定显卡编码器选择和并发设置。真实媒体回归覆盖循环 BGM、长音频、音画偏移、默认 1080p 完整滤镜及两个并行任务；CI 不具备用户的 NVIDIA、AMD、Intel 显卡，硬件编码仍需对应设备实测。
+
+Windows 对照验证：[原 7.1 在 1.2 秒样本停留编码阶段](https://github.com/XASDSdsa/hongguo-drama-mac/actions/runs/38192507710)，手动停止诊断作业后取得日志；[9.0.2 完整回归通过](https://github.com/XASDSdsa/hongguo-drama-mac/actions/runs/38192936147/job/114629384346)。对照中的 7.1.1 能结束原挂点，但未通过偏移轨时长检查，因此发行包固定使用 9.0.2。
+
 [**v1.1.21**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.21) Windows 首次启动读取显卡名称并固定编码器：NVIDIA 使用 NVENC、AMD 使用 AMF、Intel 使用 QSV；没有可用硬件时使用 CPU/libx264。任务期间不探测、不切换、不回退，并使用速度优先 preset。
 
 [**v1.1.20**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.20) 将 Windows 去重改为固定使用 CPU/libx264，不再自动探测或切换编码器；手动选择 NVENC、AMF、QSV 时只使用所选编码器，失败直接报告。
 
-[**v1.1.19**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.19) 修复 Windows 去重在窗口关闭时的主进程崩溃与 98% 卡死，并增加硬件编码选项。
+[**v1.1.19**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.19) 修复 Windows 去重在窗口关闭时的主进程崩溃，并增加硬件编码选项。该版本曾加入 180 秒无输出终止规则；它不能证明或解决原始 98% 卡住原因，现已撤除。
 
 [**v1.1.18**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.18) 简化下载管理：移除剧集页的 AI 素材、合并、启动、暂停、重试和更多操作入口；视频列表表头提供一键去重，每个视频显示独立的去重状态和实时进度。原始下载和去重输出继续分目录保存。
 

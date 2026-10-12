@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag to receive the Windows assets
         required: true
-        default: v1.1.21
+        default: v1.1.22
 
 permissions:
   contents: write
@@ -30,7 +30,9 @@ jobs:
         run: npm ci
 
       - name: Prepare Windows FFmpeg
-        run: node scripts/setup-ffmpeg.js
+        run: |
+          node scripts/check-ffmpeg-setup.cjs
+          node scripts/setup-ffmpeg.js
 
       - name: Check processing with bundled Windows FFmpeg
         env:

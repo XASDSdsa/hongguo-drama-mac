@@ -2,15 +2,16 @@ FFmpeg —— 第三方组件许可说明
 ================================
 
 本目录下的 ffmpeg.exe 与 ffprobe.exe 是随本软件一起分发的第三方程序，
-用于「一键合并」的分片拼接与「兼容模式」的格式转码。
+用于视频去重处理、分片拼接与兼容格式转码。
 
 构建信息
 --------
-版本       : FFmpeg 7.1-essentials_build
-来源       : https://www.gyan.dev/ffmpeg/builds/
-官方源码   : https://ffmpeg.org/download.html
-             https://github.com/FFmpeg/FFmpeg
-版权       : Copyright (c) 2000-2024 the FFmpeg developers
+版本       : FFmpeg 9.0.2-essentials_build
+来源       : https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2
+下载       : https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip
+ZIP SHA256 : 60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba
+官方源码   : https://github.com/FFmpeg/FFmpeg/commit/946fcce07b
+版权       : Copyright (c) 2000-2026 the FFmpeg developers
 
 许可证
 ------
@@ -28,8 +29,8 @@ FFmpeg —— 第三方组件许可说明
 ------------
 GPLv3 要求分发二进制时提供对应的完整源码。FFmpeg 的源码可从以下地址免费获取：
 
-  https://ffmpeg.org/download.html
-  https://github.com/FFmpeg/FFmpeg
+  https://github.com/FFmpeg/FFmpeg/tree/946fcce07b
+  https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
 
 如需与本软件所附带二进制完全对应的源码，可联系本软件的分发者索取，
 或按照 gyan.dev 公布的构建配置自行编译：
