@@ -54,9 +54,10 @@ cmake -S "$SOURCES/libvpl-2.17.0" -B "$ROOT/build-vpl" -G Ninja \
 cmake --build "$ROOT/build-vpl" --parallel "$JOBS" > "$ROOT/logs/vpl-build.log" 2>&1
 cmake --install "$ROOT/build-vpl" > "$ROOT/logs/vpl-install.log" 2>&1
 cmake -S "$SOURCES/zlib-1.3.2" -B "$ROOT/build-zlib" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF \
   > "$ROOT/logs/zlib-configure.log" 2>&1
 cmake --build "$ROOT/build-zlib" --target zlibstatic --parallel "$JOBS" > "$ROOT/logs/zlib-build.log" 2>&1
-cp "$ROOT/build-zlib/libzlibstatic.a" "$PREFIX/lib/libz.a"
+cp "$ROOT/build-zlib/libzs.a" "$PREFIX/lib/libz.a"
 cp "$SOURCES/zlib-1.3.2/zlib.h" "$ROOT/build-zlib/zconf.h" "$PREFIX/include/"
 mkdir -p "$ROOT/build-x264" "$ROOT/build-ffmpeg"
 cd "$ROOT/build-x264"
