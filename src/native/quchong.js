@@ -21,7 +21,8 @@ const CPU_COUNT = typeof os.availableParallelism === 'function'
   : os.cpus().length;
 const DEFAULT_JOBS = Math.max(2, Math.min(4, Math.floor(CPU_COUNT / 2) || 2));
 const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : process.platform === 'win32' ? 'auto' : 'cpu';
-let windowsAdapterPromise = null;
+let windowsAdapters = '';
+let windowsGpuReady = false;
 
 const DEFAULTS = Object.freeze({
   crop_ratio: 0.94,
@@ -100,20 +101,16 @@ function detectEncoder(requested, platform = process.platform, adapters = '') {
   return 'cpu';
 }
 
-function readWindowsAdapters() {
-  if (windowsAdapterPromise) return windowsAdapterPromise;
-  windowsAdapterPromise = new Promise((resolve) => {
-    execFile('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      '$ErrorActionPreference="SilentlyContinue"; (Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join "`n"',
-    ], { encoding: 'utf8', timeout: 5000 }, (_error, stdout = '') => resolve(String(stdout)));
-  });
-  return windowsAdapterPromise;
+function setWindowsAdapters(adapters) {
+  windowsAdapters = Array.isArray(adapters) ? adapters.filter(Boolean).join('\n') : String(adapters || '');
+  windowsGpuReady = true;
 }
 
-async function resolveEncoder(requested, platform = process.platform) {
+function resolveEncoder(requested, platform = process.platform) {
   if (requested !== 'auto' || platform !== 'win32') return detectEncoder(requested, platform);
-  return detectEncoder(requested, platform, await readWindowsAdapters());
+  // 显卡名单由应用启动时写入。名单还没到时保持 auto，开始编码时再读缓存。
+  if (!windowsGpuReady) return 'auto';
+  return detectEncoder(requested, platform, windowsAdapters);
 }
 
 function encoderArgs(name, lean, width, height) {
@@ -376,4 +373,4 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
   }
 }
 
-module.exports = { DEFAULTS, validateOptions, rollParams, detectEncoder, resolveEncoder, encoderArgs, buildCommand, probeMedia, runJob };
+module.exports = { DEFAULTS, validateOptions, rollParams, detectEncoder, resolveEncoder, setWindowsAdapters, encoderArgs, buildCommand, probeMedia, runJob };

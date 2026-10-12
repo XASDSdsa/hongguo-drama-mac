@@ -271,5 +271,21 @@ const openSeries = ui => { const card = ui.find(n => n.props['data-series-key'] 
     ui.unmount();
   });
 
+  await test('windows path case and separators still match dedup state', async () => {
+    let payload;
+    const ui = mount({
+      getDownloadTasks: async () => [task(1, 'completed', { savePath: 'C:\\Videos\\第1集.mp4' }), task(2, 'completed', { savePath: 'C:/Videos/第2集.mp4' })],
+      getSeriesList: async () => [{ series_id: 'A', series_title: '示例剧', total: 2 }],
+      getQuchongTasks: async () => [{ id: 'batch-old', tasks: [{ id: 'q1', src: 'c:/videos/第1集.mp4', status: 'completed', stage: 'completed' }] }],
+      quchongStart: async value => { payload = value; return { success: true, batchId: 'batch-win', tasks: [{ id: 'q2', src: 'C:\\Videos\\第2集.mp4', status: 'pending' }] }; },
+    });
+    await ui.flush(); openSeries(ui); await ui.flush();
+    assert.ok(ui.text().includes('去重：已去重'));
+    await ui.button('一键去重').props.onClick(); await ui.flush();
+    assert.deepEqual(payload.sources, ['C:/Videos/第2集.mp4']);
+    assert.ok(ui.text().includes('去重：等待去重'));
+    ui.unmount();
+  });
+
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
 })();

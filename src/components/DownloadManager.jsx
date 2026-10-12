@@ -42,6 +42,11 @@ function dedupRuntimeState(task) {
   return String(task?.status || task?.stage || '').toLowerCase();
 }
 
+function dedupPathKey(value) {
+  const text = String(value || '').replace(/\\/g, '/').trim();
+  return text ? text.replace(/^([a-zA-Z]):/, (_, letter) => `${letter.toUpperCase()}:`).toLowerCase() : '';
+}
+
 function sortTasks(list) {
   const key = task => task.hongguoInfo?.series_id != null ? `series:${task.hongguoInfo.series_id}` : `task:${task.id}`;
   const groups = new Map();
@@ -166,15 +171,17 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
       try {
         const snapshots = await window.electronAPI.getQuchongTasks();
         if (!alive || !Array.isArray(snapshots)) return;
-        const paths = new Set(scopedTasks.map(task => task.savePath || task.path).filter(Boolean));
+        const paths = new Set(scopedTasks.map(task => dedupPathKey(task.savePath || task.path)).filter(Boolean));
         const next = {};
         // 后端已按批次创建时间倒序返回，同一源保留最新批次。
         snapshots.forEach(batch => (batch.tasks || []).forEach(task => {
-          if (task.src && paths.has(task.src) && !next[task.src]) next[task.src] = { ...task, batchId: batch.id };
+          const key = dedupPathKey(task.src);
+          if (key && paths.has(key) && !next[key]) next[key] = { ...task, batchId: batch.id };
         }));
         setDedupRuntime(previous => {
           for (const [src, task] of Object.entries(previous)) {
-            if (paths.has(src) && (!next[src] || (Number(task.updatedAt) || 0) > (Number(next[src].updatedAt) || 0))) next[src] = task;
+            const key = dedupPathKey(src);
+            if (paths.has(key) && (!next[key] || (Number(task.updatedAt) || 0) > (Number(next[key].updatedAt) || 0))) next[key] = task;
           }
           return next;
         });
@@ -188,6 +195,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     if (!active) return undefined;
     let alive = true;
     setDedupJobs(null);
+    dedupJobsRef.current = null;
     const applyJobs = value => {
       if (!alive) return;
       const jobs = normalizeDedupJobs(value, dedupJobsRef.current);
@@ -197,7 +205,9 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     const revision = dedupJobsRevision.current;
     Promise.resolve(window.electronAPI.quchongDefaults?.()).then(defaults => {
       if (revision === dedupJobsRevision.current) applyJobs(defaults?.jobs);
-    }).catch(() => {});
+    }).catch(() => {
+      if (revision === dedupJobsRevision.current && dedupJobsRef.current == null) applyJobs(2);
+    });
     const off = typeof window.electronAPI.onQuchongConcurrencyChanged === 'function'
       ? window.electronAPI.onQuchongConcurrencyChanged(data => { dedupJobsRevision.current++; applyJobs(data?.jobs); })
       : undefined;
@@ -329,8 +339,9 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
         schedule();
       }),
       ...(typeof window.electronAPI.onQuchongTask === 'function' ? [window.electronAPI.onQuchongTask((data) => {
-        if (!data?.task?.src) return;
-        setDedupRuntime(previous => ({ ...previous, [data.task.src]: { ...data.task, updatedAt: data.task.updatedAt || Date.now(), batchId: data.batchId } }));
+        const key = dedupPathKey(data?.task?.src);
+        if (!key) return;
+        setDedupRuntime(previous => ({ ...previous, [key]: { ...data.task, updatedAt: data.task.updatedAt || Date.now(), batchId: data.batchId } }));
       })] : []),
       ...(typeof window.electronAPI.onQuchongProgress === 'function' ? [window.electronAPI.onQuchongProgress((data) => {
         if (!data?.taskId) return;
@@ -436,20 +447,22 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const dedupCandidates = useMemo(() => {
     const seen = new Set();
     return scopedTasks.filter((task) => {
-      if (task.status !== 'completed' || !task.savePath) return false;
+      const sourcePath = task.savePath || task.path;
+      const key = dedupPathKey(sourcePath);
+      if (task.status !== 'completed' || !key) return false;
       const index = Number(task.hongguoInfo?.vid_index);
       const record = pipelineEpisodeMap.get(index);
       if (record?.deduped || ['deduped', 'segmented', 'ready'].includes(String(record?.status || ''))) return false;
-      const runtime = dedupRuntime[task.savePath];
+      const runtime = dedupRuntime[key];
       const state = dedupRuntimeState(runtime);
-      if (seen.has(task.savePath) || (runtime && (
+      if (seen.has(key) || (runtime && (
         DEDUP_ACTIVE_STATES.has(state) || DEDUP_QUEUED_STATES.has(state) || DEDUP_FINISHED_STATES.has(state)
       ))) return false;
-      seen.add(task.savePath);
+      seen.add(key);
       return true;
     });
   }, [scopedTasks, pipelineEpisodeMap, dedupRuntime]);
-  const dedupSourcePaths = useMemo(() => new Set(scopedTasks.map(task => task.savePath).filter(Boolean)), [scopedTasks]);
+  const dedupSourcePaths = useMemo(() => new Set(scopedTasks.map(task => dedupPathKey(task.savePath || task.path)).filter(Boolean)), [scopedTasks]);
   const dedupRunningCount = useMemo(() => Object.entries(dedupRuntime).filter(([src, task]) =>
     dedupSourcePaths.has(src) && DEDUP_ACTIVE_STATES.has(dedupRuntimeState(task))).length, [dedupSourcePaths, dedupRuntime]);
   const dedupQueuedCount = useMemo(() => Object.entries(dedupRuntime).filter(([src, task]) =>
@@ -491,7 +504,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
       const seriesTitle = currentSeries?.title || selectedSeries.title || '当前短剧';
       const outputDir = `${root}/红果短剧/处理后/${safePathSegment(seriesTitle)}`;
       const result = await window.electronAPI.quchongStart({
-        sources: dedupCandidates.map(task => task.savePath),
+        sources: dedupCandidates.map(task => task.savePath || task.path),
         outputDir,
         bgm: null,
         opts: { ...(defaults || {}), jobs: dedupJobsRef.current },
@@ -502,8 +515,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
       setDedupRuntime(previous => {
         const next = { ...previous };
         for (const task of result.tasks || []) {
-          const live = previous[task.src];
-          next[task.src] = live?.id === task.id && !DEDUP_QUEUED_STATES.has(dedupRuntimeState(live))
+          const key = dedupPathKey(task.src);
+          if (!key) continue;
+          const live = previous[key];
+          next[key] = live?.id === task.id && !DEDUP_QUEUED_STATES.has(dedupRuntimeState(live))
             ? live : { ...task, batchId: result.batchId };
         }
         return next;
@@ -519,11 +534,17 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   }, [currentSeries, dedupCandidates, dedupJobs, dedupJobsSaving, selectedSeries, showToast]);
 
   // Progress updates change row values, not the established series/episode order.
-  const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [orderVersion, selectedSeries]);
+  // Keep the page index list in sync with task updates. Progress/status events
+  // replace task objects without necessarily changing orderVersion; omitting
+  // scopedTasks here left new downloads invisible until another navigation.
+  const sortedIds = useMemo(() => selectedSeries ? sortTasks(scopedTasks).map(task => task.id) : [], [scopedTasks, selectedSeries, orderVersion]);
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks]);
   taskIndex.current = taskById;
   const pageCount = Math.max(1, Math.ceil(sortedIds.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
+  useEffect(() => {
+    setPage(previous => Math.min(Math.max(1, previous), pageCount));
+  }, [pageCount]);
   const visibleTasks = sortedIds.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(id => taskById.get(id)).filter(Boolean);
   const visibleTaskIds = visibleTasks.map(task => task.id);
   const allPageSelected = visibleTaskIds.length > 0 && visibleTaskIds.every(id => selected.has(id));
@@ -574,7 +595,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
               {Array.from({ length: DEDUP_MAX_CONCURRENCY }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
-          <button className="btn btn-primary btn-sm" onClick={startDedup} disabled={dedupStarting || dedupJobs == null || dedupJobsSaving || dedupCandidates.length === 0} title="处理本剧所有已下载但尚未去重的视频">{dedupStarting ? '提交中…' : '一键去重'}</button>
+          <button className="btn btn-primary btn-sm" onClick={startDedup} disabled={dedupStarting || dedupJobs == null || dedupJobsSaving || dedupCandidates.length === 0} title={dedupJobs == null ? '正在读取去重设置，请稍候' : dedupCandidates.length === 0 ? '当前没有待去重的视频' : '处理本剧所有已下载但尚未去重的视频'}>{dedupStarting ? '提交中…' : '一键去重'}</button>
         </div>
       </div>}
       {!selectedSeries && <div className="dm-toolbar">
@@ -689,7 +710,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
             const pct = task.progress || 0;
             const sourcePath = task.savePath || task.path;
             const episodeRecord = pipelineEpisodeMap.get(Number(task.hongguoInfo?.vid_index));
-            const runtime = sourcePath ? dedupRuntime[sourcePath] : null;
+            const runtime = sourcePath ? dedupRuntime[dedupPathKey(sourcePath)] : null;
             const isDeduped = episodeRecord?.deduped || ['deduped', 'segmented', 'ready'].includes(String(episodeRecord?.status || '')) || runtime?.status === 'completed' || runtime?.stage === 'completed';
             const runtimeStage = String(runtime?.status || runtime?.stage || '');
             const dedupInProgress = !isDeduped && ['pending', 'queued', 'running', 'processing'].includes(runtimeStage);

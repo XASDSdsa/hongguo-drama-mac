@@ -150,6 +150,12 @@ async function main() {
   assert.equal(quchong.detectEncoder('auto', 'win32', 'Intel(R) UHD Graphics'), 'qsv');
   assert.equal(quchong.detectEncoder('auto', 'darwin'), 'videotoolbox');
   assert.equal(quchong.detectEncoder('auto', 'win32', []), 'cpu');
+  quchong.setWindowsAdapters(['NVIDIA', 'Intel']);
+  assert.equal(quchong.resolveEncoder('auto', 'win32'), 'nvenc');
+  quchong.setWindowsAdapters(['AMD']);
+  assert.equal(quchong.resolveEncoder('auto', 'win32'), 'amf');
+  quchong.setWindowsAdapters([]);
+  assert.equal(quchong.resolveEncoder('auto', 'win32'), 'cpu');
   assert.equal(quchong.DEFAULTS.encoder, process.platform === 'darwin' ? 'videotoolbox' : process.platform === 'win32' ? 'auto' : 'cpu');
   assert.deepEqual(quchong.encoderArgs('nvenc', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_nvenc']);
   assert.deepEqual(quchong.encoderArgs('amf', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_amf']);

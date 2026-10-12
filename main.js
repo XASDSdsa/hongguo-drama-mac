@@ -1853,12 +1853,11 @@ function cancelAllQuchongBatches() {
   }
 }
 
-ipcMain.handle('quchong-defaults', async () => ({
+ipcMain.handle('quchong-defaults', () => ({
   ...quchong.DEFAULTS,
   jobs: getCurrentSettings().quchong_jobs,
-  // Resolve Windows hardware once when the processing screen loads. The
-  // selected encoder is then reused by every task in this app session.
-  encoder: await quchong.resolveEncoder(quchong.DEFAULTS.encoder),
+  // 编码器在应用启动时已经从 Chromium 的显卡信息里选定，这里只读缓存。
+  encoder: quchong.resolveEncoder(quchong.DEFAULTS.encoder),
 }));
 
 // 下载管理与视频处理页使用同一个去重并发设置；修改后立即填充空闲槽位。
@@ -4409,8 +4408,40 @@ app.whenReady().then(async () => {
       ] },
     ]));
   }
+  await rememberWindowsEncoder();
   createWindow();
 });
+
+function gpuAdapterNames(info) {
+  const devices = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+  const names = [];
+  for (const device of devices) {
+    const vendor = Number(device?.vendorId);
+    if (vendor === 0x10de) names.push('NVIDIA');
+    else if (vendor === 0x1002) names.push('AMD');
+    else if (vendor === 0x8086) names.push('Intel');
+  }
+  return names;
+}
+
+// Chromium 启动时已经枚举过显卡。打开窗口前读一次并缓存，去重不再另起 PowerShell。
+async function rememberWindowsEncoder() {
+  if (process.platform !== 'win32' || typeof app.getGPUInfo !== 'function') {
+    if (process.platform === 'win32') quchong.setWindowsAdapters('');
+    return;
+  }
+  let settled = false;
+  const pending = app.getGPUInfo('basic').then(info => {
+    settled = true;
+    quchong.setWindowsAdapters(gpuAdapterNames(info));
+  }).catch(error => {
+    settled = true;
+    quchong.setWindowsAdapters('');
+    console.warn('[Quchong] 读取显卡信息失败，使用 CPU 编码:', error?.message || error);
+  });
+  await Promise.race([pending, new Promise(resolve => setTimeout(resolve, 1500))]);
+  if (!settled) console.warn('[Quchong] 显卡信息尚未返回，编码开始前会再使用缓存结果');
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
