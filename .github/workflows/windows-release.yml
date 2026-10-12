@@ -6,7 +6,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.1.25
+        default: v1.1.26
       ffmpeg_run_id:
         description: Successful Windows NVENC 12.2 FFmpeg build run
         required: true
@@ -202,7 +202,7 @@ jobs:
           $tag = '${{ inputs.tag }}'
           gh release view $tag --repo '${{ github.repository }}' 2>$null
           if ($LASTEXITCODE -ne 0) {
-            $notes = '修复 Windows 一键去重点击没有反应：打开应用时使用 Chromium 已经读到的显卡信息选择编码器，不再在点击时运行 PowerShell。下载管理分页与当前任务保持同步。安装包继续内置 FFmpeg 9.0.2（NVENC API 12.2）。本次只发布 Windows 安装包。更新请替换完整程序目录，用户任务数据保留。'
+            $notes = '下载管理补齐分页：上一页/下一页、输入页码跳转，视频列表每页 20/50/100/200，短剧列表每页 10/20/30/50。记录变少时自动回到仍有效的页。视频列表顶部和底部都可以翻页。Windows 与 Mac 同时发布。Windows 安装包继续内置 FFmpeg 9.0.2（NVENC API 12.2）。Mac 使用 ad-hoc 签名，未进行 Apple 公证。更新请替换完整程序目录，用户任务数据保留。'
             gh release create $tag --repo '${{ github.repository }}' --title "红果短剧下载器 $tag" --notes $notes
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create the application release.' }
           }
