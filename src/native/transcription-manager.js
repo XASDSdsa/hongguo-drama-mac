@@ -13,19 +13,13 @@ function fingerprint(filePath) {
   } catch (_) { return null; }
 }
 
-const subtitleCache = new Map();
 function inspectSubtitle(filePath, duration) {
   const stat = fs.statSync(filePath);
   if (!stat.isFile() || stat.size <= 0 || stat.size > 8 * 1024 * 1024) throw new Error('SRT 文件为空或大小异常');
-  const key = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${duration}`;
-  const cached = subtitleCache.get(filePath);
-  if (cached?.key === key) return cached.result;
+  // Always read the file. Windows can keep size and mtime unchanged for a same-size rewrite in the same tick, and ctime there is the creation time.
   const content = fs.readFileSync(filePath, 'utf8');
   const checked = validateSrt(content, { duration });
-  const result = { hash: createHash('sha256').update(content).digest('hex'), entries: checked.entries.length };
-  if (subtitleCache.size >= 256) subtitleCache.delete(subtitleCache.keys().next().value);
-  subtitleCache.set(filePath, { key, result });
-  return result;
+  return { hash: createHash('sha256').update(content).digest('hex'), entries: checked.entries.length };
 }
 
 function isCompleted(record, item) {

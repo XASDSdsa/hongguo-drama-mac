@@ -6,7 +6,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.1.29
+        default: v1.1.30
       ffmpeg_run_id:
         description: Successful Windows NVENC 12.2 FFmpeg build run
         required: true
