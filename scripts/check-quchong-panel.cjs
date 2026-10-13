@@ -61,6 +61,7 @@ function mount(api = {}, props = {}) {
     await ui.button('添加文件').props.onClick(); await ui.flush();
     await ui.button('开始处理').props.onClick(); await ui.flush();
     assert.equal(payload.opts.jobs, 4);
+    assert.equal(payload.outputDir, '', 'default processing should save beside each series');
     ui.listeners.onQuchongConcurrencyChanged({ jobs: 6 }); await ui.flush();
     assert.equal(select().props.value, 6);
     ui.setProps({ active: false }); savedJobs = 2; ui.setProps({ active: true }); await ui.flush();

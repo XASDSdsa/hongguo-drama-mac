@@ -63,12 +63,10 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
     let alive = true;
     Promise.all([
       window.electronAPI.quchongDefaults?.(),
-      window.electronAPI.getSettings?.(),
       window.electronAPI.getQuchongTasks?.(),
-    ]).then(([defaults, settings, savedHistory]) => {
+    ]).then(([defaults, savedHistory]) => {
       if (!alive) return;
       if (defaults) setOpts((value) => ({ ...value, ...defaults, jobs: value.jobs }));
-      if (settings?.root) setOutputDir(`${settings.root}/红果短剧/处理后`);
       if (Array.isArray(savedHistory)) setHistory(savedHistory);
     }).catch(() => {});
     return () => { alive = false; };
@@ -81,6 +79,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
     setFiles([]);
     setTasks([]);
     setLogs([]);
+    setOutputDir('');
   }, [active, target?.seriesId]);
 
   useEffect(() => {
@@ -91,6 +90,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
     setTasks([]);
     setLogs([]);
     setFiles([]);
+    setOutputDir('');
     setSeriesLoading(true);
     (async () => {
       try {
@@ -109,8 +109,6 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
           const existing = new Set(previous);
           return [...previous, ...candidates.map(ep => ep.savePath).filter(path => path && !existing.has(path))];
         });
-        const settings = await window.electronAPI.getSettings?.();
-        if (alive && settings?.root) setOutputDir(`${settings.root}/红果短剧/处理后/${result.data.series_title || target.title || '当前短剧'}`);
       } catch (_) {
         if (alive) setNotice('读取当前剧集失败，请改用“添加文件”。');
       } finally {
@@ -229,7 +227,6 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
   const start = async () => {
     setNotice(''); setLogs([]); setTasks([]);
     if (!files.length) return setNotice('请先添加视频文件。');
-    if (!outputDir) return setNotice('请选择输出目录。');
     setRunning(true);
     try {
       const result = await window.electronAPI.quchongStart({ sources: files, outputDir, bgm: bgm || null, opts });
@@ -277,7 +274,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
 
       <section className="qc-card">
         <div className="qc-card-title"><span>输出与音频</span></div>
-        <div className="qc-row"><label>输出目录</label><input className="input-field" value={outputDir} onChange={(event) => setOutputDir(event.target.value)} placeholder="选择处理后视频的保存目录" /><button className="btn btn-sm" onClick={chooseOutput}><Folder size={14} /> 选择</button></div>
+        <div className="qc-row"><label>输出目录</label><input className="input-field" value={outputDir} onChange={(event) => setOutputDir(event.target.value)} placeholder="留空：自动保存到各剧目录的「去重视频」" /><button className="btn btn-sm" onClick={chooseOutput}><Folder size={14} /> 选择</button></div>
         <div className="qc-row"><label>BGM（可选）</label><input className="input-field" value={bgm} onChange={(event) => setBgm(event.target.value)} placeholder="不添加背景音乐" /><button className="btn btn-sm" onClick={async () => { const file = await window.electronAPI.quchongSelectAudio(); if (file) setBgm(file); }}><Folder size={14} /> 选择</button>{bgm && <button className="icon-btn" onClick={() => setBgm('')}><X size={15} /></button>}</div>
       </section>
 

@@ -77,7 +77,7 @@ const openSeries = ui => { const card = ui.find(n => n.props['data-series-key'] 
     });
     await ui.flush(); openSeries(ui); await ui.flush();
     await ui.button('一键去重').props.onClick(); await ui.flush();
-    assert.deepEqual(payload.sources, ['/videos/第1集.mp4']); assert.equal(payload.opts.jobs, 1); assert.equal(payload.outputDir, '/videos/红果短剧/处理后/示例剧'); ui.unmount();
+    assert.deepEqual(payload.sources, ['/videos/第1集.mp4']); assert.equal(payload.opts.jobs, 1); assert.equal(payload.outputDir, undefined, 'the main process selects each series directory'); ui.unmount();
   });
 
   await test('dedup concurrency is loaded, saved and submitted', async () => {

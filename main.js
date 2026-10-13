@@ -1168,7 +1168,7 @@ async function executeHongguoDownload(task) {
     sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
     const settings = getCurrentSettings();
     const root = String(settings.root || '').trim() || app.getPath('downloads');
-    const downloadDir = task.customDir || seriesDownloadDir(root, hongguoInfo?.series_id, series_title);
+    const downloadDir = task.customDir || path.join(seriesDownloadDir(root, hongguoInfo?.series_id, series_title), '原视频');
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
     task.savePath = finalPath;
@@ -1634,7 +1634,7 @@ function rescanDownloadsFromDisk() {
         id: 'rescanned_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 6),
         batchId: 'rescanned',
         savePath: f.path,
-        customDir: scanned.dir,
+        customDir: path.dirname(f.path),
         filename: f.filename,
         title: `《${s.series_title}》第${String(f.vid_index).padStart(3, '0')}集`,
         platform: 'hongguo',
@@ -1778,15 +1778,15 @@ function quchongOutputIsValid(file) {
   catch (_) { return false; }
 }
 
-function allocateQuchongDestinations(sources, outputDir) {
+function allocateQuchongDestinations(sources, outputDirs) {
   const reserved = new Set(sources.map(quchongPathKey));
-  return sources.map((source) => {
+  return sources.map((source, sourceIndex) => {
     const parsed = path.parse(source);
     const base = `${parsed.name}_去重`;
     let index = 0;
     let candidate;
     do {
-      candidate = path.join(outputDir, `${base}${index ? `_${index}` : ''}.mp4`);
+      candidate = path.join(outputDirs[sourceIndex], `${base}${index ? `_${index}` : ''}.mp4`);
       index += 1;
     } while (reserved.has(quchongPathKey(candidate)) || quchongOutputReservations.has(quchongPathKey(candidate)) || fs.existsSync(candidate));
     const key = quchongPathKey(candidate);
@@ -2082,11 +2082,12 @@ ipcMain.handle('quchong-start', async (_event, payload = {}) => {
       const stat = await fsp.stat(file).catch(() => null);
       if (!stat?.isFile()) return { success: false, error: `找不到输入文件：${file}` };
     }
-    if (typeof payload.outputDir !== 'string' || !payload.outputDir.trim()) {
+    if (payload.outputDir != null && typeof payload.outputDir !== 'string') {
       return { success: false, error: '请选择有效的输出目录' };
     }
-    const outputDir = path.resolve(payload.outputDir);
-    await fsp.mkdir(outputDir, { recursive: true });
+    const outputDir = payload.outputDir?.trim() ? path.resolve(payload.outputDir.trim()) : '';
+    const outputDirs = sources.map(file => outputDir || path.join(seriesRootFromVideoDir(path.dirname(file)), '去重视频'));
+    for (const dir of new Set(outputDirs)) await fsp.mkdir(dir, { recursive: true });
     const opts = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...payload.opts });
     const bgm = payload.bgm ? path.resolve(String(payload.bgm)) : null;
     if (bgm) {
@@ -2103,7 +2104,7 @@ ipcMain.handle('quchong-start', async (_event, payload = {}) => {
     if (duplicate) return { success: false, error: `视频已在去重队列中：${path.basename(duplicate)}` };
 
     const id = randomUUID();
-    const destinations = allocateQuchongDestinations(sources, outputDir);
+    const destinations = allocateQuchongDestinations(sources, outputDirs);
     const batch = {
       id, opts, bgm, outputDir, ffmpegPath, ffprobePath, concurrency: Math.min(opts.jobs, QUCHONG_MAX_ACTIVE),
       createdAt: Date.now(), startedAt: null, endTime: null, status: 'queued',
@@ -2197,12 +2198,18 @@ function seriesDownloadDir(root, seriesId, seriesTitle) {
   return path.join(root, String(seriesId).startsWith('hema:') ? '河马短剧' : String(seriesId).startsWith('xifan:') ? '西饭短剧' : '红果短剧', `${title}-${suffix}`);
 }
 
+function seriesRootFromVideoDir(dir) {
+  // 平台目录下可能有旧版同名剧；其余「原视频/去重视频」是剧内子目录。
+  return ['原视频', '去重视频'].includes(path.basename(dir)) && !['红果短剧', '河马短剧', '西饭短剧'].includes(path.basename(path.dirname(dir)))
+    ? path.dirname(dir) : dir;
+}
+
 /** 找到某剧在磁盘上的目录（优先用任务记录，其次按标题推导） */
 function resolveSeriesDir(seriesId, seriesTitle, covers) {
   const fromTask = covers.find((t) => t.customDir && fs.existsSync(t.customDir));
-  if (fromTask) return fromTask.customDir;
+  if (fromTask) return seriesRootFromVideoDir(fromTask.customDir);
   const fromFile = covers.find(t => t.savePath && fs.existsSync(path.dirname(t.savePath)));
-  if (fromFile) return path.dirname(fromFile.savePath);
+  if (fromFile) return seriesRootFromVideoDir(path.dirname(fromFile.savePath));
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
   const guess = seriesDownloadDir(root, seriesId, seriesTitle);
@@ -2229,7 +2236,7 @@ function repairTaskDestination(task) {
   if (conflicts.length) for (const item of [task, ...conflicts]) item.pathConflict = true;
   if (!task.pathConflict) return;
   const settings = getCurrentSettings(), info = task.hongguoInfo || {};
-  task.customDir = seriesDownloadDir(settings.root || app.getPath('downloads'), info.series_id, info.series_title);
+  task.customDir = path.join(seriesDownloadDir(settings.root || app.getPath('downloads'), info.series_id, info.series_title), '原视频');
   const filename = uniqueEpisodeFilename(settings, info.series_title, { vid_index: info.vid_index, title: info.ep_title });
   const suffix = createHash('sha256').update(String(info.vid)).digest('hex').slice(0, 8);
   task.filename = filename.replace(/\.mp4$/, `-${suffix}.mp4`);
@@ -2275,19 +2282,19 @@ function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
   // 2) 目录扫描兜底：把目录里符合命名规律的剧集文件按集号补进来。
   //    不依赖「已登记的分集」——磁盘上可能存在没有任务记录的孤儿文件
   //    （跨会话下载、任务被清理等），这些同样应该合并进去。
-  const sharedDirectory = dir && downloadTasks.some(task => String(task.hongguoInfo?.series_id) !== sid && task.savePath && path.dirname(task.savePath) === dir);
+  const sharedDirectory = dir && downloadTasks.some(task => String(task.hongguoInfo?.series_id) !== sid && task.savePath && seriesRootFromVideoDir(path.dirname(task.savePath)) === dir);
   const registeredPaths = new Set(downloadTasks.map(task => task.savePath).filter(Boolean));
-  if (dir && !sharedDirectory) {
+  for (const sourceDir of dir && !sharedDirectory ? [path.join(dir, '原视频'), dir] : []) {
     let names = [];
-    try { names = fs.readdirSync(dir); } catch (_) {}
+    try { names = fs.readdirSync(sourceDir); } catch (_) {}
     for (const n of names) {
-      if (!/\.mp4$/i.test(n) || n.includes('合集')) continue;
+      if (!/\.mp4$/i.test(n) || n.includes('合集') || /_去重(?:_\d+)?\.mp4$/i.test(n) || n.startsWith('.hongguo-quchong-')) continue;
       // 形如「剧名 001.mp4」——取文件名末尾的数字作为集号
       const m = n.match(/(\d{1,4})\.mp4$/i);
       if (!m) continue;
       const idx = parseInt(m[1], 10);
       if (!idx || byIndex.has(idx)) continue;
-      const full = path.join(dir, n);
+      const full = path.join(sourceDir, n);
       if (registeredPaths.has(full)) continue;
       if (exists(full)) byIndex.set(idx, { vid_index: idx, path: full, filename: n });
     }
@@ -3309,7 +3316,9 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
   const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
-  const downloadDir = seriesDownloadDir(root, seriesId, cleanSeriesTitle);
+  const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === String(seriesId));
+  const seriesDir = resolveSeriesDir(String(seriesId), cleanSeriesTitle, tasks) || seriesDownloadDir(root, seriesId, cleanSeriesTitle);
+  const downloadDir = path.join(seriesDir, '原视频');
   try { fs.mkdirSync(downloadDir, { recursive: true }); } catch (_) {}
 
   const batchId = 'hongguobatch_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);

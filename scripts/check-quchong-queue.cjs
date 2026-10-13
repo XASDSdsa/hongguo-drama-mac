@@ -45,7 +45,7 @@ function load() {
   context.sendToRenderer = (channel, payload) => events.push({ channel, ...copy(payload) });
   context.markPipelineDeduped = (src, dst) => marks.push({ src, dst });
   const snapshots = () => copy(handlers['get-quchong-tasks']());
-  return { handlers, events, jobs, marks, saved, starts, snapshots, get settings() { return settings; },
+  return { dir, handlers, events, jobs, marks, saved, starts, snapshots, get settings() { return settings; },
     async start(names, concurrency) {
       const sources = names.map(name => path.join(dir, name + '.mp4'));
       sources.forEach(file => fs.writeFileSync(file, 'fixture'));
@@ -63,6 +63,35 @@ async function check(name, run) {
 }
 
 (async () => {
+  await check('automatic output keeps same-title series and platforms isolated', async () => {
+    const h = load();
+    const roots = [path.join(h.dir, '红果短剧', '同名剧-111111111111'), path.join(h.dir, '红果短剧', '同名剧-222222222222'), path.join(h.dir, '河马短剧', '同名剧-333333333333')];
+    const sources = roots.map(root => {
+      fs.mkdirSync(path.join(root, '原视频'), { recursive: true });
+      const source = path.join(root, '原视频', '同名剧 001.mp4'); fs.writeFileSync(source, 'original'); return source;
+    });
+    const result = await h.handlers['quchong-start']({}, { sources, opts: { jobs: 3 } });
+    assert.equal(result.success, true, result.error); await tick();
+    assert.equal(h.starts.length, 3);
+    for (let index = 0; index < sources.length; index++) {
+      const job = h.jobs.get(sources[index]);
+      assert.equal(job.dst, path.join(roots[index], '去重视频', '同名剧 001_去重.mp4'));
+      assert.equal(fs.readFileSync(sources[index], 'utf8'), 'original');
+      job.resolve();
+    }
+    await tick();
+  });
+  await check('legacy files dedup beside their source and keep existing outputs', async () => {
+    const h = load(), source = path.join(h.dir, 'Short 001.mp4');
+    fs.writeFileSync(source, 'original');
+    const out = path.join(h.dir, '去重视频'); fs.mkdirSync(out);
+    const existing = path.join(out, 'Short 001_去重.mp4'); fs.writeFileSync(existing, 'existing');
+    const result = await h.handlers['quchong-start']({}, { sources: [source], outputDir: '' });
+    assert.equal(result.success, true, result.error); await tick();
+    assert.equal(h.jobs.get(source).dst, path.join(out, 'Short 001_去重_1.mp4'));
+    assert.equal(fs.readFileSync(existing, 'utf8'), 'existing');
+    h.jobs.get(source).resolve(); await tick();
+  });
   await check('one batch starts the configured number of jobs and fills each freed slot', async () => {
     const h = load();
     const batch = await h.start(['episode-1', 'episode-2', 'episode-3', 'episode-4'], 2);

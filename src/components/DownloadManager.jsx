@@ -109,8 +109,6 @@ function fmtBytes(bytes) {
   return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
-const safePathSegment = value => String(value || '当前短剧').replace(/[\\/:*?"<>|]/g, '_').trim() || '当前短剧';
-
 function TranscriptionPanel({ seriesId, active, status, analysis, runtime, onStart, onCancel, onAnalyze, onCancelAnalysis }) {
   const counts = status?.counts || {};
   const total = Number(counts.total) || 0;
@@ -615,17 +613,9 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     dedupSubmittingRef.current = true;
     setDedupStarting(true);
     try {
-      const [defaults, settings] = await Promise.all([
-        window.electronAPI.quchongDefaults?.(),
-        window.electronAPI.getSettings?.(),
-      ]);
-      const root = String(settings?.root || '').trim();
-      if (!root) throw new Error('请先在设置中选择视频根目录');
-      const seriesTitle = currentSeries?.title || selectedSeries.title || '当前短剧';
-      const outputDir = `${root}/红果短剧/处理后/${safePathSegment(seriesTitle)}`;
+      const defaults = await window.electronAPI.quchongDefaults?.();
       const result = await window.electronAPI.quchongStart({
         sources: dedupCandidates.map(task => task.savePath || task.path),
-        outputDir,
         bgm: null,
         opts: { ...(defaults || {}), jobs: dedupJobsRef.current },
       });
