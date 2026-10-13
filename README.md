@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.27"><img alt="版本 1.1.27" src="https://img.shields.io/badge/release-v1.1.27-c8383d?style=flat-square"></a>
+  <a href="https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.28"><img alt="版本 1.1.28" src="https://img.shields.io/badge/release-v1.1.28-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)。Windows 下载 `hongguo-downloader-1.1.27-Setup.exe`，免安装用同版本的 `portable.exe` 或 `win-x64.zip`。Mac 下载 `hongguo-downloader-1.1.27-mac-arm64.dmg`。解压或安装后即可使用，不需要另装 Python。
+1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)。Windows 下载 `hongguo-downloader-1.1.28-Setup.exe`，免安装用同版本的 `portable.exe` 或 `win-x64.zip`。Mac 下载 `hongguo-downloader-1.1.28-mac-arm64.dmg`。解压或安装后即可使用，不需要另装 Python。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**v1.1.27 的 Mac 构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
+**v1.1.28 的 Mac 构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -109,6 +109,8 @@
 “漫画”是图文阅读内容，不是视频；需要视频类内容时，请选择“漫剧”。
 
 ## 当前版本与验证范围
+
+[**v1.1.28**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.28) 同时发布 Windows 安装包和 Mac arm64 DMG。字幕任务按剧隔离状态并共用全局并发，停止后等待进程退出。损坏或过期字幕不再标为完成，也不能进入下游。识别增加词级对齐和音轨边界校正，并检查重叠、倒序、越界。Mac 上 2 分 43 秒样本约 2.4 秒生成 62 条 SRT。识别仍可能有错字，不能保证每句误差都小于 0.1 秒。Windows 实机与 CUDA 未测。
 
 [**v1.1.27**](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.27) 同时发布 Windows 安装包和 Mac arm64 DMG。字幕转写引擎、依赖和 tiny 模型打进应用，离线调用包内程序，不需要安装 Python，也不需要首次下载模型。Windows 包带 CUDA 12 / cuDNN 9 动态库；CI 没有实体显卡，CUDA 仍需在用户电脑验证。
 

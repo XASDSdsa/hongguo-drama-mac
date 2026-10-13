@@ -6,7 +6,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.1.27
+        default: v1.1.28
       ffmpeg_run_id:
         description: Successful Windows NVENC 12.2 FFmpeg build run
         required: true
@@ -219,7 +219,7 @@ jobs:
           $tag = '${{ inputs.tag }}'
           gh release view $tag --repo '${{ github.repository }}' 2>$null
           if ($LASTEXITCODE -ne 0) {
-            $notes = '应用内置字幕转写引擎、依赖和 tiny 模型，使用时不需要安装 Python，也不需要首次下载模型。Windows 包带 CUDA 12 / cuDNN 9 动态库；CUDA 仍需要显卡和驱动，本次 CI 未在实体显卡上验证。Windows 与 Mac 同时发布。Mac 使用 ad-hoc 签名，未进行 Apple 公证。更新请替换完整程序目录，用户任务数据保留。'
+            $notes = '字幕按剧隔离状态，共用全局并发；停止后等待进程退出。损坏或过期字幕不再标为完成，也不能进入下游。增加词级对齐、音轨边界校正，以及重叠、倒序、越界检查。识别仍可能有错字，不能保证每句误差都小于 0.1 秒。Windows 实机与 CUDA 未测。Windows 与 Mac 同时发布。Mac 使用 ad-hoc 签名，未进行 Apple 公证。更新请替换完整程序目录，用户任务数据保留。'
             gh release create $tag --repo '${{ github.repository }}' --title "红果短剧下载器 $tag" --notes $notes
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create the application release.' }
           }

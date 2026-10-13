@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag to receive the macOS asset
         required: true
-        default: v1.1.27
+        default: v1.1.28
 
 permissions:
   contents: write
