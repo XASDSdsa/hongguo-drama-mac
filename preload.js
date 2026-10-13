@@ -66,6 +66,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download-single-episode', seriesId, vidIndex),
   // AI 发布素材：独立于下载/合并任务，支持封面重绘与已下载分集文案生成
   getSeriesPipelineStatus: (seriesId) => ipcRenderer.invoke('get-series-pipeline-status', seriesId),
+  getFasterWhisperStatus: () => ipcRenderer.invoke('get-faster-whisper-status'),
+  getSeriesTranscription: (seriesId) => ipcRenderer.invoke('get-series-transcription', seriesId),
+  startSeriesTranscription: (payload) => ipcRenderer.invoke('start-series-transcription', payload),
+  cancelSeriesTranscription: (batchId) => ipcRenderer.invoke('cancel-series-transcription', batchId),
+  onSeriesTranscriptionProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('series-transcription-progress', listener);
+    return () => ipcRenderer.removeListener('series-transcription-progress', listener);
+  },
+  getSeriesAnalysis: (seriesId) => ipcRenderer.invoke('get-series-analysis', seriesId),
+  startSeriesAnalysis: (payload) => ipcRenderer.invoke('start-series-analysis', payload),
+  cancelSeriesAnalysis: (batchId) => ipcRenderer.invoke('cancel-series-analysis', batchId),
+  onSeriesAnalysisProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('series-analysis-progress', listener);
+    return () => ipcRenderer.removeListener('series-analysis-progress', listener);
+  },
   aiGenerateCover: (payload) => ipcRenderer.invoke('ai-generate-cover', payload),
   aiStartCopies: (payload) => ipcRenderer.invoke('ai-start-copies', payload),
   aiGenerateEpisodeCopy: (payload) => ipcRenderer.invoke('ai-generate-episode-copy', payload),

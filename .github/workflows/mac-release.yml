@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag to receive the macOS asset
         required: true
-        default: v1.1.26
+        default: v1.1.27
 
 permissions:
   contents: write
@@ -29,6 +29,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set up build-only Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+
+      - name: Bundle offline subtitle engine and tiny model
+        run: |
+          npm run setup:transcription
+          npm run check:transcription-bundle
+
       - name: Prepare Apple Silicon FFmpeg
         run: node scripts/setup-ffmpeg-mac.js
 
@@ -48,7 +59,7 @@ jobs:
           src="$RUNNER_TEMP/whisper.cpp"
           build="$RUNNER_TEMP/whisper-build"
           git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp.git "$src"
-          cmake -S "$src" -B "$build" -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
+          cmake -S "$src" -B "$build" -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_BLAS=OFF -DGGML_OPENMP=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_OSX_ARCHITECTURES=arm64 -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build "$build" --config Release --target whisper-cli -j 3
           bin=$(find "$build" -type f -name whisper-cli -perm -111 | head -n 1)
           test -n "$bin"
@@ -57,6 +68,8 @@ jobs:
           echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  build/whisper/models/ggml-tiny.bin" | shasum -a 256 -c -
           cp "$src/LICENSE" build/whisper/WHISPER-LICENSE.txt
           WHISPER_CPP_BIN="$bin" WHISPER_CPP_MODEL="$PWD/build/whisper/models/ggml-tiny.bin" node scripts/setup-whisper.js
+          build/ffmpeg/darwin-arm64/ffmpeg -hide_banner -loglevel error -f lavfi -i anullsrc=r=16000:cl=mono -t 1 -c:a pcm_s16le "$RUNNER_TEMP/whisper-smoke.wav"
+          build/whisper/darwin-arm64/whisper-cli -m build/whisper/models/ggml-tiny.bin -f "$RUNNER_TEMP/whisper-smoke.wav" -ng -t 2 -nt -np -l en
 
       - name: Run macOS-safe checks
         run: |
@@ -73,6 +86,9 @@ jobs:
 
       - name: Build macOS DMG
         run: npm run build:mac
+
+      - name: Check packaged subtitle engine without system Python
+        run: node scripts/check-bundled-transcription.cjs "dist/mac-arm64/红果短剧.app/Contents/Resources"
 
       - name: Prepare release asset
         shell: bash

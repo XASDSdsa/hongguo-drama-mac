@@ -1,0 +1,14 @@
+# Build environment only. End users run the frozen helper, without Python/pip.
+# Keep macOS 13 support; newer av/onnxruntime ARM wheels require macOS 14.
+faster-whisper==1.2.1
+ctranslate2==4.6.3
+av==15.1.0
+onnxruntime==1.17.3; sys_platform == 'darwin'
+onnxruntime==1.20.1; sys_platform == 'win32'
+numpy==1.26.4
+tokenizers==0.21.4
+huggingface-hub==0.34.4
+pyinstaller==6.22.3
+nvidia-cublas-cu12==12.4.5.8; sys_platform == 'win32'
+nvidia-cudnn-cu12==9.1.1.17; sys_platform == 'win32'
+nvidia-cuda-runtime-cu12==12.4.127; sys_platform == 'win32'

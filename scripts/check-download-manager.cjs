@@ -287,5 +287,29 @@ const openSeries = ui => { const card = ui.find(n => n.props['data-series-key'] 
     ui.unmount();
   });
 
+  await test('complete SRT enables the first analysis and running analysis blocks retranscription', async () => {
+    const ui = mount({
+      getDownloadTasks: async () => [task(1)],
+      getSeriesList: async () => [{ series_id: 'A', series_title: '示例剧', total: 1 }],
+      getSeriesTranscription: async () => ({ status: 'completed', counts: { total: 1, completed: 1 }, episodes: [] }),
+      getSeriesAnalysis: async () => ({ status: 'idle', counts: { total: 1, completed: 0 }, episodes: [] }),
+      getFasterWhisperStatus: async () => ({ available: true, bundled: true, device: 'cpu', model: 'tiny', computeType: 'int8' }),
+    });
+    await ui.flush(); openSeries(ui); await ui.flush();
+    const panel = ui.find(node => node.type?.name === 'TranscriptionPanel');
+    assert.ok(panel);
+    const buttons = props => {
+      const result = [];
+      const walk = node => { if (!node || typeof node !== 'object') return; if (node.type === 'button') result.push(node); node.children?.forEach(walk); };
+      walk(panel.type(props)); return result;
+    };
+    assert.equal(buttons(panel.props).find(node => node.props.onClick === panel.props.onAnalyze).props.disabled, false);
+    const pending = { ...panel.props, status: { counts: { total: 1, completed: 0 }, status: 'idle' } };
+    assert.equal(buttons(pending).find(node => node.props.onClick === pending.onAnalyze).props.disabled, true);
+    const analyzing = { ...panel.props, analysis: { ...panel.props.analysis, status: 'running' } };
+    assert.equal(buttons(analyzing).find(node => node.props.onClick === analyzing.onStart).props.disabled, true);
+    ui.unmount();
+  });
+
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
 })();

@@ -274,6 +274,86 @@ async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
   return { ...copy, raw: String(content) };
 }
 
+/**
+ * Return the stable per-episode analysis used by the editing pipeline.
+ * The complete SRT remains on disk; this response only stores decisions and
+ * time ranges, so the state file never grows with a whole transcript.
+ */
+function normalizeEpisodeAnalysis(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const number = input => Number.isFinite(Number(input)) ? Number(input) : null;
+  const range = item => {
+    const start = number(item?.start ?? item?.start_time ?? item?.from);
+    const end = number(item?.end ?? item?.end_time ?? item?.to);
+    if (start == null || end == null || end <= start) return null;
+    return { start, end };
+  };
+  const climaxes = (Array.isArray(source.climaxes) ? source.climaxes : [])
+    .map(item => {
+      const times = range(item);
+      if (!times) return null;
+      const score = Math.max(1, Math.min(10, Math.round(Number(item.score ?? item.rating) || 0)));
+      return { ...times, description: String(item.description ?? item.desc ?? item.reason ?? '').trim(), score };
+    })
+    .filter(item => item && item.description)
+    .slice(0, 20);
+  const splitPoints = (Array.isArray(source.split_points) ? source.split_points : [])
+    .map(item => {
+      const value = typeof item === 'number' ? item : item?.time ?? item?.at ?? item?.seconds;
+      const time = number(value);
+      if (time == null || time < 0) return null;
+      return { time, reason: String(typeof item === 'object' ? item.reason ?? item.description ?? '' : '').trim() };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.time - b.time)
+    .slice(0, 2);
+  const hookRange = range(source.best_hook);
+  const bestHook = hookRange ? {
+    ...hookRange,
+    description: String(source.best_hook?.description ?? source.best_hook?.desc ?? '').trim(),
+  } : null;
+  return {
+    summary: String(source.summary || '').trim().slice(0, 200),
+    climaxes,
+    split_points: splitPoints,
+    best_hook: bestHook,
+    arc_end: source.arc_end === true || source.arc_end === 'true',
+  };
+}
+
+async function analyzeEpisode(transcriptSrt, metadata = {}, baseConfig = {}) {
+  const config = requireApiConfig(baseConfig);
+  const text = String(transcriptSrt || '').trim();
+  if (!text) throw new Error('缺少待分析的 SRT 内容');
+  if (Buffer.byteLength(text) > MAX_TEXT) throw new Error('SRT 文本过长，请分段处理');
+  const title = String(metadata.seriesTitle || metadata.title || '未命名短剧');
+  const episodeIndex = Number(metadata.episodeIndex) || 0;
+  const response = await request(config, '/chat/completions', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: metadata.model || config.textModel,
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content: '你是短剧剪辑导演。只根据输入的 SRT 理解剧情，转写可能有错别字，按语义理解，不要编造。输出严格 JSON，且只能包含 summary、climaxes、split_points、best_hook、arc_end 五个字段。summary 是 200 字以内梗概；climaxes 是数组，每项包含 start、end、description、score(1-10)；split_points 是数组，最多 2 项，每项包含 time、reason，只标场景或话题转换处，禁止标在对话中间；best_hook 是 {start,end,description} 或 null，时长 5-15 秒；arc_end 是布尔值。不要输出 fillers、废话段或其他字段。',
+        },
+        {
+          role: 'user',
+          content: `剧名：${title}\n集数：${episodeIndex || '未知'}\n\n完整 SRT：\n${text}`,
+        },
+      ],
+    }),
+    signal: metadata.signal,
+  });
+  const contentValue = response.payload?.choices?.[0]?.message?.content;
+  const content = Array.isArray(contentValue)
+    ? contentValue.map(part => typeof part === 'string' ? part : part?.text || '').join('')
+    : contentValue;
+  if (!content) throw new Error('分析接口没有返回内容');
+  return normalizeEpisodeAnalysis(parseJsonContent(content));
+}
+
 module.exports = {
   normalizeBaseUrl,
   normalizeConfig,
@@ -283,4 +363,6 @@ module.exports = {
   editImage,
   transcribeAudio,
   summarizeEpisode,
+  analyzeEpisode,
+  normalizeEpisodeAnalysis,
 };

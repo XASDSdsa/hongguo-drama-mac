@@ -401,3 +401,25 @@
 .dm-dedup-concurrency { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .dm-dedup-concurrency select { min-width: 48px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font: inherit; }
 @media (max-width: 700px) { .dm-video-heading { align-items: flex-start; flex-direction: column; } .dm-dedup-toolbar { margin-left: 0; } }
+
+.dm-transcription-card { margin: 18px 0 22px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
+.dm-transcription-head, .dm-transcription-meta, .dm-transcription-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dm-transcription-head { justify-content: space-between; }
+.dm-transcription-title { display: flex; align-items: center; gap: 9px; color: var(--text-primary); }
+.dm-transcription-title > div { display: flex; flex-direction: column; gap: 3px; }
+.dm-transcription-title span { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+.dm-transcription-state { color: var(--text-tertiary); font-size: 12px; }
+.dm-transcription-state.is-running { color: var(--accent); }
+.dm-transcription-state.is-done { color: var(--success); }
+.dm-transcription-meta { margin: 12px 0; font-size: 12px; color: var(--text-secondary); }
+.dm-transcription-meta b { color: var(--success); }
+.dm-transcription-meta .is-warning, .dm-transcription-error { color: var(--danger); }
+.dm-transcription-actions { justify-content: flex-start; }
+.dm-transcription-error { font-size: 12px; overflow-wrap: anywhere; }
+.dm-analysis-divider { height: 1px; margin: 13px 0 11px; background: var(--border); }
+.dm-analysis-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+.dm-analysis-line b { color: var(--text-primary); }
+.dm-transcription-row-status { margin-top: 5px; font-size: 12px; color: var(--text-tertiary); }
+.dm-transcription-row-status.is-running { color: var(--accent); }
+.dm-transcription-row-status.is-done { color: var(--success); }
+.dm-transcription-row-status.is-failed { color: var(--danger); }

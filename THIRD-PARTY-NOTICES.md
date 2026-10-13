@@ -63,6 +63,19 @@ x264 是唯一非系统静态依赖（GPLv2-or-later），整体构建为 GPLv3-
 
 ## 开发依赖
 
+### 内置 faster-whisper 字幕运行时
+
+安装包的 `faster-whisper/` 目录包含独立运行的 Python 字幕程序、tiny 模型及其依赖。
+用户不需要安装 Python、pip 或下载模型。准确构建版本见该目录的 `licenses/versions.json`，
+各组件的许可文本随包放入 `licenses/`。源码构建入口为 `scripts/setup-faster-whisper.cjs`。
+
+主要组件包括 Python（PSF）、faster-whisper / Whisper tiny（MIT）、CTranslate2（MIT）、
+ONNX Runtime（MIT）、PyAV（BSD，所含 FFmpeg 库另有 LGPL/GPL 许可）和 PyInstaller
+引导程序（GPL，含允许分发生成程序的例外）。Windows 包额外包含 NVIDIA CUDA 12
+cuBLAS、cuDNN 9 及 CUDA runtime 的可再分发动态库和 Microsoft Visual C++ 运行时；
+对应许可文件包含在 `licenses/` 中。显卡驱动属于系统环境，不随本应用修改或安装。
+
+
 构建期使用以下工具（不随软件分发）：
 
 | 组件 | 许可证 |

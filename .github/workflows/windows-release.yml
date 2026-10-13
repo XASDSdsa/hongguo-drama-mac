@@ -6,7 +6,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.1.26
+        default: v1.1.27
       ffmpeg_run_id:
         description: Successful Windows NVENC 12.2 FFmpeg build run
         required: true
@@ -33,6 +33,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Set up build-only Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Bundle offline subtitle engine, tiny model and CUDA libraries
+        run: |
+          npm run setup:transcription
+          npm run check:transcription-bundle
 
       - name: Download tested Windows FFmpeg build artifact
         uses: actions/download-artifact@v4
@@ -164,6 +175,9 @@ jobs:
       - name: Prepare release assets
         run: node scripts/prepare-release-assets.js
 
+      - name: Check packaged subtitle engine without system Python
+        run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
+
       - name: Create SHA256 manifest
         shell: pwsh
         run: |
@@ -202,7 +216,7 @@ jobs:
           $tag = '${{ inputs.tag }}'
           gh release view $tag --repo '${{ github.repository }}' 2>$null
           if ($LASTEXITCODE -ne 0) {
-            $notes = '下载管理补齐分页：上一页/下一页、输入页码跳转，视频列表每页 20/50/100/200，短剧列表每页 10/20/30/50。记录变少时自动回到仍有效的页。视频列表顶部和底部都可以翻页。Windows 与 Mac 同时发布。Windows 安装包继续内置 FFmpeg 9.0.2（NVENC API 12.2）。Mac 使用 ad-hoc 签名，未进行 Apple 公证。更新请替换完整程序目录，用户任务数据保留。'
+            $notes = '应用内置字幕转写引擎、依赖和 tiny 模型，使用时不需要安装 Python，也不需要首次下载模型。Windows 包带 CUDA 12 / cuDNN 9 动态库；CUDA 仍需要显卡和驱动，本次 CI 未在实体显卡上验证。Windows 与 Mac 同时发布。Mac 使用 ad-hoc 签名，未进行 Apple 公证。更新请替换完整程序目录，用户任务数据保留。'
             gh release create $tag --repo '${{ github.repository }}' --title "红果短剧下载器 $tag" --notes $notes
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create the application release.' }
           }

@@ -100,7 +100,7 @@ function SettingsPage({ active = true }) {
       const editable = [
         'root', 'name_format', 'max_concurrent',
         'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password',
-        'ai_base_url', 'ai_api_key', 'ai_image_model', 'ai_text_model', 'ai_transcription_model', 'ai_transcription_engine', 'whisper_binary_path', 'whisper_model_path', 'whisper_language', 'whisper_threads', 'ai_concurrency',
+        'ai_base_url', 'ai_api_key', 'ai_image_model', 'ai_text_model', 'ai_transcription_model', 'ai_transcription_engine', 'whisper_binary_path', 'whisper_model_path', 'whisper_language', 'whisper_threads', 'faster_whisper_python_path', 'faster_whisper_script_path', 'faster_whisper_model', 'faster_whisper_device', 'faster_whisper_compute_type', 'faster_whisper_concurrency', 'ai_concurrency',
       ];
       const submitted = { ...current };
       for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
@@ -245,6 +245,22 @@ function SettingsPage({ active = true }) {
             同时下载 <b>{settings.max_concurrent || 3}</b> 集（保存后立即生效）。
             并发越高越快，但可能触发接口限流，建议 3~5。
           </p>
+        </div>
+
+        <div className="settings-group">
+          <label className="settings-label">完整字幕识别（faster-whisper）</label>
+          <p className="settings-hint">已内置字幕引擎和 tiny 模型，无需安装 Python，离线即可识别。</p>
+          <div className="preset-row mt8">
+            <select className="input-field select-field" aria-label="faster-whisper 设备" value={settings.faster_whisper_device || 'auto'} onChange={(e) => update('faster_whisper_device', e.target.value)}>
+              <option value="auto">自动检测（批次固定）</option>
+              <option value="cpu">CPU</option>
+              <option value="cuda">CUDA（未检测到时直接报错）</option>
+            </select>
+            <select className="input-field select-field" aria-label="字幕识别并发数" value={settings.faster_whisper_concurrency || 2} onChange={(e) => update('faster_whisper_concurrency', Number(e.target.value))}>
+              {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value} 集并发</option>)}
+            </select>
+          </div>
+          <p className="settings-hint">只读取已去重视频，每批开始时固定处理设备。识别完成后，每集完整字幕保存在该剧目录的 <code>transcripts/</code>。</p>
         </div>
 
         <div className="settings-group">

@@ -22,6 +22,9 @@ const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
 const whisper = require('./src/native/whisper');
+const fasterWhisper = require('./src/native/faster-whisper');
+const { createTranscriptionManager } = require('./src/native/transcription-manager');
+const { createAnalysisManager } = require('./src/native/analysis-manager');
 const { createAiMaterialQueue } = require('./src/native/ai-material-queue');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
@@ -161,6 +164,13 @@ function getDefaultSettings() {
     whisper_model_path: '',
     whisper_language: 'zh',
     whisper_threads: 0,
+    // 精品剪辑链路：faster-whisper 在批次开始时固定一次设备，不在任务中途切换。
+    faster_whisper_python_path: '',
+    faster_whisper_script_path: '',
+    faster_whisper_model: 'tiny',
+    faster_whisper_device: 'auto',
+    faster_whisper_compute_type: 'auto',
+    faster_whisper_concurrency: 2,
     ai_image_size: '1024x1536',
     ai_image_quality: 'high',
     ai_concurrency: 2,
@@ -669,6 +679,34 @@ function loadSeriesRegistry() {
       episodes: entry.pipeline.episodes && typeof entry.pipeline.episodes === 'object' ? { ...entry.pipeline.episodes } : {},
       groups: entry.pipeline.groups && typeof entry.pipeline.groups === 'object' ? { ...entry.pipeline.groups } : {},
     } : { episodes: {}, groups: {} };
+    // 完整 SRT 转写状态与视频流水线分开保存。应用意外退出后，运行中的
+    // 转写只能恢复为 stopped，下一次由用户明确重新开始，避免偷偷占用模型。
+    next.transcription = entry.transcription && typeof entry.transcription === 'object' ? {
+      version: 1,
+      updatedAt: Number(entry.transcription.updatedAt) || 0,
+      episodes: entry.transcription.episodes && typeof entry.transcription.episodes === 'object'
+        ? Object.fromEntries(Object.entries(entry.transcription.episodes).map(([key, record]) => {
+          const copy = record && typeof record === 'object' ? { ...record } : { episodeIndex: Number(key) };
+          if (copy.status === 'running' || copy.status === 'queued') {
+            copy.status = 'stopped'; copy.stage = 'stopped'; copy.error = '应用关闭时中断，请重新开始转写'; copy.updatedAt = Date.now(); changed = true;
+          }
+          return [key, copy];
+        }))
+        : {},
+    } : { version: 1, updatedAt: 0, episodes: {} };
+    next.analysis = entry.analysis && typeof entry.analysis === 'object' ? {
+      version: 1,
+      updatedAt: Number(entry.analysis.updatedAt) || 0,
+      episodes: entry.analysis.episodes && typeof entry.analysis.episodes === 'object'
+        ? Object.fromEntries(Object.entries(entry.analysis.episodes).map(([key, record]) => {
+          const copy = record && typeof record === 'object' ? { ...record } : { episodeIndex: Number(key) };
+          if (copy.status === 'running' || copy.status === 'queued') {
+            copy.status = 'stopped'; copy.stage = 'stopped'; copy.error = '应用关闭时中断，请重新生成分析'; copy.updatedAt = Date.now(); changed = true;
+          }
+          return [key, copy];
+        }))
+        : {},
+    } : { version: 1, updatedAt: 0, episodes: {} };
     if (next.ai_cover?.status === 'processing') {
       next.ai_cover = { ...next.ai_cover, status: 'stopped', error: '应用关闭时中断', updatedAt: Date.now() };
       changed = true;
@@ -696,6 +734,140 @@ function aiOutputIsUsableOnLoad(filePath) {
 
 function saveSeriesRegistry() {
   store.saveSeries(seriesRegistry);
+}
+
+// ===== 精品剪辑：已去重视频 -> 完整 SRT =====
+// 这是独立于旧 AI 发布素材队列的核心链路。输入只能来自 pipeline 的
+// dedupPath，字幕输出只按原视频 stem 配对，转写原文不再复制成 TXT/JSON。
+function transcriptionState(entry) {
+  if (!entry.transcription || typeof entry.transcription !== 'object') entry.transcription = { version: 1, updatedAt: 0, episodes: {} };
+  if (!entry.transcription.episodes || typeof entry.transcription.episodes !== 'object') entry.transcription.episodes = {};
+  return entry.transcription;
+}
+
+function sidecarFingerprint(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return stat.isFile() && stat.size > 0 ? `${stat.size}:${Math.round(stat.mtimeMs)}` : null;
+  } catch (_) { return null; }
+}
+
+function getSeriesTranscriptionState(seriesId) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) return { version: 1, updatedAt: 0, episodes: {} };
+  return transcriptionState(entry);
+}
+
+function saveSeriesTranscriptionState(seriesId, nextState) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) throw new Error('短剧档案已不存在，无法保存转写状态');
+  entry.transcription = {
+    version: 1,
+    updatedAt: Date.now(),
+    episodes: nextState?.episodes && typeof nextState.episodes === 'object' ? nextState.episodes : {},
+  };
+  saveSeriesRegistry();
+}
+
+function getSeriesDedupedEpisodes(seriesId) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) return [];
+  const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === String(seriesId));
+  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title, tasks);
+  return (entry.episodes || []).map(episode => {
+    const episodeIndex = Number(episode.vid_index);
+    const record = pipelineEpisode(entry, episodeIndex, false);
+    if (!record?.dedupPath || !pipelineFileValid(record.dedupPath, record.dedupFingerprint)) return null;
+    const inputPath = record.dedupPath;
+    const baseDir = seriesDir || path.dirname(inputPath);
+    return {
+      episodeIndex,
+      title: episode.title || '',
+      inputPath,
+      inputFingerprint: pipelineFingerprint(inputPath),
+      srtPath: path.join(baseDir, 'transcripts', `${path.parse(inputPath).name}.srt`),
+    };
+  }).filter(item => item && Number.isSafeInteger(item.episodeIndex) && item.episodeIndex > 0 && item.inputFingerprint);
+}
+
+let transcriptionManager = null;
+function getTranscriptionSettings() {
+  return { ...getCurrentSettings(), isPackaged: !!app.isPackaged, resourcesPath: process.resourcesPath };
+}
+function getTranscriptionManager() {
+  if (!transcriptionManager) {
+    transcriptionManager = createTranscriptionManager({
+      getSettings: getTranscriptionSettings,
+      getEpisodes: seriesId => getSeriesDedupedEpisodes(seriesId),
+      getState: seriesId => getSeriesTranscriptionState(seriesId),
+      saveState: saveSeriesTranscriptionState,
+      sendProgress: payload => sendToRenderer('series-transcription-progress', payload),
+    });
+  }
+  return transcriptionManager;
+}
+
+function analysisState(entry) {
+  if (!entry.analysis || typeof entry.analysis !== 'object') entry.analysis = { version: 1, updatedAt: 0, episodes: {} };
+  if (!entry.analysis.episodes || typeof entry.analysis.episodes !== 'object') entry.analysis.episodes = {};
+  return entry.analysis;
+}
+
+function getSeriesAnalysisState(seriesId) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) return { version: 1, updatedAt: 0, episodes: {} };
+  return analysisState(entry);
+}
+
+function saveSeriesAnalysisState(seriesId, nextState) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) throw new Error('短剧档案已不存在，无法保存分析状态');
+  entry.analysis = {
+    version: 1,
+    updatedAt: Date.now(),
+    episodes: nextState?.episodes && typeof nextState.episodes === 'object' ? nextState.episodes : {},
+  };
+  saveSeriesRegistry();
+}
+
+function getSeriesAnalysisEpisodes(seriesId) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) return [];
+  const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === String(seriesId));
+  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title, tasks);
+  const transcript = transcriptionState(entry);
+  return (entry.episodes || []).map(episode => {
+    const episodeIndex = Number(episode.vid_index);
+    const record = transcript.episodes[String(episodeIndex)];
+    if (!record || record.status !== 'completed' || !record.srtPath || !fs.existsSync(record.srtPath)) return null;
+    const srtFingerprint = sidecarFingerprint(record.srtPath);
+    if (!srtFingerprint || (record.srtFingerprint && record.srtFingerprint !== srtFingerprint)) return null;
+    const baseDir = seriesDir || path.dirname(record.srtPath);
+    return {
+      episodeIndex,
+      title: episode.title || '',
+      seriesTitle: entry.series_title || '',
+      inputPath: record.inputPath || '',
+      srtPath: record.srtPath,
+      srtFingerprint,
+      analysisPath: path.join(baseDir, 'analysis', `ep${String(episodeIndex).padStart(3, '0')}.json`),
+    };
+  }).filter(item => item && Number.isSafeInteger(item.episodeIndex) && item.episodeIndex > 0);
+}
+
+let analysisManager = null;
+function getAnalysisManager() {
+  if (!analysisManager) {
+    analysisManager = createAnalysisManager({
+      getSettings: () => getCurrentSettings(),
+      getEpisodes: seriesId => getSeriesAnalysisEpisodes(seriesId),
+      getState: seriesId => getSeriesAnalysisState(seriesId),
+      saveState: saveSeriesAnalysisState,
+      getFfmpegPath: () => resolveFfmpeg('ffmpeg'),
+      sendProgress: payload => sendToRenderer('series-analysis-progress', payload),
+    });
+  }
+  return analysisManager;
 }
 
 /**
@@ -2360,6 +2532,8 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
         episodeCopies: Object.fromEntries((entry?.episodes || []).map(item => [String(item.vid_index), aiValidEpisodeCopy(entry, item.vid_index)]).filter(([, record]) => record)),
         episodesUpdatedAt: Number(entry?.episodesUpdatedAt || entry?.updatedAt) || 0,
         pipeline: getPipelineStatus(sid),
+        transcription: getTranscriptionManager().status(sid),
+        analysis: getAnalysisManager().status(sid),
         seriesDir,
         web_accessible_episodes: entry?.web_accessible_episodes ?? null,
         total: episodes.length,
@@ -2377,6 +2551,43 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
 // 避免点击 AI 按钮时偷偷跨过前置步骤。
 ipcMain.handle('get-series-pipeline-status', async (_event, seriesId) => {
   try { return getPipelineStatus(seriesId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+// 精品剪辑第一步：只读取已去重输出，逐集生成完整 SRT。不会触碰下载、去重
+// 或旧的 AI 发布素材队列；设备在本批开始时固定一次，失败直接显示原因。
+ipcMain.handle('get-faster-whisper-status', async () => {
+  try { return await fasterWhisper.checkRuntime(getTranscriptionSettings()); }
+  catch (error) { return { available: false, message: error.message }; }
+});
+
+ipcMain.handle('get-series-transcription', async (_event, seriesId) => {
+  try { return getTranscriptionManager().status(seriesId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('start-series-transcription', async (_event, payload = {}) => {
+  try { return await getTranscriptionManager().start(payload); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('cancel-series-transcription', async (_event, batchId) => {
+  try { return getTranscriptionManager().cancel(batchId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-series-analysis', async (_event, seriesId) => {
+  try { return getAnalysisManager().status(seriesId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('start-series-analysis', async (_event, payload = {}) => {
+  try { return await getAnalysisManager().start(payload); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('cancel-series-analysis', async (_event, batchId) => {
+  try { return getAnalysisManager().cancel(batchId); }
   catch (error) { return { success: false, error: error.message }; }
 });
 
