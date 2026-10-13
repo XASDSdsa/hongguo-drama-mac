@@ -2199,29 +2199,18 @@ function seriesDownloadDir(root, seriesId, seriesTitle) {
 }
 
 function seriesRootFromVideoDir(dir) {
-  // 平台目录下可能有旧版同名剧；其余「原视频/去重视频」是剧内子目录。
-  return ['原视频', '去重视频'].includes(path.basename(dir)) && !['红果短剧', '河马短剧', '西饭短剧'].includes(path.basename(path.dirname(dir)))
+  return ['原视频', '去重视频'].includes(path.basename(dir))
     ? path.dirname(dir) : dir;
 }
 
 /** 找到某剧在磁盘上的目录（优先用任务记录，其次按标题推导） */
 function resolveSeriesDir(seriesId, seriesTitle, covers) {
-  const fromTask = covers.find((t) => t.customDir && fs.existsSync(t.customDir));
-  if (fromTask) return seriesRootFromVideoDir(fromTask.customDir);
-  const fromFile = covers.find(t => t.savePath && fs.existsSync(path.dirname(t.savePath)));
-  if (fromFile) return seriesRootFromVideoDir(path.dirname(fromFile.savePath));
+  const fromFile = covers.find(t => t.savePath && path.basename(path.dirname(t.savePath)) === '原视频' && fs.existsSync(path.dirname(t.savePath)));
+  if (fromFile) return path.dirname(path.dirname(fromFile.savePath));
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
   const guess = seriesDownloadDir(root, seriesId, seriesTitle);
-  if (fs.existsSync(guess)) return guess;
-  // Older versions used title-only directories. Reuse only when ownership is unambiguous.
-  if (!/^(xifan|hema):/.test(String(seriesId))) {
-    const title = sanitizeFolderName(seriesTitle) || '未命名短剧';
-    const owners = seriesRegistry.filter(s => sanitizeFolderName(s.series_title) === title);
-    const legacy = path.join(root, '红果短剧', title);
-    if (owners.length <= 1 && fs.existsSync(legacy)) return legacy;
-  }
-  return null;
+  return fs.existsSync(guess) ? guess : null;
 }
 
 function hasCompleteTaskFile(task) {
@@ -2284,7 +2273,8 @@ function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
   //    （跨会话下载、任务被清理等），这些同样应该合并进去。
   const sharedDirectory = dir && downloadTasks.some(task => String(task.hongguoInfo?.series_id) !== sid && task.savePath && seriesRootFromVideoDir(path.dirname(task.savePath)) === dir);
   const registeredPaths = new Set(downloadTasks.map(task => task.savePath).filter(Boolean));
-  for (const sourceDir of dir && !sharedDirectory ? [path.join(dir, '原视频'), dir] : []) {
+  if (dir && !sharedDirectory) {
+    const sourceDir = path.join(dir, '原视频');
     let names = [];
     try { names = fs.readdirSync(sourceDir); } catch (_) {}
     for (const n of names) {
@@ -3316,9 +3306,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
   const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
-  const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === String(seriesId));
-  const seriesDir = resolveSeriesDir(String(seriesId), cleanSeriesTitle, tasks) || seriesDownloadDir(root, seriesId, cleanSeriesTitle);
-  const downloadDir = path.join(seriesDir, '原视频');
+  const downloadDir = path.join(seriesDownloadDir(root, seriesId, cleanSeriesTitle), '原视频');
   try { fs.mkdirSync(downloadDir, { recursive: true }); } catch (_) {}
 
   const batchId = 'hongguobatch_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);

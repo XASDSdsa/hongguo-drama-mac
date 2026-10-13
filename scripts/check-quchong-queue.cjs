@@ -81,7 +81,7 @@ async function check(name, run) {
     }
     await tick();
   });
-  await check('legacy files dedup beside their source and keep existing outputs', async () => {
+  await check('manually selected files dedup beside their source and keep existing outputs', async () => {
     const h = load(), source = path.join(h.dir, 'Short 001.mp4');
     fs.writeFileSync(source, 'original');
     const out = path.join(h.dir, '去重视频'); fs.mkdirSync(out);

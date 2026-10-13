@@ -55,11 +55,9 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     assert.equal(detail.data.episodes.length, 1);
     assert.equal(detail.data.episodes[0].vid_index, 1);
   });
-  await check('same-title series use independent directories; legacy records still resolve', () => {
+  await check('same-title series use independent directories', () => {
     const h = load();
     assert.notEqual(h.context.seriesDownloadDir(h.dir, 'S1', 'Short'), h.context.seriesDownloadDir(h.dir, 'S2', 'Short'));
-    const old = task('old', h.dir); file(old.savePath); h.set('downloadTasks', [old]);
-    assert.equal(h.context.collectSeriesEpisodeFiles('S', 'Short').ordered[0].path, old.savePath);
   });
   await check('new episodes share a series root with an originals subdirectory', async () => {
     const h = load(); h.set('seriesRegistry', series());
@@ -83,42 +81,40 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     assert.equal(episode.inputPath, output);
     assert.equal(episode.srtPath, path.join(seriesDir, 'transcripts', 'Short 001_去重.srt'));
   });
-  await check('rescan finds both legacy and new originals without registering dedup outputs', () => {
+  await check('rescan registers only files inside the originals subdirectory', () => {
     const h = load(); h.set('seriesRegistry', series());
     const seriesDir = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
     fs.mkdirSync(path.join(seriesDir, '原视频'), { recursive: true });
     fs.mkdirSync(path.join(seriesDir, '去重视频'));
-    const old = path.join(seriesDir, 'Short 001.mp4'), current = path.join(seriesDir, '原视频', 'Short 002.mp4');
-    file(old); file(current);
+    const current = path.join(seriesDir, '原视频', 'Short 002.mp4');
+    file(path.join(seriesDir, 'Short 001.mp4')); file(current);
     file(path.join(seriesDir, '去重视频', 'Short 003.mp4'));
     file(path.join(seriesDir, 'Short 004_去重_1.mp4'));
     file(path.join(seriesDir, '.hongguo-quchong-0005.mp4'));
     const result = h.context.rescanDownloadsFromDisk();
-    assert.equal(result.count, 2);
+    assert.equal(result.count, 1);
     const tasks = h.run('downloadTasks');
-    assert.deepEqual(Array.from(tasks.map(item => item.savePath)).sort(), [old, current].sort());
+    assert.deepEqual(Array.from(tasks.map(item => item.savePath)), [current]);
     for (const item of tasks) assert.equal(item.customDir, path.dirname(item.savePath));
     assert.equal(h.context.rescanDownloadsFromDisk().count, 0, 'rescanning must be idempotent');
   });
-  await check('new episodes of a legacy series stay together without nesting originals repeatedly', async () => {
+  await check('downloads always use the ID-based series directory and never adopt a title-only directory', async () => {
     const h = load(); h.set('seriesRegistry', series());
     const seriesDir = path.join(h.dir, '红果短剧', 'Short'); fs.mkdirSync(seriesDir, { recursive: true });
-    const old = task('one', seriesDir, 'completed', 'Short 001.mp4'); file(old.savePath);
-    h.set('downloadTasks', [old]);
+    file(path.join(seriesDir, 'Short 001.mp4'));
+    assert.equal(h.context.resolveSeriesDir('S', 'Short', []), null);
     await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[1]] });
     await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [{ vid: 'three', vid_index: 3 }] });
     const tasks = h.run('downloadTasks');
-    assert.equal(tasks.find(item => item.hongguoInfo.vid_index === 1).savePath, old.savePath);
-    for (const item of tasks.filter(item => item.hongguoInfo.vid_index > 1)) assert.equal(item.customDir, path.join(seriesDir, '原视频'));
-    assert.equal(h.context.resolveSeriesDir('S', 'Short', tasks), seriesDir);
+    const expected = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
+    for (const item of tasks) assert.equal(item.customDir, path.join(expected, '原视频'));
+    assert.equal(h.context.resolveSeriesDir('S', 'Short', tasks), expected);
   });
   await check('Windows stage paths retain their drive and series root', () => {
     const h = load({}, { path: path.win32 });
     const root = String.raw`D:\短剧\红果短剧\布衣成圣-123456abcdef`;
     assert.equal(h.context.seriesRootFromVideoDir(path.win32.join(root, '原视频')), root);
     assert.equal(h.context.seriesRootFromVideoDir(path.win32.join(root, '去重视频')), root);
-    const legacy = String.raw`D:\短剧\红果短剧\原视频`;
-    assert.equal(h.context.seriesRootFromVideoDir(legacy), legacy, 'a legacy title must not resolve to the platform directory');
   });
   await check('missing completed file is shown missing and can be downloaded again', async () => {
     const h = load(); h.set('seriesRegistry', series()); h.set('downloadTasks', [task('one', h.dir)]);
