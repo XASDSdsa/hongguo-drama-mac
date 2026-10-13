@@ -22,16 +22,19 @@ function concurrency(settings = {}) {
 function outputValid(record, item) {
   return record?.status === 'completed'
     && record.srtFingerprint === item.srtFingerprint
+    && record.srtRevision === item.srtRevision
+    && record.inputFingerprint === item.inputFingerprint
     && !!record.analysisPath
     && fs.existsSync(record.analysisPath);
 }
 
-async function writeJsonAtomic(filePath, value) {
+async function writeJsonAtomic(filePath, value, beforeCommit) {
   await fsp.mkdir(require('node:path').dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
     await fsp.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    await fsp.rename(temporary, filePath);
+    beforeCommit();
+    fs.renameSync(temporary, filePath);
   } finally {
     await fsp.rm(temporary, { force: true }).catch(() => {});
   }
@@ -94,7 +97,16 @@ function createAnalysisManager({ getSettings, getEpisodes, getState, saveState, 
     batch.controllers.set(job.episodeIndex, controller);
     updateEpisode(batch.seriesId, job.episodeIndex, { status: 'running', stage: 'analyzing', progress: 0, error: '', batchId: batch.id, srtPath: job.srtPath, srtFingerprint: job.srtFingerprint, analysisPath: job.analysisPath });
     emit({ type: 'episode', seriesId: batch.seriesId, batchId: batch.id, episodeIndex: job.episodeIndex, status: 'running', stage: 'analyzing', progress: 0 });
+    const assertCurrent = () => {
+      if (batch.cancelled || controller.signal.aborted) throw new Error('任务已取消');
+      const current = (getEpisodes(batch.seriesId) || []).find(item => Number(item.episodeIndex) === Number(job.episodeIndex));
+      if (!current || current.srtPath !== job.srtPath || current.srtFingerprint !== job.srtFingerprint
+          || current.srtRevision !== job.srtRevision || current.inputFingerprint !== job.inputFingerprint) {
+        throw new Error('去重视频或字幕在分析期间已变化，结果未保存，请重新分析');
+      }
+    };
     try {
+      assertCurrent();
       const srt = await fsp.readFile(job.srtPath, 'utf8');
       const result = await openai.analyzeEpisode(srt, { seriesTitle: job.seriesTitle, episodeIndex: job.episodeIndex, episodeTitle: job.title, model: batch.settings.ai_text_model, signal: controller.signal }, batch.settings);
       const refined = await refineAnalysisCutPoints(result, {
@@ -104,8 +116,9 @@ function createAnalysisManager({ getSettings, getEpisodes, getState, saveState, 
         windowSeconds: 15,
         sceneChangeThreshold: 0.4,
       });
-      await writeJsonAtomic(job.analysisPath, refined);
-      updateEpisode(batch.seriesId, job.episodeIndex, { status: 'completed', stage: 'completed', progress: 100, error: '', batchId: batch.id, srtPath: job.srtPath, srtFingerprint: job.srtFingerprint, analysisPath: job.analysisPath, analysisFingerprint: fingerprint(job.analysisPath), completedAt: Date.now() });
+      await writeJsonAtomic(job.analysisPath, refined, assertCurrent);
+      assertCurrent();
+      updateEpisode(batch.seriesId, job.episodeIndex, { status: 'completed', stage: 'completed', progress: 100, error: '', batchId: batch.id, srtPath: job.srtPath, srtFingerprint: job.srtFingerprint, srtRevision: job.srtRevision, inputFingerprint: job.inputFingerprint, analysisPath: job.analysisPath, analysisFingerprint: fingerprint(job.analysisPath), completedAt: Date.now() });
       emit({ type: 'episode', seriesId: batch.seriesId, batchId: batch.id, episodeIndex: job.episodeIndex, status: 'completed', stage: 'completed', progress: 100, analysisPath: job.analysisPath });
     } catch (error) {
       const cancelled = batch.cancelled || controller.signal.aborted || /任务已取消|aborted/i.test(String(error?.message || ''));

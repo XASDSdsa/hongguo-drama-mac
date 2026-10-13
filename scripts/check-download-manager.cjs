@@ -311,5 +311,49 @@ const openSeries = ui => { const card = ui.find(n => n.props['data-series-key'] 
     ui.unmount();
   });
 
+  await test('late subtitle runtime from another series cannot replace status or cancel its batch', async () => {
+    let releaseFirst, probes = 0, cancelled;
+    const ui = mount({
+      getDownloadTasks: async () => [task(1), task(2, 'completed', { hongguoInfo: { series_id: 'B', series_title: 'B剧', vid_index: 1 } })],
+      getSeriesList: async () => [{ series_id: 'A', series_title: 'A剧', total: 1 }, { series_id: 'B', series_title: 'B剧', total: 1 }],
+      getSeriesTranscription: async seriesId => ({ success: true, seriesId, batchId: `batch-${seriesId}`, status: 'running', counts: { total: 1, running: 1 }, episodes: [] }),
+      getSeriesAnalysis: async seriesId => ({ success: true, seriesId, status: 'idle', counts: { total: 0 } }),
+      getFasterWhisperStatus: () => ++probes === 1 ? new Promise(resolve => { releaseFirst = resolve; }) : Promise.resolve({ available: true, model: 'B' }),
+      cancelSeriesTranscription: async batchId => { cancelled = batchId; return { success: true }; },
+    });
+    const panel = () => ui.find(node => node.type?.name === 'TranscriptionPanel');
+    await ui.flush(); ui.setProps({ target: { seriesId: 'A', ts: 1 } }); await ui.flush();
+    assert.ok(releaseFirst);
+    assert.equal(panel().props.status.seriesId, 'A', 'a slow runtime probe must not block status');
+    const staleCancel = panel().props.onCancel;
+    ui.setProps({ target: { seriesId: 'B', ts: 2 } }); await ui.flush();
+    releaseFirst({ available: true, model: 'A' }); await ui.flush();
+    assert.equal(panel().props.status.seriesId, 'B');
+    assert.equal(panel().props.runtime.model, 'B');
+    await staleCancel(); assert.equal(cancelled, undefined);
+    await panel().props.onCancel(); assert.equal(cancelled, 'batch-B');
+    ui.unmount();
+  });
+
+  await test('older progress snapshots cannot roll back newer subtitle progress', async () => {
+    let calls = 0, probes = 0, releaseOld;
+    const status = progress => ({ success: true, seriesId: 'A', status: 'running', counts: { total: 1, running: 1 }, episodes: [{ episodeIndex: 1, status: 'running', stage: 'aligning', progress }] });
+    const ui = mount({
+      getDownloadTasks: async () => [task(1)], getSeriesList: async () => [{ series_id: 'A', series_title: 'A剧', total: 1 }],
+      getSeriesTranscription: async () => ++calls === 2 ? new Promise(resolve => { releaseOld = resolve; }) : status(calls === 1 ? 0 : 80),
+      getSeriesAnalysis: async () => ({ counts: { total: 0 } }),
+      getFasterWhisperStatus: async () => { probes++; return { available: true }; },
+      getSeriesPipelineStatus: async () => ({ success: true, episodes: [{ episodeIndex: 1, status: 'deduped' }] }),
+    });
+    await ui.flush(); openSeries(ui); await ui.flush();
+    ui.emit('onSeriesTranscriptionProgress', { seriesId: 'A' }); ui.advance(180); await ui.flush();
+    ui.emit('onSeriesTranscriptionProgress', { seriesId: 'A' }); ui.advance(180); await ui.flush();
+    releaseOld(status(10)); await ui.flush();
+    assert.equal(ui.find(node => node.type?.name === 'TranscriptionPanel').props.status.episodes[0].progress, 80);
+    assert.equal(probes, 1, 'progress events must not spawn runtime probes');
+    assert.ok(ui.find(node => node.props.role === 'progressbar' && node.props['aria-label'] === '第 1 集字幕识别进度' && node.props['aria-valuenow'] === 80));
+    ui.unmount();
+  });
+
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
 })();

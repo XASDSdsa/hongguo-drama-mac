@@ -81,6 +81,48 @@ function normalizeSrt(content, options = {}) {
   return formatSrt(entries, options);
 }
 
+// Unlike the display parser, completed output must not silently discard a bad
+// block, reorder dialogue, or conceal an invalid timeline.
+function validateSrt(content, options = {}) {
+  const source = String(content || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
+  if (!source) throw new Error('SRT 为空');
+  const duration = Number(options.duration);
+  const endMillis = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) : Infinity;
+  let previousEnd = 0;
+  const entries = source.split(/\n\s*\n/).map((block, index) => {
+    const lines = block.split('\n');
+    const timing = /^\s*(\S+)\s*-->\s*(\S+)\s*$/.exec(lines[1] || '');
+    const start = timing && parseTimestamp(timing[1]);
+    const end = timing && parseTimestamp(timing[2]);
+    const text = lines.slice(2).join('\n').trim();
+    const invalid = message => { throw new Error(`SRT 第 ${index + 1} 条${message}`); };
+    if (Number(lines[0]) !== index + 1 || !/^\d+$/.test(lines[0])) invalid('编号不连续');
+    if (start == null || end == null) invalid('时间格式错误');
+    const startMs = Math.round(start * 1000), endMs = Math.round(end * 1000);
+    if (endMs <= startMs) invalid('结束时间必须晚于开始时间');
+    if (startMs < previousEnd) invalid('与上一条重叠或时间倒退');
+    if (endMs > endMillis) invalid('超出去重视频时长');
+    if (!text) invalid('内容为空');
+    previousEnd = endMs;
+    return { start, end, text };
+  });
+  return { entries, content: formatSrt(entries), duration: Number.isFinite(endMillis) ? duration : null };
+}
+
+function correctSrtBounds(content, { duration, audioOffset = 0, audioEnd = duration }) {
+  const checked = validateSrt(content, { duration });
+  const first = Math.max(0, Math.ceil(audioOffset * 1000)) / 1000;
+  const last = Math.min(Math.round(duration * 1000), Math.floor(audioEnd * 1000)) / 1000;
+  let correctedCues = 0;
+  const entries = checked.entries.map((entry, index) => {
+    const start = Math.max(entry.start, first), end = Math.min(entry.end, last);
+    if (end <= start) throw new Error(`SRT 第 ${index + 1} 条完全位于音轨之外，无法可靠校正`);
+    if (start !== entry.start || end !== entry.end) correctedCues++;
+    return { ...entry, start, end };
+  });
+  return { entries, content: formatSrt(entries), correctedCues };
+}
+
 function srtToText(content) {
   return parseSrt(content).map(item => item.text).join('\n').trim();
 }
@@ -92,5 +134,7 @@ module.exports = {
   normalizeEntries,
   formatSrt,
   normalizeSrt,
+  validateSrt,
+  correctSrtBounds,
   srtToText,
 };

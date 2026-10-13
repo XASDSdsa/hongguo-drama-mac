@@ -115,7 +115,8 @@ function TranscriptionPanel({ seriesId, active, status, analysis, runtime, onSta
   const completed = Number(counts.completed) || 0;
   const running = Number(counts.running) || 0;
   const queued = Number(counts.queued) || 0;
-  const busy = ['queued', 'running'].includes(String(status?.status || ''));
+  const stopping = status?.status === 'stopping';
+  const busy = ['queued', 'running', 'stopping'].includes(String(status?.status || ''));
   const analysisCounts = analysis?.counts || {};
   const analysisTotal = Number(analysisCounts.total) || 0;
   const analysisCompleted = Number(analysisCounts.completed) || 0;
@@ -126,8 +127,8 @@ function TranscriptionPanel({ seriesId, active, status, analysis, runtime, onSta
   return (
     <section className="dm-transcription-card" aria-label="完整字幕识别">
       <div className="dm-transcription-head">
-        <div className="dm-transcription-title"><Activity size={17} /><div><b>完整字幕识别</b><span>只处理已完成去重的视频，输出每集完整 SRT 时间轴。</span></div></div>
-        <span className={`dm-transcription-state ${busy ? 'is-running' : completed === total && total > 0 ? 'is-done' : ''}`}>{busy ? '处理中' : completed === total && total > 0 ? '已完成' : '待开始'}</span>
+        <div className="dm-transcription-title"><Activity size={17} /><div><b>完整字幕识别</b><span>识别去重视频的完整对白，逐词对齐并校验时间轴后保存 SRT。</span></div></div>
+        <span className={`dm-transcription-state ${busy ? 'is-running' : completed === total && total > 0 ? 'is-done' : ''}`}>{stopping ? '停止中' : busy ? '处理中' : completed === total && total > 0 ? '已完成' : '待开始'}</span>
       </div>
       <div className="dm-transcription-meta">
         <span>已识别 <b>{completed}</b> / {total} 集</span>
@@ -137,7 +138,7 @@ function TranscriptionPanel({ seriesId, active, status, analysis, runtime, onSta
       </div>
       <div className="dm-transcription-actions">
         <button className="btn btn-primary btn-sm" onClick={onStart} disabled={!active || busy || analysisBusy || total === 0}>{busy ? '识别中…' : completed === total && total > 0 ? '重新识别' : '开始识别完整字幕'}</button>
-        {busy && <button className="btn btn-outline btn-sm" onClick={onCancel}>停止</button>}
+        {busy && <button className="btn btn-outline btn-sm" onClick={onCancel} disabled={stopping}>{stopping ? '等待进程退出…' : '停止'}</button>}
         {status?.error && <span className="dm-transcription-error">{status.error}</span>}
       </div>
       <div className="dm-analysis-divider" />
@@ -184,6 +185,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const activeRef = useRef(active);
   activeRef.current = active;
   const requests = useRef({ tasks: 0, queue: 0, series: 0 });
+  const subtitleRequests = useRef({ transcription: 0, runtime: 0 });
   const taskIndex = useRef(new Map());
   const dedupBatchRef = useRef(new Map());
   const dedupJobsRef = useRef(null);
@@ -239,43 +241,51 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     return () => { alive = false; };
   }, [active, selectedSeries?.seriesId, orderVersion]);
 
-  const loadTranscription = useCallback(async () => {
-    if (!selectedSeries?.seriesId || typeof window.electronAPI.getSeriesTranscription !== 'function') return;
+  const loadTranscription = useCallback(async (checkRuntime = false) => {
+    const seriesId = selectedSeries?.seriesId;
+    const sameSeries = () => activeRef.current && String(selectedSeriesIdRef.current) === String(seriesId);
+    if (!seriesId || !sameSeries() || typeof window.electronAPI.getSeriesTranscription !== 'function') return;
+    const request = ++subtitleRequests.current.transcription;
+    const runtimeRequest = checkRuntime ? ++subtitleRequests.current.runtime : null;
     const [status, analysis] = await Promise.all([
-      window.electronAPI.getSeriesTranscription(selectedSeries.seriesId).catch(() => null),
-      typeof window.electronAPI.getSeriesAnalysis === 'function' ? window.electronAPI.getSeriesAnalysis(selectedSeries.seriesId).catch(() => null) : Promise.resolve(null),
+      window.electronAPI.getSeriesTranscription(seriesId).catch(() => null),
+      typeof window.electronAPI.getSeriesAnalysis === 'function' ? window.electronAPI.getSeriesAnalysis(seriesId).catch(() => null) : Promise.resolve(null),
     ]);
+    if (sameSeries() && request === subtitleRequests.current.transcription) {
+      if (status && status.success !== false && (!status.seriesId || String(status.seriesId) === String(seriesId))) setTranscriptionStatus({ ...status, seriesId });
+      if (analysis && analysis.success !== false && (!analysis.seriesId || String(analysis.seriesId) === String(seriesId))) setAnalysisStatus({ ...analysis, seriesId });
+    }
+    if (!checkRuntime || !sameSeries() || runtimeRequest !== subtitleRequests.current.runtime) return;
     const runtime = status?.counts?.total > 0 && typeof window.electronAPI.getFasterWhisperStatus === 'function'
       ? await window.electronAPI.getFasterWhisperStatus().catch(() => null)
       : null;
-    if (activeRef.current && status?.success !== false) setTranscriptionStatus(status);
-    if (activeRef.current && runtime) setTranscriptionRuntime(runtime);
-    if (activeRef.current && analysis?.success !== false) setAnalysisStatus(analysis);
+    if (sameSeries() && runtimeRequest === subtitleRequests.current.runtime && runtime) setTranscriptionRuntime(runtime);
   }, [selectedSeries?.seriesId]);
 
   useEffect(() => {
     if (!active || !selectedSeries?.seriesId || typeof window.electronAPI.getSeriesTranscription !== 'function') return undefined;
     let alive = true;
     const refresh = () => {
-      clearTimeout(transcriptionRefreshRef.current);
-      transcriptionRefreshRef.current = setTimeout(async () => {
+      if (transcriptionRefreshRef.current != null) return;
+      transcriptionRefreshRef.current = setTimeout(() => {
+        transcriptionRefreshRef.current = null;
         if (!alive) return;
-        const result = await window.electronAPI.getSeriesTranscription(selectedSeries.seriesId).catch(() => null);
-        if (alive && result?.success !== false) setTranscriptionStatus(result);
-        const analysis = typeof window.electronAPI.getSeriesAnalysis === 'function'
-          ? await window.electronAPI.getSeriesAnalysis(selectedSeries.seriesId).catch(() => null)
-          : null;
-        if (alive && analysis?.success !== false) setAnalysisStatus(analysis);
+        loadTranscription();
       }, 180);
     };
-    loadTranscription();
+    loadTranscription(true);
     const off = window.electronAPI.onSeriesTranscriptionProgress?.(data => {
       if (String(data?.seriesId) === String(selectedSeries.seriesId)) refresh();
     });
     const offAnalysis = window.electronAPI.onSeriesAnalysisProgress?.(data => {
       if (String(data?.seriesId) === String(selectedSeries.seriesId)) refresh();
     });
-    return () => { alive = false; off?.(); offAnalysis?.(); clearTimeout(transcriptionRefreshRef.current); };
+    return () => {
+      alive = false; off?.(); offAnalysis?.(); clearTimeout(transcriptionRefreshRef.current);
+      transcriptionRefreshRef.current = null;
+      subtitleRequests.current.transcription++;
+      subtitleRequests.current.runtime++;
+    };
   }, [active, selectedSeries?.seriesId, loadTranscription]);
 
   // 去重状态只按“本剧 + 原视频路径”匹配，避免不同短剧或同名文件串状态。
@@ -657,11 +667,11 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
 
   const cancelTranscription = useCallback(async () => {
     const batchId = transcriptionStatus?.batchId;
-    if (!batchId || typeof window.electronAPI.cancelSeriesTranscription !== 'function') return;
+    if (!batchId || String(transcriptionStatus.seriesId) !== String(selectedSeriesIdRef.current) || typeof window.electronAPI.cancelSeriesTranscription !== 'function') return;
     const result = await window.electronAPI.cancelSeriesTranscription(batchId).catch(error => ({ success: false, error: error.message }));
     if (!result?.success) showToast(result?.error || '停止字幕识别失败', 'error');
     else await loadTranscription();
-  }, [loadTranscription, showToast, transcriptionStatus?.batchId]);
+  }, [loadTranscription, showToast, transcriptionStatus?.batchId, transcriptionStatus?.seriesId]);
 
   const startAnalysis = useCallback(async () => {
     if (!selectedSeries?.seriesId || typeof window.electronAPI.startSeriesAnalysis !== 'function') return;
@@ -677,11 +687,11 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
 
   const cancelAnalysis = useCallback(async () => {
     const batchId = analysisStatus?.batchId;
-    if (!batchId || typeof window.electronAPI.cancelSeriesAnalysis !== 'function') return;
+    if (!batchId || String(analysisStatus.seriesId) !== String(selectedSeriesIdRef.current) || typeof window.electronAPI.cancelSeriesAnalysis !== 'function') return;
     const result = await window.electronAPI.cancelSeriesAnalysis(batchId).catch(error => ({ success: false, error: error.message }));
     if (!result?.success) showToast(result?.error || '停止剧情分析失败', 'error');
     else await loadTranscription();
-  }, [analysisStatus?.batchId, loadTranscription, showToast]);
+  }, [analysisStatus?.batchId, analysisStatus?.seriesId, loadTranscription, showToast]);
 
   // Progress updates change row values, not the established series/episode order.
   // Keep the page index list in sync with task updates. Progress/status events
@@ -877,7 +887,8 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
             const dedupPct = Math.max(0, Math.min(100, Number(runtime?.progress || 0)));
             const transcription = (transcriptionStatus?.episodes || []).find(item => Number(item.episodeIndex) === Number(task.hongguoInfo?.vid_index));
             const transcriptionStage = String(transcription?.status || 'pending');
-            const transcriptionLabel = transcriptionStage === 'completed' ? '已生成 SRT' : transcriptionStage === 'running' ? `识别中 ${Math.round(Number(transcription?.progress || 0))}%` : transcriptionStage === 'queued' ? '等待识别' : transcriptionStage === 'failed' ? '识别失败' : transcriptionStage === 'stopped' ? '已停止' : '未识别';
+            const subtitleStep = { extracting: '校正音频时间轴', aligning: '识别并对齐', validating: '校验字幕时间轴' }[transcription?.stage] || '识别中';
+            const transcriptionLabel = transcriptionStage === 'completed' ? '已生成 SRT · 时间轴已校验' : transcriptionStage === 'running' ? `${subtitleStep}${transcription?.stage === 'aligning' ? ` ${Math.round(Number(transcription.progress) || 0)}%` : ''}` : transcriptionStage === 'queued' ? '等待识别' : transcriptionStage === 'failed' ? '识别失败' : transcriptionStage === 'stopped' ? '已停止' : transcriptionStage === 'stale' ? '字幕已失效，请重新识别' : '未识别';
             return (
               <div key={task.id} className={`dm-task ${isSel ? 'selected' : ''}`} onClick={() => toggleSelect(task.id)}>
                 <input className="dm-task-select" type="checkbox" aria-label={`选择 ${task.title || task.filename}`} checked={isSel} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(task.id)} />
@@ -901,6 +912,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
                     <span>去重：{dedupLabel}</span>
                   </div>
                   {isDeduped && <div className={`dm-transcription-row-status ${transcriptionStage === 'completed' ? 'is-done' : transcriptionStage === 'running' ? 'is-running' : transcriptionStage === 'failed' ? 'is-failed' : ''}`}>字幕：{transcriptionLabel}</div>}
+                  {isDeduped && transcription?.error && <div className="dm-error">{transcription.error}</div>}
+                  {isDeduped && transcriptionStage === 'running' && <div className="dm-progress" role="progressbar" aria-label={`第 ${task.hongguoInfo?.vid_index || ''} 集字幕识别进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Number(transcription.progress) || 0} aria-valuetext={transcriptionLabel}>
+                    <div className="dm-progress-bar"><div className="dm-progress-fill" style={{ width: `${Number(transcription.progress) || 0}%` }} /></div>
+                  </div>}
                   {dedupInProgress && <div className="dm-progress dm-dedup-progress" aria-label={`第 ${task.hongguoInfo?.vid_index || ''} 集去重进度`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={showDedupPercent ? dedupPct : undefined} aria-valuetext={showDedupPercent ? `编码约 ${dedupPct}%` : dedupLabel}>
                     <div className="dm-progress-bar"><div className="dm-progress-fill" style={{ width: `${dedupPct}%` }} /></div>
                     {showDedupPercent && <span className="dm-pct">约 {dedupPct}%</span>}

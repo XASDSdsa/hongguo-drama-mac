@@ -4,7 +4,6 @@ const fsp = fs.promises;
 const os = require('node:os');
 const path = require('node:path');
 const { parseSrt, normalizeSrt, srtToText } = require('../src/native/srt');
-const fasterWhisper = require('../src/native/faster-whisper');
 const { normalizeEpisodeAnalysis } = require('../src/native/openai');
 const { createAnalysisManager } = require('../src/native/analysis-manager');
 const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
@@ -36,16 +35,6 @@ const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
 
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'hongguo-premium-check-'));
   try {
-    const fakeScript = path.join(root, 'fake_faster_whisper.py');
-    await fsp.writeFile(fakeScript, `import json, pathlib, sys\nargs=sys.argv[1:]\nif '--probe' in args:\n print(json.dumps({'faster_whisper': True, 'cuda': False}))\n raise SystemExit(0)\nout=pathlib.Path(args[args.index('--output') + 1])\nout.parent.mkdir(parents=True, exist_ok=True)\nout.write_text('1\\n00:00:00,000 --> 00:00:01,000\\n测试字幕\\n\\n', encoding='utf-8')\nprint('PROGRESS 100 完成')\n`, 'utf8');
-    const input = path.join(root, 'dedup.mp4');
-    const output = path.join(root, 'transcripts', 'dedup.srt');
-    await fsp.writeFile(input, Buffer.alloc(120 * 1024, 1));
-    const runtime = await fasterWhisper.prepareRuntime({ faster_whisper_script_path: fakeScript, faster_whisper_python_path: process.env.PYTHON || 'python3', faster_whisper_device: 'auto', projectRoot: root });
-    assert.equal(runtime.device, 'cpu');
-    await fasterWhisper.transcribeToSrt(input, output, runtime);
-    assert.equal(srtToText(await fsp.readFile(output, 'utf8')), '测试字幕');
-
     const analysisRoot = path.join(root, 'analysis');
     const analysisSrt = path.join(root, 'episode.srt');
     await fsp.writeFile(analysisSrt, '1\n00:00:00,000 --> 00:00:01,000\n主角反击。\n\n', 'utf8');
@@ -67,8 +56,20 @@ const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
     assert.equal(manager.status('s').status, 'completed');
     const savedAnalysis = JSON.parse(await fsp.readFile(episodes[0].analysisPath, 'utf8'));
     assert.equal(savedAnalysis.summary, '主角反击。');
+    let releaseAnalysis;
+    global.fetch = () => new Promise(resolve => { releaseAnalysis = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '不能保存的旧结果', climaxes: [], split_points: [], best_hook: null, arc_end: true }) } }] }), { status: 200, headers: { 'content-type': 'application/json' } })); });
+    const previous = fs.readFileSync(episodes[0].analysisPath, 'utf8');
+    await manager.start({ seriesId: 's', force: true });
+    for (let i = 0; i < 50 && !releaseAnalysis; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(releaseAnalysis);
+    episodes[0] = { ...episodes[0], srtRevision: 'new-subtitle' };
+    releaseAnalysis();
+    for (let i = 0; i < 50 && manager.status('s').status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(manager.status('s').status, 'failed');
+    assert.match(manager.status('s').error, /已变化/);
+    assert.equal(fs.readFileSync(episodes[0].analysisPath, 'utf8'), previous);
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
-  console.log('PASS premium editing SRT, schema and faster-whisper adapter');
+  console.log('PASS premium editing SRT, schema and analysis version gate');
 })().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });

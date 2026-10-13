@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import tempfile
@@ -92,7 +93,7 @@ def self_test(args) -> int:
     audio = np.zeros(16000, dtype=np.float32)
     get_speech_timestamps(audio)
     model = load_model(args)
-    segments, _ = model.transcribe(audio, language='zh', beam_size=1, vad_filter=False)
+    segments, _ = model.transcribe(audio, language='zh', beam_size=1, vad_filter=False, word_timestamps=True)
     list(segments)
     print(json.dumps({'ok': True, 'bundled': bool(getattr(sys, 'frozen', False)),
                       'model': str(args.model), 'device': args.device, 'vad': True}), flush=True)
@@ -109,16 +110,26 @@ def timestamp(seconds: float) -> str:
 
 def write_srt(output: Path, segments, duration: float) -> int:
     rows = []
+    previous_end_ms = 0
     for segment in segments:
-        start = max(0.0, float(getattr(segment, "start", 0.0) or 0.0))
-        end = max(0.0, float(getattr(segment, "end", 0.0) or 0.0))
-        if duration > 0:
-            start = min(start, duration)
-            end = min(end, duration)
         text = str(getattr(segment, "text", "") or "").replace("\r", "").strip()
-        if end <= start or not text:
+        if not text:
             continue
-        rows.append((start, end, text))
+        # faster-whisper restores word times to the original audio clock after
+        # VAD. Keep every segment's text and use its aligned first/last word.
+        words = list(getattr(segment, "words", None) or [])
+        if not words:
+            raise RuntimeError(f"第 {len(rows) + 1} 条字幕缺少词级对齐，未保存完成")
+        start = float(words[0].start)
+        end = float(words[-1].end)
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise RuntimeError("字幕对齐返回了无效时间")
+        start_ms = max(0, round(start * 1000))
+        end_ms = min(round(duration * 1000), round(end * 1000))
+        if start_ms < previous_end_ms or end_ms <= start_ms:
+            raise RuntimeError(f"第 {len(rows) + 1} 条字幕时间重叠或无有效时长，未保存完成")
+        previous_end_ms = end_ms
+        rows.append((start_ms / 1000, end_ms / 1000, text))
     if not rows:
         raise RuntimeError("faster-whisper 未识别到可用字幕")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -153,10 +164,15 @@ def transcribe(args: argparse.Namespace) -> int:
         language=args.language or None,
         vad_filter=True,
         beam_size=1,
-        word_timestamps=False,
+        word_timestamps=True,
         condition_on_previous_text=False,
     )
-    duration = float(getattr(info, "duration", 0.0) or 0.0)
+    audio_duration = float(getattr(info, "duration", 0.0) or 0.0)
+    duration = args.duration if args.duration is not None else audio_duration
+    if not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError("视频时长无效")
+    if abs(audio_duration - duration) > 0.05:
+        raise RuntimeError("校正后的音频时长与视频不一致，未保存字幕")
     # transcribe() returns a lazy generator.  Consume it here so progress is
     # emitted while decoding rather than after the entire file is finished.
     collected = []
@@ -164,8 +180,10 @@ def transcribe(args: argparse.Namespace) -> int:
         collected.append(segment)
         end = float(getattr(segment, "end", 0.0) or 0.0)
         percent = 2.0 if duration <= 0 else min(98.0, max(2.0, end / duration * 98.0))
-        emit_progress(percent, "识别字幕")
+        emit_progress(percent, "识别并对齐字幕")
     count = write_srt(output_path, collected, duration)
+    print(json.dumps({'word_aligned': True, 'entries': count, 'audio_duration': audio_duration,
+                      'video_duration': duration}), flush=True)
     emit_progress(100, f"完成 {count} 条字幕")
     return 0
 
@@ -177,6 +195,7 @@ def main() -> int:
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--input")
     parser.add_argument("--output")
+    parser.add_argument("--duration", type=float)
     parser.add_argument("--model", default="tiny")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--compute-type", default="auto")

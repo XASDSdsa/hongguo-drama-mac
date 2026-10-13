@@ -9,6 +9,12 @@ on:
       - scripts/check-quchong.cjs
       - scripts/setup-ffmpeg.js
       - scripts/check-ffmpeg-setup.cjs
+      - src/native/faster-whisper.js
+      - src/native/faster_whisper_cli.py
+      - src/native/transcription-manager.js
+      - src/native/srt.js
+      - scripts/check-subtitle-*
+      - scripts/check-transcription-manager.cjs
       - .github/workflows/windows-processing-checks.yml
 
 permissions:
@@ -30,6 +36,10 @@ jobs:
           node scripts/check-ffmpeg-setup.cjs
           node scripts/setup-ffmpeg.js
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       # Hosted runners do not expose NVENC, AMF or QSV hardware. These checks
       # exercise real media, filters, CPU encoding, MP4 output and cancellation.
       - name: Check processing with bundled Windows FFmpeg
@@ -40,3 +50,5 @@ jobs:
         run: |
           "$FFMPEG_PATH" -version
           node scripts/check-quchong.cjs
+          npm run check:subtitles
+          python scripts/check-subtitle-alignment.py

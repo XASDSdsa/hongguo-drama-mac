@@ -70,5 +70,24 @@ const closed = source.indexOf("mainWindow = null;", source.indexOf("createdWindo
 const cancelled = source.indexOf('cancelAllQuchongBatches();', closed);
 assert.ok(closed >= 0 && cancelled > closed, 'closed handler must detach the BrowserWindow before cancelling jobs');
 
-console.log('PASS renderer lifecycle guards (6 cases)');
-fs.rmSync(temp, { recursive: true, force: true });
+(async () => {
+  let stopCalls = 0, quitCalls = 0, releaseChildren, prevented = 0, running = true;
+  context.subtitleFixture = { hasActive: () => running, cancelAll: () => {
+    stopCalls++;
+    return new Promise(resolve => { releaseChildren = () => { running = false; resolve(); }; });
+  } };
+  run('transcriptionManager = subtitleFixture');
+  app.quit = () => { quitCalls++; };
+  app.emit('before-quit', { preventDefault: () => { prevented++; } });
+  app.emit('before-quit', { preventDefault: () => { prevented++; } });
+  assert.equal(prevented, 2);
+  assert.equal(stopCalls, 1);
+  assert.equal(quitCalls, 0, 'must not exit before subtitle workers stop');
+  releaseChildren();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(quitCalls, 1);
+  app.emit('before-quit', { preventDefault: () => { prevented++; } });
+  assert.equal(prevented, 2, 'final quit should proceed once workers are gone');
+  console.log('PASS renderer lifecycle guards (7 cases, including awaited subtitle shutdown)');
+})().catch(error => { console.error(error); process.exitCode = 1; })
+  .finally(() => fs.rmSync(temp, { recursive: true, force: true }));

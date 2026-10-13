@@ -23,7 +23,7 @@ const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
 const whisper = require('./src/native/whisper');
 const fasterWhisper = require('./src/native/faster-whisper');
-const { createTranscriptionManager } = require('./src/native/transcription-manager');
+const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
 const { createAnalysisManager } = require('./src/native/analysis-manager');
 const { createAiMaterialQueue } = require('./src/native/ai-material-queue');
 const store = require('./src/store');
@@ -792,7 +792,7 @@ function getSeriesDedupedEpisodes(seriesId) {
 
 let transcriptionManager = null;
 function getTranscriptionSettings() {
-  return { ...getCurrentSettings(), isPackaged: !!app.isPackaged, resourcesPath: process.resourcesPath };
+  return { ...getCurrentSettings(), isPackaged: !!app.isPackaged, resourcesPath: process.resourcesPath, ffmpegPath: resolveFfmpeg('ffmpeg'), ffprobePath: resolveFfmpeg('ffprobe') };
 }
 function getTranscriptionManager() {
   if (!transcriptionManager) {
@@ -836,12 +836,13 @@ function getSeriesAnalysisEpisodes(seriesId) {
   const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === String(seriesId));
   const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title, tasks);
   const transcript = transcriptionState(entry);
+  const deduped = new Map(getSeriesDedupedEpisodes(seriesId).map(item => [item.episodeIndex, item]));
   return (entry.episodes || []).map(episode => {
     const episodeIndex = Number(episode.vid_index);
     const record = transcript.episodes[String(episodeIndex)];
-    if (!record || record.status !== 'completed' || !record.srtPath || !fs.existsSync(record.srtPath)) return null;
-    const srtFingerprint = sidecarFingerprint(record.srtPath);
-    if (!srtFingerprint || (record.srtFingerprint && record.srtFingerprint !== srtFingerprint)) return null;
+    const current = deduped.get(episodeIndex);
+    if (!current || !isSubtitleCompleted(record, current)) return null;
+    const srtFingerprint = record.srtHash;
     const baseDir = seriesDir || path.dirname(record.srtPath);
     return {
       episodeIndex,
@@ -850,6 +851,8 @@ function getSeriesAnalysisEpisodes(seriesId) {
       inputPath: record.inputPath || '',
       srtPath: record.srtPath,
       srtFingerprint,
+      srtRevision: record.revision,
+      inputFingerprint: current.inputFingerprint,
       analysisPath: path.join(baseDir, 'analysis', `ep${String(episodeIndex).padStart(3, '0')}.json`),
     };
   }).filter(item => item && Number.isSafeInteger(item.episodeIndex) && item.episodeIndex > 0);
@@ -4549,6 +4552,7 @@ function createWindow() {
     clearOnlineCache();
     for (const job of compatPreparing.values()) { job.cancelled = true; job.controller.abort(); }
     cancelAllQuchongBatches();
+    transcriptionManager?.cancelAll().catch(error => console.warn('[Subtitles] 停止任务失败:', error.message));
   });
 }
 
@@ -4653,4 +4657,14 @@ async function rememberWindowsEncoder() {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+let waitingForSubtitles = false;
+app.on('before-quit', event => {
+  if (!transcriptionManager?.hasActive()) return;
+  event.preventDefault();
+  if (waitingForSubtitles) return;
+  waitingForSubtitles = true;
+  transcriptionManager.cancelAll().catch(error => console.warn('[Subtitles] 停止任务失败:', error.message))
+    .finally(() => { waitingForSubtitles = false; app.quit(); });
 });

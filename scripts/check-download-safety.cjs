@@ -81,6 +81,31 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     assert.equal(episode.inputPath, output);
     assert.equal(episode.srtPath, path.join(seriesDir, 'transcripts', 'Short 001_去重.srt'));
   });
+  await check('analysis accepts only a verified SRT for the current dedup video', async () => {
+    const { inspectSubtitle } = require('../src/native/transcription-manager');
+    const h = load(); h.set('seriesRegistry', series());
+    await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[0]] });
+    const source = h.run('downloadTasks[0]'); file(source.savePath); source.status = 'completed';
+    const seriesDir = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
+    const output = path.join(seriesDir, '去重视频', 'Short 001_去重.mp4');
+    fs.mkdirSync(path.dirname(output)); file(output);
+    h.context.markPipelineDownloaded(source, source.savePath);
+    h.context.markPipelineDeduped(source.savePath, output);
+    const input = h.context.getSeriesDedupedEpisodes('S')[0];
+    fs.mkdirSync(path.dirname(input.srtPath));
+    const text = '1\n00:00:01,000 --> 00:00:02,000\n完整对白。\n\n';
+    fs.writeFileSync(input.srtPath, text);
+    h.context.saveSeriesTranscriptionState('S', { episodes: { '1': { ...input, status: 'completed', revision: 'r1', srtFingerprint: h.context.sidecarFingerprint(input.srtPath), srtHash: inspectSubtitle(input.srtPath, 10).hash, validation: { duration: 10 } } } });
+    assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 1);
+    fs.writeFileSync(input.srtPath, '');
+    assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 0, 'corrupt SRT must not reach AI');
+    fs.writeFileSync(input.srtPath, text);
+    assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 1);
+    const replacement = path.join(path.dirname(output), 'Short 001_new.mp4'); file(replacement);
+    h.context.markPipelineDeduped(source.savePath, replacement);
+    assert.equal(h.context.getTranscriptionManager().status('S').episodes[0].status, 'stale');
+    assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 0, 'previous dedup version must not reach AI');
+  });
   await check('rescan registers only files inside the originals subdirectory', () => {
     const h = load(); h.set('seriesRegistry', series());
     const seriesDir = h.context.seriesDownloadDir(h.dir, 'S', 'Short');

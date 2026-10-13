@@ -27,6 +27,12 @@ function selfTest(runtime, env) {
     // Moving it out of the build tree catches links to a development venv/cache.
     await fs.mkdir(resources);
     await fs.cp(suppliedResources ? path.join(suppliedResources, 'faster-whisper') : path.join(root, 'build/faster-whisper', `${process.platform}-${process.arch}`), path.join(resources, 'faster-whisper'), { recursive: true, verbatimSymlinks: true });
+    const sourceBin = suppliedResources ? path.join(suppliedResources, 'bin') : path.join(root, 'build/ffmpeg', ...(process.platform === 'win32' ? [] : [`${process.platform}-${process.arch}`]));
+    await fs.mkdir(path.join(resources, 'bin'));
+    for (const tool of ['ffmpeg', 'ffprobe']) {
+      const filename = tool + (process.platform === 'win32' ? '.exe' : '');
+      await fs.copyFile(path.join(sourceBin, filename), path.join(resources, 'bin', filename));
+    }
     process.env.PATH = path.join(temporary, 'no-system-python');
     process.env.HF_HOME = path.join(temporary, 'empty-model-cache');
     process.env.HF_HUB_OFFLINE = '1';
@@ -36,12 +42,15 @@ function selfTest(runtime, env) {
     const runtime = await prepareRuntime({ resourcesPath: resources, isPackaged: true, faster_whisper_device: 'cpu', faster_whisper_python_path: 'never-run-system-python', faster_whisper_model: 'medium' });
     assert.equal(runtime.bundled, true);
     assert.equal(runtime.model, 'tiny');
+    assert.ok(runtime.ffmpegPath && runtime.ffprobePath, 'audio clock correction must use bundled tools');
     assert.ok((await selfTest(runtime, process.env)).includes('"ok": true'));
     if (process.argv[3]) {
-      const result = await transcribeToSrt(path.resolve(process.argv[3]), path.join(temporary, '完整字幕.srt'), runtime, { onProgress: info => console.log(`progress ${info.progress}%`) });
+      const result = await transcribeToSrt(path.resolve(process.argv[3]), path.join(temporary, '完整字幕.srt'), runtime);
       const entries = parseSrt(await fs.readFile(result.outputPath, 'utf8'));
       assert.ok(entries.length > 0);
-      console.log(`Recognized ${entries.length} timed cues: ${entries.map(entry => entry.text).join(' ')}`);
+      assert.equal(result.alignment.word_aligned, true);
+      assert.ok(entries.every(entry => entry.end <= Math.round(result.timing.duration * 1000) / 1000));
+      console.log(`Recognized and validated ${entries.length} word-aligned cues in ${result.timing.duration}s of video`);
     }
     await fs.rename(runtime.modelPath, `${runtime.modelPath}-missing`);
     await assert.rejects(() => prepareRuntime({ resourcesPath: resources, isPackaged: true }), /内置字幕引擎或模型缺失/);

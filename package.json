@@ -19,6 +19,7 @@
     "check:pipeline": "node scripts/check-pipeline-gate.cjs",
     "check:whisper": "node scripts/check-whisper-adapter.cjs",
     "check:premium": "node scripts/check-premium-editing.cjs",
+    "check:subtitles": "node scripts/check-transcription-manager.cjs && node scripts/check-subtitle-timing.cjs",
     "check:cut-points": "node scripts/check-cut-point-refiner.cjs",
     "setup:whisper": "node scripts/setup-whisper.js",
     "setup:transcription": "node scripts/setup-faster-whisper.cjs",
