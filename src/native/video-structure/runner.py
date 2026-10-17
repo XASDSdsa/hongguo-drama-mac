@@ -4,7 +4,13 @@ import json
 import os
 from pathlib import Path
 import unicodedata
+import sys
 import wave
+
+# Windows consoles default to cp1252; progress lines carry Chinese text and the parent reads UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, 'reconfigure'):
+        _stream.reconfigure(encoding='utf-8')
 
 
 def progress(value, message):
