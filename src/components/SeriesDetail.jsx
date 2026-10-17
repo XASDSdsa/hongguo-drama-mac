@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
-import { Check, ChevronRight, Film, RefreshCw } from './icons';
+import { ChevronRight, Film, RefreshCw } from './icons';
 import DedupParams from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
@@ -14,7 +14,10 @@ const VIEW_KEY = 'library-view';
 const DEFAULT_SPLIT = { min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2, start_number: 1 };
 const DEFAULT_SPEED = { speed_min: 1.03, speed_max: 1.21 };
 const EPISODE_PAGE_SIZES = [30, 60, 100, 200];
-const ISSUE_PREVIEW = 5;
+const DRAFT_MODES = [
+  ['simple', '3 分轨', '文案 · 视频 · 音频各一条轨道，按已有分镜直接切'],
+  ['multi', '多分轨', '人声、背景、音效等拆成多条轨道，更细'],
+];
 
 function readJson(key) {
   try {
@@ -57,7 +60,7 @@ function ghostLabel(item) {
   return item.text;
 }
 
-/** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、下载问题、AI 发布素材和去重处理。 */
+/** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、AI 发布素材、要做的处理（去重、剪映草稿）和进度日志。 */
 export default function SeriesDetail({ folder, active = true, onBack }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -69,6 +72,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [opts, setOpts] = useState(null);
   const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
   const [mode, setMode] = useState(saved.mode === 'episode' ? 'episode' : 'resplit');
+  const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
+  const [draftOn, setDraftOn] = useState(saved.draftOn === true);
+  const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
@@ -79,8 +85,6 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [pageSize, setPageSize] = useState(
     EPISODE_PAGE_SIZES.includes(view.episodePageSize) ? view.episodePageSize : 60,
   );
-  const [showAllIssues, setShowAllIssues] = useState(false);
-  const [actionError, setActionError] = useState('');
   const [publish, setPublish] = useState(null); // AI 发布素材的最新结果（新海报、新剧名）
   const requestId = useRef(0);
   const paramsRef = useRef(null);
@@ -97,6 +101,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     },
     isBusy: (data) =>
       !!data.planning ||
+      data.draft?.status === 'running' ||
       data.batches.some(isActiveBatch) ||
       data.jobs.some((job) => ['waiting', 'starting'].includes(job.status)),
     active,
@@ -187,8 +192,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   }, [saved]);
 
   useEffect(() => {
-    if (opts) writeJson(STORAGE_KEY, { opts, split, mode });
-  }, [opts, split, mode]);
+    if (opts) writeJson(STORAGE_KEY, { opts, split, mode, dedupOn, draftOn, draftMode });
+  }, [opts, split, mode, dedupOn, draftOn, draftMode]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
   }, [pageSize]);
@@ -276,33 +281,23 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     if (page !== currentPage) setPage(currentPage);
   }, [page, currentPage]);
 
-  // ---- 下载问题：失败（带原因）、没下载、下载中、平台没有 ----
-  const missing = detail?.missing || [];
-  const failed = missing.filter((item) => item.state === 'failed' && item.task);
-  const notDownloaded = missing.filter((item) => item.state === 'notDownloaded');
-  const downloading = missing.filter((item) => item.state === 'downloading');
-  const platformGaps = missing.filter((item) => item.state === 'absent' || item.state === 'locked');
-  const issueRows = [...failed, ...downloading, ...notDownloaded].sort((a, b) => a.index - b.index);
-
-  const runAction = async (action) => {
-    setActionError('');
+  // 缺集的原因就写在集的标签上；失败的点一下重试，没下载的点一下下载。
+  const tileAction = (item) => {
+    if (item.state === 'failed' && item.task) return () => window.electronAPI.retryTask(item.task.id);
+    if (item.state === 'notDownloaded' && detail?.linked)
+      return () => window.electronAPI.downloadSingleEpisode(detail.seriesId, item.index);
+    return null;
+  };
+  const runTile = async (action) => {
+    setNotice('');
     try {
       const result = await action();
-      if (result && result.success === false) setActionError(result.error || '操作失败');
+      if (result && result.success === false) setNotice(result.error || '操作失败');
     } catch (e) {
-      setActionError(e?.message || '操作失败');
+      setNotice(e?.message || '操作失败');
     }
     reload();
   };
-  const retryOne = (item) => runAction(() => window.electronAPI.retryTask(item.task.id));
-  const stopOne = (item) => runAction(() => window.electronAPI.stopDownload(item.task.id));
-  const downloadOne = (item) => runAction(() => window.electronAPI.downloadSingleEpisode(detail.seriesId, item.index));
-  const retryAll = () => runAction(() => window.electronAPI.retryTasks(failed.map((item) => item.task.id)));
-  const downloadAll = () =>
-    runAction(async () => {
-      for (const item of notDownloaded) await window.electronAPI.downloadSingleEpisode(detail.seriesId, item.index);
-      return { success: true };
-    });
 
   const submit = async (gapPolicy) => {
     setSubmitting(true);
@@ -311,11 +306,13 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     setPreview(false);
     const result = await window.electronAPI.libraryDedup({
       dir: detail.dir,
+      dedup: dedupOn,
       mode,
       files: episodes.filter((item) => selected.has(item.path)).map((item) => item.path),
       opts,
       split,
       gapPolicy,
+      sideTasks: { jianyingDraft: { enabled: draftOn, mode: draftMode } },
     });
     setSubmitting(false);
     if (result?.needsDecision) return setDecision(result);
@@ -342,7 +339,10 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       ? '正在准备…'
       : activeBatches.length
         ? `正在处理：已完成 ${activeBatches.reduce((n, b) => n + b.done, 0)}/${activeBatches.reduce((n, b) => n + b.total, 0)} 集`
-        : '';
+        : activity?.draft?.status === 'running'
+          ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
+          : '';
+  const nothingToDo = dedupOn ? !selectedCount : !draftOn;
 
   const hopeless = (decision?.blocking || [])
     .filter((item) => item.reason && item.reason.retryHelps === false)
@@ -361,9 +361,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       : selectedCount
         ? `将按原集去重 ${selectedCount} 集，一集出一集`
         : '';
+  const startLabel = dedupOn ? `开始处理（${selectedCount} 集）` : '开始处理';
 
   const title = detail?.name || folder.name;
-  const shownIssues = showAllIssues ? issueRows : issueRows.slice(0, ISSUE_PREVIEW);
   const downloaded = episodes.length;
   const total = folder.totalEpisodes || 0;
 
@@ -495,14 +495,31 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               {visible.map((card) => {
                 if (card.kind === 'missing') {
                   const item = card.item;
-                  return (
+                  const action = tileAction(item);
+                  const reason = item.task?.reason?.text || item.text;
+                  const inner = (
+                    <>
+                      <span className="lib-ep-no">第{item.index}集</span>
+                      <span className="lib-ep-state">{ghostLabel(item)}</span>
+                    </>
+                  );
+                  return action ? (
+                    <button
+                      type="button"
+                      key={card.key}
+                      className={`lib-ep is-missing is-${item.state}`}
+                      onClick={() => runTile(action)}
+                      title={`第${item.index}集：${reason}。点一下${item.state === 'failed' ? '重试' : '下载'}`}
+                    >
+                      {inner}
+                    </button>
+                  ) : (
                     <div
                       key={card.key}
                       className={`lib-ep is-missing is-${item.state}`}
-                      title={`第${item.index}集：${item.task?.reason?.text || item.text}`}
+                      title={`第${item.index}集：${reason}`}
                     >
-                      <span className="lib-ep-no">第{item.index}集</span>
-                      <span className="lib-ep-state">{ghostLabel(item)}</span>
+                      {inner}
                     </div>
                   );
                 }
@@ -520,11 +537,6 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     <span className="lib-ep-no">
                       {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
                     </span>
-                    {on && (
-                      <span className="lib-ep-check">
-                        <Check size={11} />
-                      </span>
-                    )}
                   </button>
                 );
               })}
@@ -543,169 +555,159 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             />
           </section>
 
-          {(issueRows.length > 0 || platformGaps.length > 0) && (
-            <section className="lib-issues" aria-label="下载状态">
-              <div className="lib-issues-head">
-                <strong>
-                  {failed.length > 0 && `${failed.length} 集下载失败`}
-                  {failed.length > 0 && (downloading.length > 0 || notDownloaded.length > 0) && '，'}
-                  {downloading.length > 0 && `${downloading.length} 集下载中`}
-                  {downloading.length > 0 && notDownloaded.length > 0 && '，'}
-                  {notDownloaded.length > 0 && `${notDownloaded.length} 集没下载`}
-                  {issueRows.length === 0 && '缺集情况'}
-                </strong>
-                <span className="lib-issues-actions">
-                  {failed.length > 1 && (
-                    <button className="btn btn-sm" onClick={retryAll}>
-                      全部重试（{failed.length}）
-                    </button>
-                  )}
-                  {notDownloaded.length > 0 && detail.linked && (
-                    <button className="btn btn-sm" onClick={downloadAll}>
-                      下载没下的（{notDownloaded.length}）
-                    </button>
-                  )}
-                </span>
-              </div>
-              {shownIssues.map((item) => (
-                <div key={item.index} className={`lib-issue is-${item.state}`}>
-                  <span className="lib-issue-no">第 {item.index} 集</span>
-                  <span className="lib-issue-text">
-                    {item.state === 'failed' && item.task?.status === 'failed' && (
-                      <>
-                        <b>{item.task.reason?.label || '下载失败'}</b>：{item.task.reason?.text}
-                        {item.task.reason?.detail && (
-                          <em title={item.task.reason.detail}>（{item.task.reason.detail}）</em>
-                        )}
-                      </>
-                    )}
-                    {item.state === 'failed' && item.task?.status === 'stopped' && <b>已暂停，点继续接着下</b>}
-                    {item.state === 'downloading' && (
-                      <b>{item.task?.status === 'pending' ? '排队中' : `下载中 ${item.task?.progress ?? 0}%`}</b>
-                    )}
-                    {item.state === 'notDownloaded' && <b>平台有这一集，还没下载</b>}
-                  </span>
-                  <span className="lib-issue-btns">
-                    {item.state === 'failed' && (
-                      <button className="btn btn-sm" onClick={() => retryOne(item)}>
-                        {item.task?.status === 'stopped'
-                          ? '继续'
-                          : item.task?.reason?.retryHelps === false
-                            ? '仍然重试'
-                            : '重试'}
-                      </button>
-                    )}
-                    {item.state === 'downloading' && item.task && (
-                      <button className="btn btn-sm" onClick={() => stopOne(item)}>
-                        停止
-                      </button>
-                    )}
-                    {item.state === 'notDownloaded' && detail.linked && (
-                      <button className="btn btn-sm" onClick={() => downloadOne(item)}>
-                        下载
-                      </button>
-                    )}
-                  </span>
-                </div>
-              ))}
-              {issueRows.length > ISSUE_PREVIEW && (
-                <button className="lib-link" onClick={() => setShowAllIssues((value) => !value)}>
-                  {showAllIssues ? '收起' : `展开全部 ${issueRows.length} 条`}
-                </button>
-              )}
-              {platformGaps.length > 0 && (
-                <p className="lib-platform-gaps">
-                  平台本来就没有：{platformGaps.map((item) => `第 ${item.index} 集（${item.text}）`).join('、')}
-                  。拼接时直接跳过。
-                </p>
-              )}
-              {actionError && <p className="lib-error">{actionError}</p>}
-            </section>
-          )}
-
-          {showParams && opts && (
-            <div ref={paramsRef} className="lib-params-card">
-              <DedupParams
-                opts={opts}
-                onChange={(k, v) => setOpts({ ...opts, [k]: v })}
-                split={mode === 'resplit' ? split : null}
-                onSplitChange={(k, v) => setSplit({ ...split, [k]: v })}
-                onReset={resetParams}
-                disabled={submitting}
-              />
+          <section className="proc-panel" aria-label="处理">
+            <div className="proc-head">
+              <h3>处理</h3>
+              <span className="proc-out" title={`成品放进：${detail.outputDir}`}>
+                成品放进「{detail.outputDir ? detail.outputDir.split(/[\\/]/).filter(Boolean).pop() : '去重'}」
+              </span>
             </div>
-          )}
+
+            <div className={`proc-block ${dedupOn ? '' : 'is-off'}`}>
+              <label className="proc-check">
+                <input
+                  type="checkbox"
+                  checked={dedupOn}
+                  onChange={(e) => setDedupOn(e.target.checked)}
+                  disabled={submitting}
+                />
+                <span className="proc-check-text">
+                  <b>视频去重</b>
+                  <small>改变画面和声音的指纹，每集成品放进「去重」文件夹</small>
+                </span>
+              </label>
+              {dedupOn && (
+                <div className="proc-detail">
+                  <div className="proc-row">
+                    <div className="seg" role="radiogroup" aria-label="处理方式">
+                      {[
+                        ['resplit', '重新拆分', '选中的集接起来，按成品时长重新切成新的集，再去重'],
+                        ['episode', '按原集去重', '一集出一集，不改变集数'],
+                      ].map(([id, label, hint]) => (
+                        <label key={id} className={`seg-item ${mode === id ? 'is-active' : ''}`} title={hint}>
+                          <input
+                            type="radio"
+                            name="lib-mode"
+                            checked={mode === id}
+                            onChange={() => setMode(id)}
+                            disabled={submitting}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                    {mode === 'resplit' && (
+                      <label className="lib-number">
+                        新集从第
+                        <input
+                          className="input-field"
+                          type="number"
+                          min="1"
+                          max="9999"
+                          value={split.start_number}
+                          onChange={(e) =>
+                            setSplit({ ...split, start_number: Math.max(1, Math.floor(Number(e.target.value)) || 1) })
+                          }
+                          disabled={submitting}
+                        />
+                        集开始编号
+                      </label>
+                    )}
+                    <button className="btn btn-sm proc-more" onClick={() => setShowParams((value) => !value)}>
+                      {showParams ? '收起参数' : '去重参数'}
+                    </button>
+                  </div>
+                  <p className="proc-hint">
+                    {mode === 'resplit'
+                      ? '选中的集按时间线接起来，再按成品时长重新切成新的集。'
+                      : '一集出一集，不改变集数。'}
+                  </p>
+                  {estimateText && <div className="lib-estimate">{estimateText}</div>}
+                  {showParams && opts && (
+                    <div ref={paramsRef} className="lib-params-card">
+                      <DedupParams
+                        opts={opts}
+                        onChange={(k, v) => setOpts({ ...opts, [k]: v })}
+                        split={mode === 'resplit' ? split : null}
+                        onSplitChange={(k, v) => setSplit({ ...split, [k]: v })}
+                        onReset={resetParams}
+                        disabled={submitting}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="proc-side-title">支线任务</div>
+            <div className={`proc-block ${draftOn ? '' : 'is-off'}`}>
+              <label className="proc-check">
+                <input
+                  type="checkbox"
+                  checked={draftOn}
+                  onChange={(e) => setDraftOn(e.target.checked)}
+                  disabled={submitting}
+                />
+                <span className="proc-check-text">
+                  <b>生成剪映草稿</b>
+                  <small>{dedupOn ? '去重完成后，每集成品生成一份草稿' : '用「去重」文件夹里已有的成品生成草稿'}</small>
+                </span>
+              </label>
+              {draftOn && (
+                <div className="proc-detail">
+                  <div className="proc-row">
+                    <span className="proc-label">分轨方式</span>
+                    <div className="seg" role="radiogroup" aria-label="分轨方式">
+                      {DRAFT_MODES.map(([id, label, hint]) => (
+                        <label key={id} className={`seg-item ${draftMode === id ? 'is-active' : ''}`} title={hint}>
+                          <input
+                            type="radio"
+                            name="lib-draft-mode"
+                            checked={draftMode === id}
+                            onChange={() => setDraftMode(id)}
+                            disabled={submitting}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="proc-hint">{DRAFT_MODES.find(([id]) => id === draftMode)[2]}。</p>
+                </div>
+              )}
+            </div>
+            <label className="proc-check is-reserved" title="功能预留，暂未开放">
+              <input type="checkbox" disabled />
+              <span className="proc-check-text">
+                <b>自动生成 AI 分镜工程图</b>
+                <small>预留，暂未开放</small>
+              </span>
+            </label>
+            <label className="proc-check is-reserved" title="功能预留，暂未开放">
+              <input type="checkbox" disabled />
+              <span className="proc-check-text">
+                <b>自动配置成本报告</b>
+                <small>预留，暂未开放</small>
+              </span>
+            </label>
+
+            <div className="proc-foot">
+              <div className="proc-foot-info">
+                {busyText && <div className="lib-status">{busyText}</div>}
+                {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
+              </div>
+              <button
+                className="btn btn-primary proc-start"
+                onClick={() => (dedupOn && mode === 'resplit' ? setPreview(true) : submit(undefined))}
+                disabled={submitting || !!activity?.planning || nothingToDo || (dedupOn && !opts)}
+              >
+                {startLabel}
+              </button>
+            </div>
+          </section>
 
           <div ref={progressRef}>
             <SeriesProgress dir={detail.dir} activity={activity} onChanged={refreshActivity} />
-          </div>
-
-          <div className="lib-bar">
-            <div className="lib-foot-info">
-              <div
-                className="lib-modes"
-                role="radiogroup"
-                aria-label="处理方式"
-                title={`成品放进：${detail.outputDir}`}
-              >
-                {[
-                  ['resplit', '重新拆分', '选中的集接起来，按成品时长重新切成新的集，再去重'],
-                  ['episode', '按原集去重', '一集出一集，不改变集数'],
-                ].map(([id, label, hint]) => (
-                  <label key={id} className={`lib-mode ${mode === id ? 'is-active' : ''}`} title={hint}>
-                    <input
-                      type="radio"
-                      name="lib-mode"
-                      checked={mode === id}
-                      onChange={() => setMode(id)}
-                      disabled={submitting}
-                    />
-                    {label}
-                    <span>{hint}</span>
-                  </label>
-                ))}
-                {mode === 'resplit' && (
-                  <label className="lib-number">
-                    新集从第
-                    <input
-                      className="input-field"
-                      type="number"
-                      min="1"
-                      max="9999"
-                      value={split.start_number}
-                      onChange={(e) =>
-                        setSplit({ ...split, start_number: Math.max(1, Math.floor(Number(e.target.value)) || 1) })
-                      }
-                      disabled={submitting}
-                    />
-                    集开始编号
-                  </label>
-                )}
-              </div>
-              {busyText && <div className="lib-status">{busyText}</div>}
-              {estimateText && <div className="lib-estimate">{estimateText}</div>}
-              {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
-            </div>
-            <div className="lib-foot-actions">
-              <button className="btn btn-sm" onClick={() => setShowParams((value) => !value)}>
-                去重参数…
-              </button>
-              {busyText && (
-                <button
-                  className="btn"
-                  onClick={() => progressRef.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}
-                >
-                  查看进度
-                </button>
-              )}
-              <button
-                className="btn btn-primary"
-                onClick={() => (mode === 'resplit' ? setPreview(true) : submit(undefined))}
-                disabled={submitting || !!activity?.planning || !selectedCount || !opts}
-              >
-                开始处理（{selectedCount} 集）
-              </button>
-            </div>
           </div>
         </>
       )}

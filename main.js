@@ -1077,6 +1077,7 @@ function getAnalysisManager() {
   return analysisManager;
 }
 
+const libraryDraftPlans = new Map(); // projectId -> { mode, fallbackRoot }
 let reconstructionPipeline = null;
 function getReconstructionPipeline() {
   if (!reconstructionPipeline) {
@@ -1093,6 +1094,9 @@ function getReconstructionPipeline() {
       getProjectRecord: (projectId) => store.getStructureProjects()[String(projectId)] || null,
       saveProjectRecord: (projectId, record) => store.saveStructureProject(projectId, record),
       createDraft: (ctx) => {
+        // 管理剧集里发起的草稿会登记模式（多分轨 / 三分轨）和没装剪映时的存放位置。
+        const plan = libraryDraftPlans.get(ctx.taskId) || {};
+        const simple = plan.mode === 'simple';
         const userData = resolveJianyingUserData();
         const stamp = new Date()
           .toISOString()
@@ -1101,18 +1105,20 @@ function getReconstructionPipeline() {
         const name = `${sanitizeFolderName(path.parse(ctx.input).name)}-剪映草稿-${stamp}-${randomUUID().slice(0, 4)}`;
         return createJianyingDraft(ctx, {
           executable: resolveJianyingRuntime()?.executable,
-          createScript: resolveJianyingScript('create-jianying-draft.py'),
+          createScript: resolveJianyingScript(simple ? 'create-jianying-simple-draft.py' : 'create-jianying-draft.py'),
           checkScript: resolveJianyingScript('check-jianying-draft.py'),
           outputRoot: userData
             ? path.join(userData, 'Projects', 'com.lveditor.draft')
-            : path.join(ctx.projectDir, '剪映草稿'),
+            : plan.fallbackRoot || path.join(ctx.projectDir, '剪映草稿'),
           name,
           userData,
-          validate: workflowGates().validateDraft,
+          // 三分轨草稿结构简单，由脚本自己核对；多分轨照旧走完整校验。
+          validate: simple ? false : workflowGates().validateDraft,
         });
       },
       sendProgress: (payload) => {
         sendToRenderer('reconstruction-progress', payload);
+        libraryDraftProgress(payload);
         const run = [...episodeWorkflowRuns.values()].find((item) => item.projectId === payload?.projectId);
         if (!run) return;
         const entry = seriesRegistry.find((item) => String(item.series_id) === String(run.seriesId));
@@ -1970,33 +1976,11 @@ async function executeHongguoDownload(task) {
       task.errorStatus = error.response?.status || 0;
       task.endTime = Date.now();
       sendToRenderer('download-failed', { id, error: error.message });
-      logDownloadFailure(task);
     }
     saveDownloadTasks();
   } finally {
     if (task.cancelSource === source) delete task.cancelSource;
     if (task.writer === writer) delete task.writer;
-  }
-}
-
-/** 下载失败写进这部剧的日志，原因用人话：资源缺失 / 网络失败 / … */
-function logDownloadFailure(task) {
-  try {
-    const claimed = claimedSeriesFolder(task.hongguoInfo?.series_id);
-    if (!claimed) return;
-    const reason = downloadErrors.classifyDownloadError({
-      message: task.error,
-      code: task.errorCode,
-      status: task.errorStatus,
-    });
-    libLog(
-      path.join(downloadRoot(), claimed),
-      'error',
-      `第 ${task.hongguoInfo?.vid_index ?? '?'} 集下载失败：${reason.label}。${reason.text}${reason.detail ? `（${reason.detail}）` : ''}`,
-      'side',
-    );
-  } catch (_) {
-    /* 记日志失败不影响下载。 */
   }
 }
 
@@ -2696,6 +2680,18 @@ function finishQuchongBatch(batch) {
       `这一批处理${batch.status === 'completed' ? '全部完成' : '结束'}：成功 ${count('completed')} 集${failed ? `，失败 ${failed} 集` : ''}${stopped ? `，停止 ${stopped} 集` : ''}`,
     );
   }
+  // 勾选了「生成剪映草稿」：去重完成的成品接着生成草稿。
+  const draftTask = batch.sideTasks?.jianyingDraft;
+  if (draftTask?.enabled && batch.libraryDir && !batch.cancelled) {
+    const outputs = batch.tasks.filter((task) => task.status === 'completed' && task.dst).map((task) => task.dst);
+    if (outputs.length) {
+      startLibraryDrafts({ dir: batch.libraryDir, files: outputs, mode: draftTask.mode }).then((started) => {
+        if (!started.success) {
+          libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
+        }
+      });
+    } else libLog(batch.libraryDir, 'warn', '剪映草稿：这一批没有成功的去重成品，没有生成草稿', 'side');
+  }
   sendToRenderer('quchong-complete', {
     batchId: batch.id,
     cancelled: batch.cancelled,
@@ -2916,6 +2912,7 @@ function registerQuchongBatch({
   tasks,
   libraryDir = '',
   modeText = '',
+  sideTasks = null,
 }) {
   const id = randomUUID();
   const batch = {
@@ -2925,6 +2922,7 @@ function registerQuchongBatch({
     outputDir,
     libraryDir,
     modeText,
+    sideTasks,
     ffmpegPath,
     ffprobePath,
     concurrency: Math.min(opts.jobs, QUCHONG_MAX_ACTIVE),
@@ -2998,7 +2996,7 @@ async function startResplitBatch(args) {
   }
 }
 
-async function planAndQueueResplit({ dir, files, split, opts, outputDir }) {
+async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTasks = null }) {
   const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...opts });
   const splitOptions = resplit.validateSplit(split);
   const ffmpegPath = resolveFfmpeg('ffmpeg');
@@ -3069,6 +3067,7 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir }) {
     outputDir,
     libraryDir: dir,
     modeText: '重新拆分',
+    sideTasks,
     ffmpegPath,
     ffprobePath,
     tasks: plan.pieces.map((piece, index) => ({
@@ -3140,6 +3139,7 @@ async function startQuchongBatch(payload = {}) {
       outputDir,
       libraryDir,
       modeText: libraryDir ? '按原集去重' : '',
+      sideTasks: libraryDir ? normalizeSideTasks(payload.sideTasks) : null,
       ffmpegPath,
       ffprobePath,
       tasks: sources.map((src, index) => ({ src, dst: destinations[index] })),
@@ -3211,6 +3211,7 @@ ipcMain.handle('library-activity', (_event, dir) => {
         .filter((batch) => same(batch.libraryDir))
         .slice(0, 10),
       jobs: [...libraryJobs.values()].filter((job) => same(job.dir)).map(libraryJobSnapshot),
+      draft: libraryDraftSnapshot(libraryDraftJobs.get(folder)),
       logs: libraryLog().list(folder, 300),
     };
   } catch (error) {
@@ -3671,6 +3672,250 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
   }
 });
 
+// ===== 管理剧集的支线任务：生成剪映草稿 =====
+// 对「去重」成品逐集做结构化拆解（分镜 + 文案），再生成剪映草稿。多分轨沿用完整草稿；
+// 三分轨（文案 / 视频 / 音频）直接用现成的分镜和字幕切原视频，不另外渲染分镜文件、不分离人声。
+const libraryDraftJobs = new Map(); // 剧文件夹 -> 当前/最近一次草稿任务
+const DRAFT_MODE_TEXT = { simple: '三分轨（文案·视频·音频）', multi: '多分轨' };
+const DRAFT_STAGE_TEXT = {
+  media: '读取视频信息',
+  audio: '提取音频',
+  shots: '检测分镜',
+  separation: '人声 / 背景分离',
+  transcript: '识别台词',
+  alignment: '关联台词与分镜',
+  clips: '导出分镜',
+  export: '导出字幕',
+  jianying: '生成剪映草稿',
+};
+const DRAFT_MODULES = [
+  'media',
+  'audio',
+  'shots',
+  'clips',
+  'separation',
+  'transcript',
+  'alignment',
+  'export',
+  'jianying',
+];
+
+/** 支线任务：目前只有剪映草稿；没勾选就当没有。 */
+function normalizeSideTasks(value) {
+  const draft = value?.jianyingDraft;
+  if (!draft?.enabled) return null;
+  return { jianyingDraft: { enabled: true, mode: normalizeDraftMode(draft.mode) } };
+}
+
+function normalizeDraftMode(value) {
+  return value === 'multi' ? 'multi' : 'simple';
+}
+
+function libraryDraftSnapshot(job) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    mode: job.mode,
+    modeText: DRAFT_MODE_TEXT[job.mode],
+    status: job.status,
+    total: job.total,
+    done: job.done,
+    failed: job.failed,
+    current: job.current,
+    progress: job.progress,
+    message: job.message,
+    startedAt: job.startedAt,
+    endTime: job.endTime,
+  };
+}
+
+function libraryDraftEmit(job) {
+  sendToRenderer('library-activity', { dir: job.dir });
+}
+
+/** 去重文件夹里已有的成品视频（按集号/名称自然排序）。 */
+function libraryDedupOutputs(dir) {
+  const output = path.join(dir, '去重');
+  if (!fs.existsSync(output)) return [];
+  return fs
+    .readdirSync(output, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.mp4$/i.test(entry.name))
+    .map((entry) => path.join(output, entry.name))
+    .sort((a, b) => path.basename(a).localeCompare(path.basename(b), 'zh-CN', { numeric: true }));
+}
+
+/** 开始前先确认运行环境够用，免得拆解跑了很久才发现缺东西。 */
+async function libraryDraftReadiness(mode) {
+  if (!resolveJianyingRuntime()?.executable) return '缺少内置剪映运行时，请使用包含剪映运行时的完整安装包';
+  const script = mode === 'simple' ? 'create-jianying-simple-draft.py' : 'create-jianying-draft.py';
+  if (!resolveJianyingScript(script)) return `缺少草稿脚本 ${script}，请使用完整安装包`;
+  try {
+    const availability = await getReconstructionPipeline().availability();
+    const bad = Object.values(availability.modules || {}).find((module) => !module.ready);
+    if (bad) return bad.error || '内置结构化拆解运行时没准备好';
+  } catch (error) {
+    return error?.message || '内置结构化拆解运行时没准备好';
+  }
+  return '';
+}
+
+async function generateLibraryDraft(job, file) {
+  const pipeline = getReconstructionPipeline();
+  const label = path.basename(file, path.extname(file));
+  const workRoot =
+    String(getCurrentSettings().structure_output_dir || '').trim() ||
+    path.join(app.getPath('userData'), 'structure-work');
+  const projectId = `${label}-${createHash('sha256').update(file).digest('hex').slice(0, 8)}`;
+  job.projectId = projectId;
+  libraryDraftPlans.set(projectId, { mode: job.mode, fallbackRoot: path.join(job.dir, '剪映草稿') });
+  try {
+    await pipeline.start({ inputPath: file, projectId, outputRoot: workRoot });
+    let structure = await pipeline.wait(projectId);
+    if (job.cancelled || structure?.status === 'stopped') throw Object.assign(new Error('已停止'), { stopped: true });
+    const incomplete = DRAFT_MODULES.filter((id) => structure?.modules?.[id]?.status !== 'succeeded');
+    if (incomplete.length) {
+      throw new Error(structure?.error || `拆解没有完成：${incomplete.map((id) => DRAFT_STAGE_TEXT[id]).join('、')}`);
+    }
+    // 拆解结果是缓存复用的：以前生成的草稿和这次要的分轨方式不一样时，只重做最后一步。
+    const manifestOf = (draftPath) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(draftPath, 'hongguo-draft-manifest.json'), 'utf8'));
+      } catch (_) {
+        return null;
+      }
+    };
+    const current = manifestOf(structure.modules.jianying.summary?.draft_path || '');
+    const isSimple = String(current?.schema || '').includes('simple');
+    if (!current || isSimple !== (job.mode === 'simple')) {
+      await pipeline.start({ inputPath: file, projectId, module: 'jianying', force: true });
+      structure = await pipeline.wait(projectId);
+      if (job.cancelled || structure?.status === 'stopped') throw Object.assign(new Error('已停止'), { stopped: true });
+      if (structure?.modules?.jianying?.status !== 'succeeded') {
+        throw new Error(structure?.modules?.jianying?.error || structure?.error || '剪映草稿没有生成');
+      }
+    }
+    return structure.modules.jianying.summary.draft_path;
+  } finally {
+    libraryDraftPlans.delete(projectId);
+  }
+}
+
+/** 对这些去重成品逐集生成剪映草稿；后台运行，进度和日志写进这部剧的「支线任务日志」。 */
+async function startLibraryDrafts({ dir, files, mode }) {
+  const key = path.resolve(dir);
+  const running = libraryDraftJobs.get(key);
+  if (running?.status === 'running') return { success: false, error: '这部剧的剪映草稿正在生成' };
+  if (!files.length) return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
+  const kind = normalizeDraftMode(mode);
+  const problem = await libraryDraftReadiness(kind);
+  if (problem) {
+    libLog(key, 'error', `剪映草稿：没有开始：${problem}`, 'side');
+    return { success: false, error: problem };
+  }
+  const job = {
+    id: randomUUID(),
+    dir: key,
+    mode: kind,
+    status: 'running',
+    total: files.length,
+    done: 0,
+    failed: 0,
+    current: null,
+    progress: 0,
+    message: '',
+    startedAt: Date.now(),
+    endTime: null,
+    cancelled: false,
+    projectId: null,
+    lastStage: '',
+  };
+  libraryDraftJobs.set(key, job);
+  libLog(key, 'info', `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}）`, 'side');
+  libraryDraftEmit(job);
+  (async () => {
+    for (const file of files) {
+      if (job.cancelled) break;
+      const label = path.basename(file, path.extname(file));
+      job.current = label;
+      job.progress = 0;
+      job.lastStage = '';
+      libLog(key, 'info', `剪映草稿：${label} 开始`, 'side');
+      libraryDraftEmit(job);
+      try {
+        const draftPath = await generateLibraryDraft(job, file);
+        job.done += 1;
+        libLog(key, 'ok', `剪映草稿：${label} 已生成 → ${draftPath}`, 'side');
+      } catch (error) {
+        if (job.cancelled || error?.stopped) break;
+        job.failed += 1;
+        libLog(key, 'error', `剪映草稿：${label} 失败：${error?.message || error}`, 'side');
+      }
+      libraryDraftEmit(job);
+    }
+    job.status = job.cancelled ? 'stopped' : job.failed ? 'failed' : 'completed';
+    job.current = null;
+    job.endTime = Date.now();
+    libLog(
+      key,
+      job.status === 'completed' ? 'ok' : job.status === 'stopped' ? 'warn' : 'error',
+      job.status === 'stopped'
+        ? `剪映草稿：已停止，完成 ${job.done}/${job.total} 集`
+        : `剪映草稿：结束，成功 ${job.done} 集${job.failed ? `，失败 ${job.failed} 集` : ''}`,
+      'side',
+    );
+    libraryDraftEmit(job);
+  })();
+  return { success: true, job: libraryDraftSnapshot(job) };
+}
+
+/** 流水线每推进一步，就把这一集的进度和当前步骤记到对应的剧里。 */
+function libraryDraftProgress(payload) {
+  const job = [...libraryDraftJobs.values()].find(
+    (item) => item.status === 'running' && item.projectId === payload?.projectId,
+  );
+  if (!job) return;
+  const stages = Object.values(payload?.modules || {});
+  const finished = stages.filter((stage) => stage.status === 'succeeded').length;
+  const currentProgress = payload?.modules?.[payload?.stage]?.progress;
+  job.progress = Math.min(
+    99,
+    Math.floor(
+      ((finished + (Number.isFinite(currentProgress) ? currentProgress / 100 : 0)) / DRAFT_MODULES.length) * 100,
+    ),
+  );
+  const stage = payload?.stage;
+  job.message = DRAFT_STAGE_TEXT[stage] || '';
+  if (stage && stage !== job.lastStage && DRAFT_STAGE_TEXT[stage]) {
+    job.lastStage = stage;
+    libLog(job.dir, 'info', `剪映草稿：${job.current}：${DRAFT_STAGE_TEXT[stage]}`, 'side');
+  }
+  libraryDraftEmit(job);
+}
+
+ipcMain.handle('library-draft', async (_event, payload = {}) => {
+  try {
+    const dir = path.resolve(String(payload.dir || ''));
+    if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    return await startLibraryDrafts({ dir, files: libraryDedupOutputs(dir), mode: payload.mode });
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-draft-cancel', (_event, dir) => {
+  try {
+    const job = libraryDraftJobs.get(path.resolve(String(dir || '')));
+    if (!job || job.status !== 'running') return { success: false, error: '没有在生成的剪映草稿' };
+    job.cancelled = true;
+    if (job.projectId) getReconstructionPipeline().cancel(job.projectId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
 /** 选中的文件是不是这部剧时间线上从第一集起的连续前缀。 */
 function resplitSelectionIsPrefix(dir, files) {
   const ordered = seriesLibrary.scanEpisodes(dir).map((episode) => path.resolve(episode.path));
@@ -3752,6 +3997,13 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
       return { success: false, error: '这不是剧文件夹' };
     }
+    // 没勾选「去重」、只勾了剪映草稿：直接拿已有的去重成品生成草稿。
+    if (payload.dedup === false) {
+      const draft = normalizeSideTasks(payload.sideTasks)?.jianyingDraft;
+      if (!draft) return { success: false, error: '请至少勾选一项要做的事' };
+      const started = await startLibraryDrafts({ dir, files: libraryDedupOutputs(dir), mode: draft.mode });
+      return started.success ? { ...started, draftOnly: true } : started;
+    }
     const files = [
       ...new Set(Array.isArray(payload.files) ? payload.files.map((file) => path.resolve(String(file))) : []),
     ];
@@ -3760,8 +4012,9 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
       return { success: false, error: '选中的文件不在这部剧的文件夹里' };
     }
     const outputDir = path.join(dir, '去重');
+    const sideTasks = normalizeSideTasks(payload.sideTasks);
     if (payload.mode === 'episode') {
-      return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts, libraryDir: dir });
+      return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts, libraryDir: dir, sideTasks });
     }
     // 重新拆分按时间线处理：整部，或者从第一集起的前面若干集，不能跳着选。
     if (!resplitSelectionIsPrefix(dir, files)) {
@@ -3792,7 +4045,7 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
         notes: notes.map(label),
       };
     }
-    const request = { split: payload.split, opts: payload.opts, outputDir };
+    const request = { split: payload.split, opts: payload.opts, outputDir, sideTasks };
     if (blocking.length && policy === 'download') {
       const entry = seriesRegistry.find((item) => String(item.series_id) === detail.seriesId);
       if (!detail.linked || !entry) return { success: false, error: '这部剧不是软件下载的，没法补下载' };

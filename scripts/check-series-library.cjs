@@ -298,6 +298,30 @@ async function check(name, fn) {
     assert.equal(started.success, true, started.error);
     const [task] = vm.runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context);
     assert.equal(task.dst, path.join(series.path, '去重', '同名剧_第002集_去重.mp4'));
+    // 支线任务：没勾去重也没勾草稿 → 拒绝；只做草稿但还没有去重成品 → 说清楚
+    const nothing = await handlers['library-dedup']({}, { dir: series.path, dedup: false, sideTasks: {} });
+    assert.match(nothing.error, /至少勾选/);
+    const noOutputs = await handlers['library-dedup'](
+      {},
+      { dir: series.path, dedup: false, sideTasks: { jianyingDraft: { enabled: true, mode: 'simple' } } },
+    );
+    assert.equal(noOutputs.success, false);
+    assert.match(noOutputs.error, /还没有去重成品/);
+    assert.equal(
+      vm.runInContext(
+        "normalizeSideTasks({ jianyingDraft: { enabled: true, mode: 'x' } }).jianyingDraft.mode",
+        context,
+      ),
+      'simple',
+    );
+    assert.equal(
+      vm.runInContext(
+        "normalizeSideTasks({ jianyingDraft: { enabled: true, mode: 'multi' } }).jianyingDraft.mode",
+        context,
+      ),
+      'multi',
+    );
+    assert.equal(vm.runInContext('normalizeSideTasks({ jianyingDraft: { enabled: false } })', context), null);
     // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。
     const [batch] = vm.runInContext('[...quchongBatches.values()]', context);
     assert.equal(batch.libraryDir, series.path);

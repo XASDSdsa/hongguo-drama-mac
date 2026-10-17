@@ -10,7 +10,6 @@ const preload = read('preload.js');
 const settings = read('src/components/Settings.jsx');
 const packageJson = JSON.parse(read('package.json'));
 const { ALGORITHM, POLICY } = require('../src/native/video-structure/alignment');
-const reconstruction = read('src/components/Reconstruction.jsx');
 const audioPauseAlgorithm = 'whisper-audio-pause-v4';
 const audioPausePolicy = 'paraformer-ct-global-whisper-audio-pause-v4';
 
@@ -27,16 +26,6 @@ const checks = [
     '工作流要求气口落在切镜上才切断',
     main.includes(`manifest.boundary_policy === '${POLICY}'`) &&
       main.includes(`manifest.alignment_algorithm === '${ALGORITHM}'`),
-  ],
-  [
-    '页面按气口决定画面切断',
-    reconstruction.includes('气口落在切镜上才切') &&
-      reconstruction.includes('一口气没断') &&
-      reconstruction.includes('不因识别标点') &&
-      reconstruction.includes('音频真实停顿分段') &&
-      reconstruction.includes('人声字幕') &&
-      !reconstruction.includes('不为了台词合并视频') &&
-      !reconstruction.includes('逗号等标点分段'),
   ],
   [
     '音频停顿算法贯穿 CLI、构建和发布校验',

@@ -42,7 +42,6 @@
     "check:structure": "node scripts/check-video-structure.cjs",
     "check:shots": "python3 scripts/check-shot-boundary-convention.py && python3 scripts/check-shot-algorithm.py",
     "check:structure-bundle": "node scripts/check-video-structure-bundle.cjs",
-    "check:structure-ui": "npm run build:react && electron scripts/check-video-structure-ui.cjs",
     "setup:jianying": "node scripts/setup-jianying-runtime.cjs",
     "check:dialogue": "node scripts/check-dialogue-boundaries.cjs",
     "format": "npx --yes prettier@3 --write \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\"",
@@ -267,6 +266,10 @@
       {
         "from": "scripts/create-jianying-draft.py",
         "to": "workflow/create-jianying-draft.py"
+      },
+      {
+        "from": "scripts/create-jianying-simple-draft.py",
+        "to": "workflow/create-jianying-simple-draft.py"
       },
       {
         "from": "scripts/check-jianying-draft.py",

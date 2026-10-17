@@ -186,6 +186,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryRemoveImport: (dir) => ipcRenderer.invoke('library-remove-import', dir),
   libraryDedup: (payload) => ipcRenderer.invoke('library-dedup', payload),
   libraryEstimate: (payload) => ipcRenderer.invoke('library-estimate', payload),
+  libraryDraft: (payload) => ipcRenderer.invoke('library-draft', payload),
+  libraryDraftCancel: (dir) => ipcRenderer.invoke('library-draft-cancel', dir),
   libraryRefreshRemote: (dir) => ipcRenderer.invoke('library-refresh-remote', dir),
   libraryJobs: () => ipcRenderer.invoke('library-jobs'),
   libraryJobCancel: (id) => ipcRenderer.invoke('library-job-cancel', id),

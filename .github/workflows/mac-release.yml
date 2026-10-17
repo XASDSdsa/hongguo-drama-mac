@@ -104,9 +104,9 @@ jobs:
           node scripts/check-pagination.cjs
           node scripts/check-library-activity.cjs
           node scripts/check-series-library.cjs
+          node scripts/check-jianying-simple-draft.cjs
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs
-          node scripts/check-quchong-panel.cjs
           node scripts/check-quchong-queue.cjs
           node scripts/check-renderer-lifecycle.cjs
           node scripts/check-pipeline-gate.cjs

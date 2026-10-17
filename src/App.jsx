@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Film, Settings, Play, Home, Search, Sparkles, Folder } from './components/icons';
+import { Settings, Play, Home, Search, Folder } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import SettingsPage from './components/Settings';
 import Player from './components/Player';
 import Browse from './components/Browse';
-import Quchong from './components/Quchong';
-import Reconstruction from './components/Reconstruction';
-import OneClick from './components/OneClick';
 import SeriesLibrary from './components/SeriesLibrary';
 
 const MENU = [
@@ -14,9 +11,6 @@ const MENU = [
   { id: 'download', label: '搜索与下载', icon: Search },
   { id: 'player', label: '我的剧库', icon: Play },
   { id: 'library', label: '管理剧集', icon: Folder },
-  { id: 'quchong', label: '视频处理', icon: Film },
-  { id: 'reconstruction', label: '视频结构化拆解', icon: Film },
-  { id: 'oneclick', label: '一键处理', icon: Sparkles },
   { id: 'settings', label: '设置', icon: Settings },
 ];
 
@@ -70,12 +64,6 @@ export default function App() {
         return <Player active={page === id} target={playerTarget} onNavigate={navigate} />;
       case 'library':
         return <SeriesLibrary active={page === id} target={pageTarget} onNavigate={navigate} />;
-      case 'quchong':
-        return <Quchong active={page === id} target={pageTarget} onNavigate={navigate} />;
-      case 'reconstruction':
-        return <Reconstruction active={page === id} />;
-      case 'oneclick':
-        return <OneClick active={page === id} />;
       case 'settings':
         return <SettingsPage active={page === id} />;
       case 'download':

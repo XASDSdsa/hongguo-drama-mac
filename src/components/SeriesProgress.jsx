@@ -89,6 +89,8 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
   const sideLogs = useMemo(() => logs.filter((line) => line.channel === 'side'), [logs]);
   const overall = overallProgress(batches);
   const activeBatches = batches.filter(isActiveBatch);
+  const draft = activity?.draft;
+  const draftRunning = draft?.status === 'running';
 
   const act = async (fn) => {
     setError('');
@@ -99,7 +101,7 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
 
   if (!activity) return null;
 
-  let statusText = '还没有处理过。选好集后点下面的「开始处理」，进度和日志都会显示在这里。';
+  let statusText = '还没有处理过。在上面选好要做的事，点「开始处理」，进度和日志都会显示在这里。';
   if (overall) {
     const tail = `${overall.failed ? `，失败 ${overall.failed} 集` : ''}${overall.stopped ? `，已停止 ${overall.stopped} 集` : ''}`;
     statusText = overall.active
@@ -110,15 +112,16 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
   return (
     <section className="act-panel" aria-label="处理进度">
       <div className="act-head">
-        <strong>处理进度</strong>
+        <h3>处理进度</h3>
         <span className="act-head-btns">
-          {activeBatches.length > 0 && (
+          {(activeBatches.length > 0 || draftRunning) && (
             <button
               className="btn btn-sm"
               onClick={() =>
                 act(async () => {
                   let last = { success: true };
                   for (const batch of activeBatches) last = await window.electronAPI.quchongCancel(batch.id);
+                  if (draftRunning) last = await window.electronAPI.libraryDraftCancel(dir);
                   return last;
                 })
               }
@@ -155,6 +158,28 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
       </div>
       <p className="act-status">{statusText}</p>
 
+      {draft && (draftRunning || draft.status === 'failed') && (
+        <div className={`act-draft is-${draft.status}`}>
+          <div className="act-draft-line">
+            <span>
+              剪映草稿（{draft.modeText}）：已完成 {draft.done}/{draft.total} 集
+              {draft.failed ? `，失败 ${draft.failed} 集` : ''}
+              {draftRunning && draft.current ? ` · 正在做 ${draft.current}` : ''}
+              {draftRunning && draft.message ? `（${draft.message}）` : ''}
+            </span>
+          </div>
+          {draftRunning && (
+            <div className="act-bar" aria-hidden="true">
+              <i
+                style={{
+                  width: `${Math.floor(((draft.done + draft.progress / 100) / Math.max(1, draft.total)) * 100)}%`,
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {jobs.map((job) => (
         <div key={job.id} className={`act-job is-${job.status}`}>
           <span>{job.message}</span>
@@ -174,7 +199,7 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
 
       <div className="act-logs">
         <LogBox title="主任务日志" lines={mainLogs} empty="暂无日志。" />
-        <LogBox title="支线任务日志（海报、下载等）" lines={sideLogs} empty="暂无日志。" />
+        <LogBox title="支线任务日志（海报、剪映草稿等）" lines={sideLogs} empty="暂无日志。" />
       </div>
     </section>
   );

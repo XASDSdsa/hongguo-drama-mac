@@ -13,6 +13,21 @@
   gap: 12px;
   margin-bottom: 10px;
 }
+.act-draft {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border-radius: 8px;
+}
+.act-draft.is-failed {
+  color: var(--primary);
+}
+.act-draft .act-bar i {
+  background: #3aa85a;
+}
+.act-draft .act-bar {
+  margin-top: 8px;
+}
 .act-empty {
   margin: 0;
   color: var(--text-tertiary);
