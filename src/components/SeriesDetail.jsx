@@ -414,7 +414,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
       {detail && (
         <>
-          <PublishPanel dir={detail.dir} onResult={setPublish} showPoster={false} />
+          <PublishPanel dir={detail.dir} onResult={setPublish} />
 
           <section className="lib-section" aria-label="剧集">
             <div className="lib-toolbar">

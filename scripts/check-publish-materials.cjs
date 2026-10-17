@@ -153,21 +153,25 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
     ai_text_model: 'gpt-6.1-sol',
     ai_image_model: 'gpt-image-2.5',
   };
+  // 三件事各自独立；这里按「剧名 → 简介 → 海报」顺序都做一遍，再检查结果。
+  const full = async (options) => {
+    await publish.generate({ task: 'titles', ...options });
+    await publish.generate({ task: 'synopsis', ...options });
+    return publish.generate({ task: 'poster', ...options });
+  };
   const run = (extra) => {
     const d = dirs(extra.name);
-    return publish
-      .generate({
-        title: '退婚之后',
-        synopsis: '她被退婚，家族羞辱，随后一切发生了反转。',
-        source: '红果',
-        coverPath: cover,
-        config,
-        openai,
-        renderer,
-        ...d,
-        ...extra.options,
-      })
-      .then((result) => ({ result, ...d }));
+    return full({
+      title: '退婚之后',
+      synopsis: '她被退婚，家族羞辱，随后一切发生了反转。',
+      source: '红果',
+      coverPath: cover,
+      config,
+      openai,
+      renderer,
+      ...d,
+      ...extra.options,
+    }).then((result) => ({ result, ...d }));
   };
 
   try {
@@ -184,10 +188,12 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       image.log.length = 0;
       const { result, outputDir } = await run({ name: 'happy' });
       const textCalls = text.log.filter((e) => !isInspect(e));
-      assert.equal(textCalls.length, 1);
-      assert.equal(textCalls[0].url, '/relay/v1/chat/completions');
-      assert.equal(textCalls[0].auth, 'Bearer text-secret-key');
-      assert.equal(textCalls[0].json.model, 'gpt-6.1-sol');
+      assert.equal(textCalls.length, 3, 'titles, synopsis and the poster scene are three separate calls');
+      for (const call of textCalls) {
+        assert.equal(call.url, '/relay/v1/chat/completions');
+        assert.equal(call.auth, 'Bearer text-secret-key');
+        assert.equal(call.json.model, 'gpt-6.1-sol');
+      }
       assert.equal(image.log.length, 1);
       assert.equal(image.log[0].url, '/img/v1/images/edits', 'an existing cover is redrawn, not drawn from scratch');
       assert.equal(image.log[0].auth, 'Bearer image-secret-key');
@@ -284,11 +290,12 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.equal(read.hasPoster, true);
     });
 
-    await check('redrawing only the picture reuses the saved copy (no second text call)', async () => {
+    await check('redrawing the poster reuses the chosen name: no titles/synopsis call, only the scene', async () => {
       const { result, outputDir, workDir } = await run({ name: 'keepcopy' });
-      const before = text.log.filter((e) => !isInspect(e)).length;
+      text.log.length = 0;
       imageCalls = 0;
       await publish.generate({
+        task: 'poster',
         title: '退婚之后',
         coverPath: cover,
         outputDir,
@@ -296,29 +303,58 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
         config,
         openai,
         renderer,
-        keepCopy: true,
       });
-      assert.equal(text.log.filter((e) => !isInspect(e)).length, before);
+      const calls = text.log.filter((e) => !isInspect(e));
+      assert.equal(calls.length, 1);
+      assert.match(JSON.stringify(calls[0].json.messages), /海报美术指导/);
       assert.equal(imageCalls, 1);
       assert.equal(fs.readFileSync(result.paths.title, 'utf8').trim(), result.title);
-      await assert.rejects(
-        publish.generate({
-          title: 'x',
-          outputDir,
-          workDir: path.join(tmp, 'empty'),
-          config,
-          openai,
-          renderer,
-          keepCopy: true,
-        }),
-        /先完整生成一次/,
-      );
+    });
+
+    await check('the three tasks are independent: each writes only its own file', async () => {
+      const d = dirs('independent');
+      const base = { title: '退婚之后', synopsis: '她被退婚。', coverPath: cover, config, openai, renderer, ...d };
+      await publish.generate({ task: 'synopsis', ...base });
+      assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt']);
+      const afterTitles = await publish.generate({ task: 'titles', ...base });
+      assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['发布剧名.txt', '发布简介.txt']);
+      assert.equal(afterTitles.title, afterTitles.candidates[0], 'the first candidate is selected by default');
+      assert.match(afterTitles.synopsis, /重生回到被退婚/, 'the earlier synopsis is kept');
+      await publish.generate({ task: 'poster', ...base });
+      assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['发布剧名.txt', '发布海报.jpg', '发布简介.txt']);
+      // 再改写简介：剧名和海报不动
+      const posterBefore = fs.readFileSync(path.join(d.outputDir, '发布海报.jpg'));
+      const titleBefore = fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'));
+      await publish.generate({ task: 'synopsis', ...base });
+      assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '发布海报.jpg')), posterBefore);
+      assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt')), titleBefore);
+    });
+
+    await check('a poster needs a chosen name first; a typed name is enough', async () => {
+      const d = dirs('needname');
+      const base = { title: '退婚之后', coverPath: cover, config, openai, renderer, ...d };
+      const before = text.log.length;
+      await assert.rejects(publish.generate({ task: 'poster', ...base }), /先选定剧名/);
+      assert.equal(text.log.length, before, 'refused before any model call');
+      await assert.rejects(publish.retitle({ ...d, renderer, title: '' }), /1–16/);
+      const typed = await publish.retitle({ ...d, renderer, title: '我自己起的名字' });
+      assert.equal(typed.title, '我自己起的名字');
+      assert.equal(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'), 'utf8').trim(), '我自己起的名字');
+      assert.ok(!fs.existsSync(path.join(d.outputDir, '发布海报.jpg')), 'choosing a name does not draw a poster');
+      const poster = await publish.generate({ task: 'poster', ...base });
+      assert.equal(poster.title, '我自己起的名字');
+      assert.ok(fs.existsSync(path.join(d.outputDir, '发布海报.jpg')));
+      // 改写剧名：已有海报会按新名字重新排版，不再画图
+      imageCalls = 0;
+      const again = await publish.generate({ task: 'titles', ...base });
+      assert.equal(imageCalls, 0);
+      assert.equal(again.title, again.candidates[0]);
     });
 
     await check('without an original poster the picture is generated from the scene description', async () => {
       image.log.length = 0;
       const d = dirs('nocover');
-      await publish.generate({
+      await full({
         title: '退婚之后',
         outputDir: d.outputDir,
         workDir: d.workDir,
@@ -332,31 +368,44 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
     });
 
     await check('unusable model output stops with a clear message and leaves no half-written files', async () => {
-      for (const mode of ['badjson', 'badcopy']) {
+      for (const [mode, pattern] of [
+        ['badjson', /不是有效 JSON/],
+        ['badcopy', /没有给出合格的剧名/],
+      ]) {
         textMode = mode;
         const d = dirs('bad-' + mode);
         await assert.rejects(
-          publish.generate({ title: '退婚之后', coverPath: cover, ...d, config, openai, renderer }),
-          mode === 'badjson' ? /不是有效 JSON/ : /简介太短/,
+          publish.generate({ task: 'titles', title: '退婚之后', coverPath: cover, ...d, config, openai, renderer }),
+          pattern,
         );
         assert.deepEqual(fs.readdirSync(d.outputDir), []);
       }
+      textMode = 'badcopy';
+      const d = dirs('bad-synopsis');
+      await assert.rejects(
+        publish.generate({ task: 'synopsis', title: '退婚之后', ...d, config, openai, renderer }),
+        /简介太短/,
+      );
+      assert.deepEqual(fs.readdirSync(d.outputDir), []);
       textMode = 'ok';
     });
 
     await check('errors never contain either API key', async () => {
       const dead = { ...config, ai_base_url: 'http://127.0.0.1:1/v1' };
       const d = dirs('dead');
-      await assert.rejects(publish.generate({ title: '退婚之后', ...d, config: dead, openai, renderer }), (e) => {
-        assert.ok(!/text-secret-key|image-secret-key/.test(e.message));
-        return true;
-      });
+      await assert.rejects(
+        publish.generate({ task: 'titles', title: '退婚之后', ...d, config: dead, openai, renderer }),
+        (e) => {
+          assert.ok(!/text-secret-key|image-secret-key/.test(e.message));
+          return true;
+        },
+      );
     });
 
     await check('missing keys are reported per endpoint', async () => {
       const d = dirs('nokey');
       await assert.rejects(
-        publish.generate({ title: 'x', ...d, config: { ...config, ai_api_key: '' }, openai, renderer }),
+        publish.generate({ task: 'titles', title: 'x', ...d, config: { ...config, ai_api_key: '' }, openai, renderer }),
         /文本 API Key|AI API Key/,
       );
       await assert.rejects(

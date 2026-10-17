@@ -1,15 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './PublishPanel.css';
-import { Image, RefreshCw, Sparkles, X } from './icons';
+import { RefreshCw } from './icons';
 
-const STAGES = [
-  ['copy', '改写简介和剧名'],
-  ['art', '重绘海报底图'],
-  ['poster', '排版标题'],
-];
+const TASK_TEXT = { titles: '改写剧名', synopsis: '改写简介', poster: '生成海报' };
 
-/** 一部剧的“AI 发布素材”：改写简介、改写剧名、重新生成海报。结果直接存进剧文件夹。 */
-export default function PublishPanel({ dir, onResult, showPoster = true }) {
+/**
+ * 一部剧的“AI 发布素材”：剧名、简介、海报三件事各自独立，各有各的按钮。
+ * 海报要先选定剧名（点一个候选，或直接填）。结果直接存进剧文件夹。
+ */
+export default function PublishPanel({ dir, onResult }) {
   const [state, setState] = useState(null);
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
@@ -52,17 +51,17 @@ export default function PublishPanel({ dir, onResult, showPoster = true }) {
     });
   }, [load]);
 
-  // 把最新结果（海报、新剧名、新简介）交给页头显示。
+  // 把最新结果（海报、剧名）交给页头显示。
   const latest = state ? state.result || null : undefined;
   useEffect(() => {
     if (latest !== undefined) onResult?.(latest);
   }, [latest, onResult]);
 
-  const start = async (keepCopy) => {
+  const start = async (task) => {
     setError('');
-    const res = await window.electronAPI.publishGenerate({ dir, keepCopy });
-    if (!res?.success) setError(res?.error || '无法开始生成');
-    else setJob({ status: 'running', stage: keepCopy ? 'art' : 'copy', message: '准备中' });
+    const res = await window.electronAPI.publishGenerate({ dir, task });
+    if (!res?.success) setError(res?.error || '无法开始');
+    else setJob({ status: 'running', task, stage: task, message: '准备中' });
   };
 
   const retitle = async (patch) => {
@@ -70,12 +69,10 @@ export default function PublishPanel({ dir, onResult, showPoster = true }) {
     setError('');
     try {
       const res = await window.electronAPI.publishRetitle({ dir, ...patch });
-      if (!res?.success) throw new Error(res?.error || '排版失败');
-      setState((prev) => ({ ...prev, result: res.result }));
-      setTitleDraft(res.result.title);
-      setTaglineDraft(res.result.tagline || '');
+      if (!res?.success) throw new Error(res?.error || '保存失败');
+      await load();
     } catch (e) {
-      setError(e.message || '排版失败');
+      setError(e.message || '保存失败');
     } finally {
       setBusy(false);
     }
@@ -84,153 +81,122 @@ export default function PublishPanel({ dir, onResult, showPoster = true }) {
   if (!state) return error ? <div className="pub-panel pub-error">{error}</div> : null;
   const result = state.result;
   const running = !!job;
-  const stageIndex = running ? STAGES.findIndex(([id]) => id === job.stage) : -1;
+  const chosenTitle = result?.title || '';
+  const frozen = busy || running;
+
+  // 每件事自己的按钮：这件事在跑就显示进度和取消，别的事在跑时先等一等。
+  const action = (task, label, { disabled = false, title } = {}) =>
+    job?.task === task ? (
+      <span className="pub-running">
+        <RefreshCw size={13} className="spin" /> {job.message || '处理中'}
+        <button className="btn btn-sm" onClick={() => window.electronAPI.publishCancel(dir)}>
+          取消
+        </button>
+      </span>
+    ) : (
+      <button className="btn btn-sm" onClick={() => start(task)} disabled={frozen || disabled} title={title}>
+        {label}
+      </button>
+    );
 
   return (
     <section className="pub-panel" aria-label="AI 发布素材">
-      <div className="pub-head">
-        <div className="pub-title">
-          <Sparkles size={16} />
-          <strong>AI 发布素材</strong>
-          <span>改写简介 → 改写剧名 → 重绘海报（标题由程序排版，字不会错）</span>
+      <h3>AI 发布素材</h3>
+
+      <div className="pub-row">
+        <div className="pub-row-head">
+          <b>剧名</b>
+          {action('titles', result?.candidates?.length ? '重新改写' : '改写剧名')}
         </div>
-        <div className="pub-actions">
-          {running ? (
-            <button className="btn btn-sm" onClick={() => window.electronAPI.publishCancel(dir)}>
-              <X size={14} /> 取消
-            </button>
-          ) : result ? (
-            <>
+        <input
+          className="input-field"
+          value={titleDraft}
+          maxLength={16}
+          placeholder="点下面的候选，或直接填一个剧名"
+          disabled={frozen}
+          aria-label="选定的剧名"
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={() => titleDraft.trim() && titleDraft.trim() !== chosenTitle && retitle({ title: titleDraft })}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        />
+        {result?.candidates?.length > 0 && (
+          <div className="pub-chips" aria-label="候选剧名">
+            {result.candidates.map((candidate) => (
               <button
-                className="btn btn-sm"
-                onClick={() => start(true)}
-                disabled={busy}
-                title="沿用现在的简介和剧名，只重画海报底图"
+                key={candidate}
+                className={`pub-chip ${candidate === chosenTitle ? 'is-active' : ''}`}
+                disabled={frozen}
+                onClick={() => retitle({ title: candidate })}
               >
-                <Image size={14} /> 重画海报
+                {candidate}
               </button>
-              <button
-                className="btn btn-sm"
-                onClick={() => start(false)}
-                disabled={busy}
-                title="从头改写简介和剧名，并重画海报"
-              >
-                <RefreshCw size={14} /> 全部重新生成
-              </button>
-            </>
-          ) : (
-            <button className="btn btn-primary btn-sm" onClick={() => start(false)}>
-              <Sparkles size={14} /> 生成发布素材
-            </button>
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {!result && !running && !error && (
-        <p className="pub-hint">
-          {state.hasCover ? '会以文件夹里的“封面”为参考重绘海报。' : '文件夹里没有“封面”图，海报会根据简介直接生成。'}
-          结果保存为 发布剧名.txt、发布简介.txt、发布海报.jpg。
-        </p>
-      )}
-
-      {running && (
-        <div className="pub-progress" role="status">
-          <ol>
-            {STAGES.map(([id, label], index) => (
-              <li key={id} className={index < stageIndex ? 'is-done' : index === stageIndex ? 'is-active' : ''}>
-                {label}
-              </li>
-            ))}
-          </ol>
-          <div className="pub-message">
-            <RefreshCw size={14} className="spin" /> {job.message || '处理中'}
-          </div>
+      <div className="pub-row">
+        <div className="pub-row-head">
+          <b>简介</b>
+          {action('synopsis', result?.synopsis ? '重新改写' : '改写简介')}
         </div>
-      )}
+        {result?.synopsis ? <p className="pub-synopsis">{result.synopsis}</p> : <p className="pub-empty">还没有改写</p>}
+      </div>
 
-      {error && (
-        <div className="pub-error" role="alert">
-          {error}
+      <div className="pub-row">
+        <div className="pub-row-head">
+          <b>海报</b>
+          {action('poster', result?.hasPoster ? '重新生成' : '生成海报', {
+            disabled: !chosenTitle,
+            title: chosenTitle ? undefined : '先选定剧名',
+          })}
         </div>
-      )}
-
-      {result && (
-        <div className="pub-result">
-          {showPoster && (
-            <div className="pub-poster">
-              {result.posterUrl ? (
-                <img src={result.posterUrl} alt={`《${result.title}》海报`} />
-              ) : (
-                <div className="pub-poster-empty">海报未生成</div>
-              )}
-            </div>
-          )}
-          <div className="pub-side">
-            <label className="pub-field">
-              <span>新剧名</span>
-              <input
-                className="input-field"
-                value={titleDraft}
-                maxLength={16}
-                disabled={busy || running}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onBlur={() => titleDraft.trim() && titleDraft.trim() !== result.title && retitle({ title: titleDraft })}
-                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-              />
-            </label>
-            {result.candidates?.length > 1 && (
-              <div className="pub-chips" aria-label="候选剧名">
-                {result.candidates.map((candidate) => (
-                  <button
-                    key={candidate}
-                    className={`pub-chip ${candidate === result.title ? 'is-active' : ''}`}
-                    disabled={busy || running}
-                    onClick={() => retitle({ title: candidate })}
-                  >
-                    {candidate}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="pub-field">
-              <span>标题样式{result.genre ? `（题材：${result.genre}）` : ''}</span>
+        {!chosenTitle ? (
+          <p className="pub-empty">海报要先选定剧名：上面点一个候选，或直接填一个。</p>
+        ) : (
+          <>
+            <p className="pub-empty">
+              {state.hasCover ? '以文件夹里的“封面”为参考重绘，' : ''}标题由程序排版，字不会错。
+            </p>
+            <div className="pub-style-line">
               <div className="pub-chips" aria-label="标题样式">
                 {state.styles.map((style) => (
                   <button
                     key={style.id}
                     className={`pub-chip ${style.id === result.styleId ? 'is-active' : ''}`}
-                    disabled={busy || running}
+                    disabled={frozen}
                     onClick={() => retitle({ styleId: style.id })}
                   >
                     {style.name}
                   </button>
                 ))}
               </div>
-            </div>
-            <label className="pub-field">
-              <span>角标（留空则不显示）</span>
               <input
-                className="input-field"
+                className="input-field pub-tagline"
                 value={taglineDraft}
                 maxLength={12}
-                disabled={busy || running}
+                placeholder="角标（可不填）"
+                disabled={frozen}
+                aria-label="角标"
                 onChange={(e) => setTaglineDraft(e.target.value)}
                 onBlur={() => taglineDraft.trim() !== (result.tagline || '') && retitle({ tagline: taglineDraft })}
                 onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
               />
-            </label>
-            <div className="pub-field">
-              <span>新简介</span>
-              <p className="pub-synopsis">{result.synopsis}</p>
             </div>
-            {result.warnings?.length > 0 && (
-              <ul className="pub-warnings">
-                {result.warnings.map((text) => (
-                  <li key={text}>{text}</li>
-                ))}
-              </ul>
-            )}
-          </div>
+          </>
+        )}
+        {result?.warnings?.length > 0 && (
+          <ul className="pub-warnings">
+            {result.warnings.map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {error && (
+        <div className="pub-error" role="alert">
+          {error}
         </div>
       )}
     </section>

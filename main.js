@@ -3551,7 +3551,7 @@ function publishResultView(context) {
 function publishSnapshot(dir) {
   const job = publishJobs.get(dir);
   if (!job) return null;
-  return { dir, status: job.status, stage: job.stage, message: job.message, error: job.error || '' };
+  return { dir, status: job.status, task: job.task, stage: job.stage, message: job.message, error: job.error || '' };
 }
 
 function publishNotify(dir) {
@@ -3589,20 +3589,25 @@ ipcMain.handle('publish-state', (_event, dir) => {
   }
 });
 
+const PUBLISH_TASK_TEXT = { titles: '改写剧名', synopsis: '改写简介', poster: '生成海报' };
+
 ipcMain.handle('publish-generate', (_event, payload = {}) => {
   try {
     const context = publishContext(payload.dir);
+    const task = String(payload.task || '');
+    if (!PUBLISH_TASK_TEXT[task]) return { success: false, error: '请选择要做的事：改写剧名、改写简介或生成海报' };
     if (publishJobs.get(context.dir)?.status === 'running') return { success: false, error: '这部剧正在生成中' };
     const controller = new AbortController();
-    const job = { status: 'running', stage: 'copy', message: '准备中', controller };
+    const job = { status: 'running', task, stage: task, message: '准备中', controller };
     publishJobs.set(context.dir, job);
-    libLog(context.dir, 'info', '发布素材：开始生成（海报、简介、标题）', 'side');
+    libLog(context.dir, 'info', `发布素材：开始${PUBLISH_TASK_TEXT[task]}`, 'side');
     publishNotify(context.dir);
     const settings = getCurrentSettings();
     (async () => {
       try {
         await withTitleRenderer((renderer) =>
           publishMaterials.generate({
+            task,
             title: context.title,
             synopsis: context.synopsis,
             source: context.source,
@@ -3613,7 +3618,6 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
             openai,
             renderer,
             signal: controller.signal,
-            keepCopy: payload.keepCopy === true,
             onProgress: ({ stage, message }) => {
               if (message && message !== job.message) libLog(context.dir, 'info', `发布素材：${message}`, 'side');
               job.stage = stage;
@@ -3624,13 +3628,14 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
         );
         job.status = 'done';
         job.message = '已完成';
-        libLog(context.dir, 'ok', '发布素材：全部生成完成', 'side');
+        libLog(context.dir, 'ok', `发布素材：${PUBLISH_TASK_TEXT[task]}完成`, 'side');
       } catch (error) {
         job.status = controller.signal.aborted ? 'cancelled' : 'failed';
         job.error = controller.signal.aborted ? '' : aiRedact(error);
         job.message = controller.signal.aborted ? '已取消' : '生成失败';
-        if (controller.signal.aborted) libLog(context.dir, 'warn', '发布素材：已取消', 'side');
-        else libLog(context.dir, 'error', `发布素材：生成失败：${job.error}`, 'side');
+        if (controller.signal.aborted)
+          libLog(context.dir, 'warn', `发布素材：${PUBLISH_TASK_TEXT[task]}已取消`, 'side');
+        else libLog(context.dir, 'error', `发布素材：${PUBLISH_TASK_TEXT[task]}失败：${job.error}`, 'side');
       } finally {
         publishNotify(context.dir);
       }
@@ -3667,7 +3672,7 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
         layout: payload.layout,
       }),
     );
-    libLog(context.dir, 'ok', '发布素材：已按新的标题/样式重新排版海报', 'side');
+    libLog(context.dir, 'ok', '发布素材：已记下剧名/样式，海报有的话已重新排版', 'side');
     return { success: true, result: publishResultView(context) };
   } catch (error) {
     return { success: false, error: aiRedact(error) };

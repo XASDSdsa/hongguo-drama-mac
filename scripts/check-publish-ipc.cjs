@@ -201,45 +201,69 @@ const COPY = {
     await check('a folder that is not a series is refused', async () => {
       const bad = await handlers['publish-state']({}, path.join(tmp, 'elsewhere'));
       assert.equal(bad.success, false);
-      const gen = await handlers['publish-generate']({}, { dir: path.join(tmp, 'elsewhere') });
+      const gen = await handlers['publish-generate']({}, { dir: path.join(tmp, 'elsewhere'), task: 'titles' });
       assert.equal(gen.success, false);
     });
 
-    await check(
-      'generate runs in the background, reports progress, and writes the results into the series folder',
-      async () => {
-        delay = 150;
-        const started = await handlers['publish-generate']({}, { dir });
-        assert.equal(started.success, true);
-        const again = await handlers['publish-generate']({}, { dir });
-        assert.equal(again.success, false);
-        assert.match(again.error, /正在生成中/);
-        const mid = await handlers['publish-state']({}, dir);
-        assert.equal(mid.job.status, 'running');
-        await waitFor(() => updates().some((u) => u.status === 'done'));
-        delay = 0;
-        const stages = new Set(
-          updates()
-            .filter((u) => u.status === 'running')
-            .map((u) => u.stage),
-        );
-        assert.ok(stages.has('copy') && stages.has('art') && stages.has('poster'), [...stages].join());
-        for (const name of ['发布剧名.txt', '发布简介.txt', '发布海报.jpg'])
-          assert.ok(fs.existsSync(path.join(dir, name)), name);
-        assert.deepEqual(
-          fs.readdirSync(dir).sort(),
-          ['封面.png', '发布剧名.txt', '发布海报.jpg', '发布简介.txt', '退婚之后_第001集.mp4'].sort(),
-          'only results land in the series folder',
-        );
-        const state = await handlers['publish-state']({}, dir);
-        assert.equal(state.result.title, '重生后我撕了婚书');
-        assert.equal(state.result.styleId, 'fire');
-        assert.equal(state.result.hasPoster, true);
-        assert.match(state.result.posterUrl, /^[a-z-]+:\/\/f\/[\w-]+\?v=\d+$/);
-        assert.equal(state.result.paths, undefined, 'internal paths are not sent to the page');
-        assert.deepEqual(FakeWindow.rendered.at(-1), { title: '重生后我撕了婚书', style: 'fire', layout: 'auto' });
-      },
-    );
+    await check('a task has to be named, and a poster needs a chosen name first', async () => {
+      const none = await handlers['publish-generate']({}, { dir });
+      assert.equal(none.success, false);
+      assert.match(none.error, /改写剧名、改写简介或生成海报/);
+      const calls = server.log.length;
+      await handlers['publish-generate']({}, { dir, task: 'poster' });
+      const failed = await waitFor(() => updates().find((u) => u.status === 'failed' && u.task === 'poster'));
+      assert.match(failed.error, /先选定剧名/);
+      assert.equal(server.log.length, calls, 'no model call before a name is chosen');
+      events.length = 0;
+    });
+
+    const runTask = async (task) => {
+      events.length = 0;
+      const started = await handlers['publish-generate']({}, { dir, task });
+      assert.equal(started.success, true, started.error);
+      return waitFor(() => updates().find((u) => u.status === 'done' && u.task === task));
+    };
+
+    await check('each task runs on its own in the background and writes only its own result', async () => {
+      delay = 150;
+      const started = await handlers['publish-generate']({}, { dir, task: 'titles' });
+      assert.equal(started.success, true);
+      const again = await handlers['publish-generate']({}, { dir, task: 'synopsis' });
+      assert.equal(again.success, false);
+      assert.match(again.error, /正在生成中/);
+      const mid = await handlers['publish-state']({}, dir);
+      assert.equal(mid.job.status, 'running');
+      assert.equal(mid.job.task, 'titles');
+      await waitFor(() => updates().some((u) => u.status === 'done'));
+      delay = 0;
+      assert.deepEqual(
+        fs.readdirSync(dir).sort(),
+        ['封面.png', '发布剧名.txt', '退婚之后_第001集.mp4'].sort(),
+        'only the title so far',
+      );
+      await runTask('synopsis');
+      assert.ok(fs.existsSync(path.join(dir, '发布简介.txt')));
+      assert.ok(!fs.existsSync(path.join(dir, '发布海报.jpg')));
+      await runTask('poster');
+      assert.deepEqual(
+        fs.readdirSync(dir).sort(),
+        ['封面.png', '发布剧名.txt', '发布海报.jpg', '发布简介.txt', '退婚之后_第001集.mp4'].sort(),
+        'only results land in the series folder',
+      );
+      const stages = new Set(
+        updates()
+          .filter((u) => u.status === 'running')
+          .map((u) => u.stage),
+      );
+      assert.ok(stages.has('scene') && stages.has('art') && stages.has('poster'), [...stages].join());
+      const state = await handlers['publish-state']({}, dir);
+      assert.equal(state.result.title, '重生后我撕了婚书');
+      assert.equal(state.result.styleId, 'fire');
+      assert.equal(state.result.hasPoster, true);
+      assert.match(state.result.posterUrl, /^[a-z-]+:\/\/f\/[\w-]+\?v=\d+$/);
+      assert.equal(state.result.paths, undefined, 'internal paths are not sent to the page');
+      assert.deepEqual(FakeWindow.rendered.at(-1), { title: '重生后我撕了婚书', style: 'fire', layout: 'auto' });
+    });
 
     await check('changing the title or style only re-lays the poster', async () => {
       const calls = server.log.length;
@@ -258,7 +282,7 @@ const COPY = {
       delay = 400;
       updates().length = 0;
       events.length = 0;
-      await handlers['publish-generate']({}, { dir });
+      await handlers['publish-generate']({}, { dir, task: 'synopsis' });
       await handlers['publish-cancel']({}, dir);
       await waitFor(() => updates().some((u) => u.status === 'cancelled'));
       delay = 0;
@@ -269,7 +293,7 @@ const COPY = {
     await check('a failure is reported to the page, and neither key appears in the message', async () => {
       reject = true;
       events.length = 0;
-      await handlers['publish-generate']({}, { dir });
+      await handlers['publish-generate']({}, { dir, task: 'titles' });
       const failed = await waitFor(() => updates().find((u) => u.status === 'failed'));
       reject = false;
       assert.match(failed.error, /401/);
