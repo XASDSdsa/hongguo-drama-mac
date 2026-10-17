@@ -26,8 +26,7 @@ const LOCK = path.join(CACHE, 'winCodeSign', 'winCodeSign-2.6.0');
 const APP_BUILDER = path.join(ROOT, 'node_modules', 'app-builder-bin', 'win', 'x64', 'app-builder.exe');
 
 const MIRROR =
-  process.env.ELECTRON_BUILDER_BINARIES_MIRROR ||
-  'https://registry.npmmirror.com/-/binary/electron-builder-binaries/';
+  process.env.ELECTRON_BUILDER_BINARIES_MIRROR || 'https://registry.npmmirror.com/-/binary/electron-builder-binaries/';
 const URL = `${MIRROR}winCodeSign-2.6.0/winCodeSign-2.6.0.7z`;
 
 if (process.platform !== 'win32') {
@@ -68,8 +67,7 @@ execFile(
     }
 
     const isUsable = (d) =>
-      fs.existsSync(path.join(d, 'windows-10', 'x64', 'signtool.exe')) &&
-      fs.existsSync(path.join(d, 'rcedit-x64.exe'));
+      fs.existsSync(path.join(d, 'windows-10', 'x64', 'signtool.exe')) && fs.existsSync(path.join(d, 'rcedit-x64.exe'));
 
     // 随机目录名可能是纯数字，也可能是别的；统一按内容筛选
     const dirs = fs
@@ -93,5 +91,5 @@ execFile(
       .forEach((f) => fs.rmSync(path.join(parent, f), { force: true }));
 
     console.log('完成：' + LOCK);
-  }
+  },
 );

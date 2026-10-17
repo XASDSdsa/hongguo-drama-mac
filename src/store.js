@@ -34,7 +34,10 @@ const DEFERRED_FLUSH_MS = 1500;
 
 function flush() {
   if (!dataFile) return;
-  if (deferredTimer) { clearTimeout(deferredTimer); deferredTimer = null; }
+  if (deferredTimer) {
+    clearTimeout(deferredTimer);
+    deferredTimer = null;
+  }
   const temporary = dataFile + '.tmp';
   try {
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
@@ -43,9 +46,13 @@ function flush() {
     fs.renameSync(temporary, dataFile);
     durable = serialized;
   } catch (e) {
-    try { fs.unlinkSync(temporary); } catch {}
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
     cache = JSON.parse(durable);
-    try { errorHandler?.({ error: '保存失败，请检查磁盘空间或目录权限；本次变更未能保存。' }); } catch {}
+    try {
+      errorHandler?.({ error: '保存失败，请检查磁盘空间或目录权限；本次变更未能保存。' });
+    } catch {}
     throw e;
   }
 }
@@ -113,7 +120,11 @@ function savePlayback(map) {
   if (deferredTimer) return;
   deferredTimer = setTimeout(() => {
     deferredTimer = null;
-    try { flush(); } catch (_) { /* flush 已通过 errorHandler 报告 */ }
+    try {
+      flush();
+    } catch (_) {
+      /* flush 已通过 errorHandler 报告 */
+    }
   }, DEFERRED_FLUSH_MS);
   deferredTimer.unref?.();
 }
@@ -145,7 +156,9 @@ function saveStructureProject(projectId, record) {
 }
 
 module.exports = {
-  setErrorHandler: (handler) => { errorHandler = handler; },
+  setErrorHandler: (handler) => {
+    errorHandler = handler;
+  },
   init,
   getSettings,
   saveSettings,

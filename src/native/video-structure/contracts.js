@@ -14,25 +14,47 @@ const MODULES = [
 ];
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])]));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((k) => [k, stable(value[k])]),
+    );
   return value;
 }
-function fingerprint(value) { return crypto.createHash('sha256').update(JSON.stringify(stable(value))).digest('hex'); }
+function fingerprint(value) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(stable(value)))
+    .digest('hex');
+}
 function descendants(id) {
   const affected = new Set([id]);
-  for (const module of MODULES) if (module.deps.some(dep => affected.has(dep))) affected.add(module.id);
-  return [...affected].filter(key => key !== id);
+  for (const module of MODULES) if (module.deps.some((dep) => affected.has(dep))) affected.add(module.id);
+  return [...affected].filter((key) => key !== id);
 }
-function envelope(taskId, data) { return { schema_version: VERSION, task_id: taskId, time_unit: 'seconds', interval: '[start,end)', ...data }; }
-function requireThat(condition, message) { if (!condition) throw new Error(message); }
+function envelope(taskId, data) {
+  return { schema_version: VERSION, task_id: taskId, time_unit: 'seconds', interval: '[start,end)', ...data };
+}
+function requireThat(condition, message) {
+  if (!condition) throw new Error(message);
+}
 function validateIntervals(items, duration, key) {
   const ids = new Set();
   let previous = -Infinity;
   for (const item of items) {
     requireThat(typeof item[key] === 'string' && !ids.has(item[key]), `重复或缺失的 ID: ${item[key]}`);
-    requireThat(Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start && item.end <= duration + 0.000001, `无效时间区间: ${item[key]}`);
+    requireThat(
+      Number.isFinite(item.start) &&
+        Number.isFinite(item.end) &&
+        item.start >= 0 &&
+        item.end > item.start &&
+        item.end <= duration + 0.000001,
+      `无效时间区间: ${item[key]}`,
+    );
     requireThat(item.start >= previous, `时间未按顺序排列: ${item[key]}`);
-    previous = item.start; ids.add(item[key]);
+    previous = item.start;
+    ids.add(item[key]);
   }
 }
 module.exports = { VERSION, MODULES, fingerprint, descendants, envelope, requireThat, validateIntervals };

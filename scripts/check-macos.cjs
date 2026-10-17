@@ -21,38 +21,75 @@ function load(platform = 'darwin') {
   const app = new EventEmitter();
   let ready;
   Object.assign(app, {
-    getVersion: () => 'test', getPath: () => root,
+    getVersion: () => 'test',
+    getPath: () => root,
     commandLine: { appendSwitch() {} },
-    whenReady: () => ({ then(fn) { ready = fn; } }),
+    whenReady: () => ({
+      then(fn) {
+        ready = fn;
+      },
+    }),
     quit() {},
   });
   const windows = [];
   class Window extends EventEmitter {
     constructor(options) {
-      super(); this.options = options; this.destroyed = false;
+      super();
+      this.options = options;
+      this.destroyed = false;
       this.webContents = { setWindowOpenHandler() {}, send() {}, once() {}, on() {} };
       windows.push(this);
     }
-    static getAllWindows() { return windows.filter(w => !w.destroyed); }
-    isDestroyed() { return this.destroyed; }
-    isMinimized() { return false; }
+    static getAllWindows() {
+      return windows.filter((w) => !w.destroyed);
+    }
+    isDestroyed() {
+      return this.destroyed;
+    }
+    isMinimized() {
+      return false;
+    }
     setMenuBarVisibility() {}
-    loadFile() { return Promise.resolve(); }
-    loadURL() { return Promise.resolve(); }
-    show() { this.visible = true; }
-    focus() { this.focused = true; }
-    close() { this.destroyed = true; this.emit('closed'); }
+    loadFile() {
+      return Promise.resolve();
+    }
+    loadURL() {
+      return Promise.resolve();
+    }
+    show() {
+      this.visible = true;
+    }
+    focus() {
+      this.focused = true;
+    }
+    close() {
+      this.destroyed = true;
+      this.emit('closed');
+    }
   }
   let menu;
   const electron = {
-    app, BrowserWindow: Window, ipcMain: { handle() {} },
-    Menu: { buildFromTemplate: x => x, setApplicationMenu: x => { menu = x; } },
+    app,
+    BrowserWindow: Window,
+    ipcMain: { handle() {} },
+    Menu: {
+      buildFromTemplate: (x) => x,
+      setApplicationMenu: (x) => {
+        menu = x;
+      },
+    },
     session: { defaultSession: { setProxy: async () => {} } },
     protocol: { registerSchemesAsPrivileged() {}, handle() {} },
   };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : localRequire(name),
-    __dirname: root, console, Buffer, URL, Response, setTimeout, clearTimeout,
+    require: (name) => (name === 'electron' ? electron : localRequire(name)),
+    __dirname: root,
+    console,
+    Buffer,
+    URL,
+    Response,
+    setTimeout,
+    clearTimeout,
     process: { on() {}, platform, arch: 'arm64', resourcesPath: path.join(root, 'Resources'), env: { PATH: '' } },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
@@ -62,8 +99,13 @@ function load(platform = 'darwin') {
 (async () => {
   const failures = [];
   async function check(name, fn) {
-    try { await fn(); console.log('PASS ' + name); }
-    catch (error) { failures.push(name); console.error('FAIL ' + name + ': ' + error.message); }
+    try {
+      await fn();
+      console.log('PASS ' + name);
+    } catch (error) {
+      failures.push(name);
+      console.error('FAIL ' + name + ': ' + error.message);
+    }
   }
   await check('Mac finds bundled executables without .exe', () => {
     const h = load();
@@ -109,9 +151,13 @@ function load(platform = 'darwin') {
   await check('Mac native menu supplies editing and quit shortcuts', async () => {
     const h = load();
     await h.ready();
-    const roles = (h.menu() || []).flatMap(item => item.submenu || []).map(item => item.role);
+    const roles = (h.menu() || []).flatMap((item) => item.submenu || []).map((item) => item.role);
     for (const role of ['copy', 'paste', 'selectAll', 'quit']) assert.ok(roles.includes(role), role);
   });
   assert.equal(failures.length, 0, failures.join('; '));
-})().catch(error => { console.error(error.message); process.exitCode = 1; })
+})()
+  .catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  })
   .finally(() => fs.rmSync(temp, { recursive: true, force: true }));

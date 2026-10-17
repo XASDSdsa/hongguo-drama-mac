@@ -39,10 +39,44 @@ const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
     const analysisSrt = path.join(root, 'episode.srt');
     await fsp.writeFile(analysisSrt, '1\n00:00:00,000 --> 00:00:01,000\n主角反击。\n\n', 'utf8');
     const states = new Map();
-    const episodes = [{ episodeIndex: 1, title: '第一集', seriesTitle: '测试剧', srtPath: analysisSrt, srtFingerprint: `${(await fsp.stat(analysisSrt)).size}:1`, analysisPath: path.join(analysisRoot, 'ep001.json') }];
-    global.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '主角反击。', climaxes: [], split_points: [], best_hook: null, arc_end: true }) } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const episodes = [
+      {
+        episodeIndex: 1,
+        title: '第一集',
+        seriesTitle: '测试剧',
+        srtPath: analysisSrt,
+        srtFingerprint: `${(await fsp.stat(analysisSrt)).size}:1`,
+        analysisPath: path.join(analysisRoot, 'ep001.json'),
+      },
+    ];
+    global.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summary: '主角反击。',
+                  climaxes: [],
+                  split_points: [],
+                  best_hook: null,
+                  arc_end: true,
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
     const manager = createAnalysisManager({
-      getSettings: () => ({ ai_base_url: 'https://example.test/v1', ai_api_key: 'test', ai_text_model: 'gpt-5.6', ai_image_model: 'gpt-image-2.5', ai_transcription_model: 'x', ai_concurrency: 1 }),
+      getSettings: () => ({
+        ai_base_url: 'https://example.test/v1',
+        ai_api_key: 'test',
+        ai_text_model: 'gpt-5.6',
+        ai_image_model: 'gpt-image-2.5',
+        ai_transcription_model: 'x',
+        ai_concurrency: 1,
+      }),
       getEpisodes: () => episodes,
       getState: () => states.get('s') || { version: 1, episodes: {} },
       saveState: (_sid, value) => states.set('s', value),
@@ -50,21 +84,45 @@ const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
     const started = await manager.start({ seriesId: 's' });
     assert.equal(started.success, true);
     for (let i = 0; i < 50; i++) {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
       if (manager.status('s').status === 'completed') break;
     }
     assert.equal(manager.status('s').status, 'completed');
     const savedAnalysis = JSON.parse(await fsp.readFile(episodes[0].analysisPath, 'utf8'));
     assert.equal(savedAnalysis.summary, '主角反击。');
     let releaseAnalysis;
-    global.fetch = () => new Promise(resolve => { releaseAnalysis = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: '不能保存的旧结果', climaxes: [], split_points: [], best_hook: null, arc_end: true }) } }] }), { status: 200, headers: { 'content-type': 'application/json' } })); });
+    global.fetch = () =>
+      new Promise((resolve) => {
+        releaseAnalysis = () =>
+          resolve(
+            new Response(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: {
+                      content: JSON.stringify({
+                        summary: '不能保存的旧结果',
+                        climaxes: [],
+                        split_points: [],
+                        best_hook: null,
+                        arc_end: true,
+                      }),
+                    },
+                  },
+                ],
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+          );
+      });
     const previous = fs.readFileSync(episodes[0].analysisPath, 'utf8');
     await manager.start({ seriesId: 's', force: true });
-    for (let i = 0; i < 50 && !releaseAnalysis; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    for (let i = 0; i < 50 && !releaseAnalysis; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(releaseAnalysis);
     episodes[0] = { ...episodes[0], srtRevision: 'new-subtitle' };
     releaseAnalysis();
-    for (let i = 0; i < 50 && manager.status('s').status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    for (let i = 0; i < 50 && manager.status('s').status === 'running'; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(manager.status('s').status, 'failed');
     assert.match(manager.status('s').error, /已变化/);
     assert.equal(fs.readFileSync(episodes[0].analysisPath, 'utf8'), previous);
@@ -72,4 +130,7 @@ const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
     await fsp.rm(root, { recursive: true, force: true });
   }
   console.log('PASS premium editing SRT, schema and analysis version gate');
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+})().catch((error) => {
+  console.error(error.stack || error.message);
+  process.exitCode = 1;
+});

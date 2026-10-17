@@ -16,7 +16,10 @@ const PREFERRED_PORT = 5173; // 与 vite.config.js 保持一致
 function checkPort(port) {
   return new Promise((resolve) => {
     const s = net.createConnection({ port, host: '127.0.0.1' });
-    s.on('connect', () => { s.destroy(); resolve(true); });
+    s.on('connect', () => {
+      s.destroy();
+      resolve(true);
+    });
     s.on('error', () => resolve(false));
   });
 }
@@ -84,8 +87,12 @@ async function main() {
   });
 
   const cleanup = () => {
-    try { vite.kill(); } catch (_) {}
-    try { electron.kill(); } catch (_) {}
+    try {
+      vite.kill();
+    } catch (_) {}
+    try {
+      electron.kill();
+    } catch (_) {}
     process.exit(0);
   };
   process.on('SIGINT', cleanup);

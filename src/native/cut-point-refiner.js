@@ -17,11 +17,16 @@ function candidateTime(candidate) {
 }
 
 function isReliableCandidate(candidate, options = {}) {
-  const speechThreshold = Number.isFinite(Number(options.speechEnergyThreshold)) ? Number(options.speechEnergyThreshold) : 0.12;
-  const sceneThreshold = Number.isFinite(Number(options.sceneChangeThreshold)) ? Number(options.sceneChangeThreshold) : 0.4;
+  const speechThreshold = Number.isFinite(Number(options.speechEnergyThreshold))
+    ? Number(options.speechEnergyThreshold)
+    : 0.12;
+  const sceneThreshold = Number.isFinite(Number(options.sceneChangeThreshold))
+    ? Number(options.sceneChangeThreshold)
+    : 0.4;
   const energy = numeric(candidate?.speechEnergy ?? candidate?.voiceEnergy ?? candidate?.rms);
   const scene = numeric(candidate?.sceneScore ?? candidate?.sceneChangeScore ?? candidate?.scene);
-  const lowSpeech = candidate?.lowSpeech === true || candidate?.silence === true || (energy != null && energy <= speechThreshold);
+  const lowSpeech =
+    candidate?.lowSpeech === true || candidate?.silence === true || (energy != null && energy <= speechThreshold);
   const shotChange = candidate?.sceneChange === true || (scene != null && scene >= sceneThreshold);
   return { reliable: lowSpeech || shotChange, lowSpeech, shotChange };
 }
@@ -31,19 +36,27 @@ function refineCutPoint(semanticPoint, candidates = [], options = {}) {
   if (semantic == null || semantic < 0) throw new Error('语义切点必须是非负秒数');
   const window = Number.isFinite(Number(options.windowSeconds)) ? Math.max(0, Number(options.windowSeconds)) : 15;
   const inWindow = (Array.isArray(candidates) ? candidates : [])
-    .map(candidate => {
+    .map((candidate) => {
       const time = candidateTime(candidate);
       const evidence = isReliableCandidate(candidate, options);
       return time == null ? null : { ...candidate, time, distance: Math.abs(time - semantic), ...evidence };
     })
-    .filter(candidate => candidate && candidate.time >= semantic - window && candidate.time <= semantic + window && candidate.reliable);
+    .filter(
+      (candidate) =>
+        candidate && candidate.time >= semantic - window && candidate.time <= semantic + window && candidate.reliable,
+    );
   if (!inWindow.length) {
     return { time: semantic, source: 'semantic', status: 'warn', reason: '切点附近没有可靠的静音或真实镜头切换证据' };
   }
   inWindow.sort((a, b) => {
     const evidenceA = Number(a.lowSpeech) + Number(a.shotChange);
     const evidenceB = Number(b.lowSpeech) + Number(b.shotChange);
-    return evidenceB - evidenceA || (Number(b.confidence) || 0) - (Number(a.confidence) || 0) || a.distance - b.distance || a.time - b.time;
+    return (
+      evidenceB - evidenceA ||
+      (Number(b.confidence) || 0) - (Number(a.confidence) || 0) ||
+      a.distance - b.distance ||
+      a.time - b.time
+    );
   });
   const chosen = inWindow[0];
   return {
@@ -57,7 +70,7 @@ function refineCutPoint(semanticPoint, candidates = [], options = {}) {
 }
 
 function refineSplitPoints(splitPoints = [], candidates = [], options = {}) {
-  return (Array.isArray(splitPoints) ? splitPoints : []).map(point => {
+  return (Array.isArray(splitPoints) ? splitPoints : []).map((point) => {
     const semantic = typeof point === 'number' ? point : point?.time;
     const refined = refineCutPoint(semantic, candidates, options);
     return { ...refined, semanticTime: numeric(semantic), reason: point?.reason || refined.reason || '' };

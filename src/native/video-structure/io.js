@@ -5,12 +5,18 @@ const { spawn } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const readline = require('node:readline');
 const fsp = fs.promises;
-async function json(file) { return JSON.parse(await fsp.readFile(file, 'utf8')); }
+async function json(file) {
+  return JSON.parse(await fsp.readFile(file, 'utf8'));
+}
 async function atomicJson(file, value) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
-  try { await fsp.writeFile(temp, JSON.stringify(value, null, 2), 'utf8'); await fsp.rename(temp, file); }
-  finally { await fsp.rm(temp, { force: true }); }
+  try {
+    await fsp.writeFile(temp, JSON.stringify(value, null, 2), 'utf8');
+    await fsp.rename(temp, file);
+  } finally {
+    await fsp.rm(temp, { force: true });
+  }
 }
 async function sha256(file, signal) {
   const hash = createHash('sha256');
@@ -21,23 +27,46 @@ function run(exe, args, { signal, onLine, onStderrLine, cwd, onProgress, duratio
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(Object.assign(new Error('任务已停止'), { code: 'ABORT_ERR' }));
     const processGroup = killProcessTree && process.platform !== 'win32';
-    const child = spawn(exe, args, { cwd, windowsHide: true, detached: processGroup, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '', timer, lineError, stderrLines, stopping = false, treeStopped;
-    const terminate = signalName => {
+    const child = spawn(exe, args, {
+      cwd,
+      windowsHide: true,
+      detached: processGroup,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '',
+      stderr = '',
+      timer,
+      lineError,
+      stderrLines,
+      stopping = false,
+      treeStopped;
+    const terminate = (signalName) => {
       try {
         if (processGroup && child.pid) process.kill(-child.pid, signalName);
         else child.kill(signalName);
-      } catch (error) { if (error.code !== 'ESRCH') lineError ||= error; }
+      } catch (error) {
+        if (error.code !== 'ESRCH') lineError ||= error;
+      }
     };
     const stop = () => {
       if (stopping) return;
       stopping = true;
       if (killProcessTree && process.platform === 'win32' && child.pid) {
         // taskkill must see the live parent to discover its descendants.
-        treeStopped = new Promise(resolve => {
-          const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-          killer.once('error', error => { lineError ||= error; child.kill(); resolve(); });
-          killer.once('close', code => { if (code !== 0) child.kill(); resolve(); });
+        treeStopped = new Promise((resolve) => {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore',
+          });
+          killer.once('error', (error) => {
+            lineError ||= error;
+            child.kill();
+            resolve();
+          });
+          killer.once('close', (code) => {
+            if (code !== 0) child.kill();
+            resolve();
+          });
         });
         return;
       }
@@ -46,7 +75,9 @@ function run(exe, args, { signal, onLine, onStderrLine, cwd, onProgress, duratio
       timer.unref();
     };
     signal?.addEventListener('abort', stop, { once: true });
-    child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-12000); });
+    child.stderr.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-12000);
+    });
     // Some native tools report meaningful stage transitions on stderr rather
     // than stdout. Keep the existing bounded stderr capture while optionally
     // exposing complete lines to the caller (for example, sherpa's Started /
@@ -54,27 +85,52 @@ function run(exe, args, { signal, onLine, onStderrLine, cwd, onProgress, duratio
     // percentage: callers must provide an explicit stage mapping.
     if (onStderrLine) {
       stderrLines = readline.createInterface({ input: child.stderr, crlfDelay: Infinity });
-      stderrLines.on('line', line => {
-        try { onStderrLine(line); } catch (error) { lineError = error; stop(); }
+      stderrLines.on('line', (line) => {
+        try {
+          onStderrLine(line);
+        } catch (error) {
+          lineError = error;
+          stop();
+        }
       });
     }
     if (onLine || onProgress) {
       const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-      lines.on('line', line => {
+      lines.on('line', (line) => {
         try {
           onLine?.(line);
-          if (line.startsWith('out_time_us=') && duration > 0) onProgress?.({ progress: Math.min(99, Number(line.split('=')[1]) / 1000000 / duration * 100) });
-          if (/^\{"type":\s*"progress"/.test(line) && onProgress) { const event = JSON.parse(line); onProgress(event); }
-        } catch (error) { lineError = error; stop(); }
+          if (line.startsWith('out_time_us=') && duration > 0)
+            onProgress?.({ progress: Math.min(99, (Number(line.split('=')[1]) / 1000000 / duration) * 100) });
+          if (/^\{"type":\s*"progress"/.test(line) && onProgress) {
+            const event = JSON.parse(line);
+            onProgress(event);
+          }
+        } catch (error) {
+          lineError = error;
+          stop();
+        }
       });
-    } else child.stdout.on('data', chunk => { stdout += chunk.toString(); if (stdout.length > 32 * 1024 * 1024) { lineError = new Error('工具输出超过限制'); stop(); } });
-    child.once('error', error => { clearTimeout(timer); signal?.removeEventListener('abort', stop); reject(error); });
-    child.once('close', async code => {
+    } else
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+        if (stdout.length > 32 * 1024 * 1024) {
+          lineError = new Error('工具输出超过限制');
+          stop();
+        }
+      });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+      reject(error);
+    });
+    child.once('close', async (code) => {
       // A parent can exit while a child ignores SIGTERM and has no inherited
       // output pipe. Finish its isolated group before clearing escalation.
       if (processGroup && stopping) terminate('SIGKILL');
       if (treeStopped) await treeStopped;
-      clearTimeout(timer); stderrLines?.close(); signal?.removeEventListener('abort', stop);
+      clearTimeout(timer);
+      stderrLines?.close();
+      signal?.removeEventListener('abort', stop);
       if (signal?.aborted) reject(Object.assign(new Error('任务已停止'), { code: 'ABORT_ERR' }));
       else if (lineError) reject(lineError);
       else if (code !== 0) reject(new Error(`${path.basename(exe)} 退出码 ${code}：${stderr}`));
@@ -86,5 +142,7 @@ async function probe(ffprobe, input, args = [], options = {}) {
   const result = await run(ffprobe, ['-v', 'error', ...args, '-of', 'json', input], { signal: options.signal });
   return JSON.parse(result.stdout);
 }
-function blocked(message) { return Object.assign(new Error(message), { code: 'DEPENDENCY_MISSING' }); }
+function blocked(message) {
+  return Object.assign(new Error(message), { code: 'DEPENDENCY_MISSING' });
+}
 module.exports = { json, atomicJson, sha256, run, probe, blocked };

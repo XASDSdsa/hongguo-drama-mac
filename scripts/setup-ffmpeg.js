@@ -25,17 +25,19 @@ const BUILD = JSON.parse(fs.readFileSync(path.join(DEST, 'WINDOWS-BUILD.json'), 
 
 const URL =
   // A mirror may serve the same pinned archive, never a different version.
-  process.env.FFMPEG_ZIP_URL ||
-  BUILD.url;
+  process.env.FFMPEG_ZIP_URL || BUILD.url;
 
 function hasPinnedBinary(file, name) {
   try {
     if (!fs.existsSync(file) || fs.statSync(file).size <= 1024 * 1024) return false;
-    if (createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== BUILD.binaries[`${name}.exe`]) return false;
+    if (createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== BUILD.binaries[`${name}.exe`])
+      return false;
     const output = execFileSync(file, ['-version'], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
     const reported = output.match(new RegExp(`^${name} version ([^\\s]+)`))?.[1];
     return reported === BUILD.buildVersion;
-  } catch (_) { return false; }
+  } catch (_) {
+    return false;
+  }
 }
 
 function download(url, dest, redirects = 0) {
@@ -59,7 +61,10 @@ function download(url, dest, redirects = 0) {
           got += c.length;
           if (total) {
             const pct = Math.floor((got / total) * 100);
-            if (pct >= lastPct + 10) { lastPct = pct; console.log(`  下载中 ${pct}%`); }
+            if (pct >= lastPct + 10) {
+              lastPct = pct;
+              console.log(`  下载中 ${pct}%`);
+            }
           }
         });
         res.pipe(ws);
@@ -99,17 +104,21 @@ function download(url, dest, redirects = 0) {
   console.log('正在解压…');
   fs.rmSync(TMP, { recursive: true, force: true });
   // 用 PowerShell 解压（Windows 自带，无需额外依赖）
-  execFileSync('powershell', [
-    '-NoProfile', '-Command',
-    `Expand-Archive -LiteralPath '${ZIP}' -DestinationPath '${TMP}' -Force`,
-  ], { stdio: 'inherit' });
+  execFileSync(
+    'powershell',
+    ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${ZIP}' -DestinationPath '${TMP}' -Force`],
+    { stdio: 'inherit' },
+  );
 
   const find = (dir, name) => {
     let out = null;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
       if (e.isFile() && e.name.toLowerCase() === name) return p;
-      if (e.isDirectory()) { const r = find(p, name); if (r) return r; }
+      if (e.isDirectory()) {
+        const r = find(p, name);
+        if (r) return r;
+      }
     }
     return out;
   };

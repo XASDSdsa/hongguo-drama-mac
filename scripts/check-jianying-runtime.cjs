@@ -9,7 +9,8 @@ function verifyBundle(root, platform, arch) {
   const target = `${platform}-${arch}`;
   const bundle = path.join(root, 'build', 'jianying', target);
   const manifestPath = path.join(bundle, 'manifest.json');
-  if (!fs.existsSync(manifestPath)) throw new Error(`缺少剪映 Python 运行时 ${target}；请在对应构建机执行 npm run setup:jianying`);
+  if (!fs.existsSync(manifestPath))
+    throw new Error(`缺少剪映 Python 运行时 ${target}；请在对应构建机执行 npm run setup:jianying`);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   if (manifest.platform !== target || manifest.runtime !== 'hongguo-jianying' || manifest.offlineSelfTest !== true) {
     throw new Error('剪映 Python 运行时尚未通过离线自检');

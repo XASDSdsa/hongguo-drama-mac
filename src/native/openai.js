@@ -17,13 +17,20 @@ function requestSignal(signal, timeout = 180000) {
 
 function redactError(error, apiKey = '') {
   let message = String(error?.message || error || 'AI 请求失败');
-  for (const value of [apiKey, encodeURIComponent(apiKey)].filter(Boolean)) message = message.split(value).join('[已隐藏]');
-  return message.replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]').replace(/sk-[\w-]+/g, '[已隐藏]').slice(0, 500);
+  for (const value of [apiKey, encodeURIComponent(apiKey)].filter(Boolean))
+    message = message.split(value).join('[已隐藏]');
+  return message
+    .replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]')
+    .replace(/sk-[\w-]+/g, '[已隐藏]')
+    .slice(0, 500);
 }
 
 async function boundedBody(response, limit) {
   const size = Number(response.headers?.get?.('content-length') || response.headers?.['content-length'] || 0);
-  if (size > limit) { await response.body?.cancel(); throw new Error('AI 响应超过允许大小'); }
+  if (size > limit) {
+    await response.body?.cancel();
+    throw new Error('AI 响应超过允许大小');
+  }
   const chunks = [];
   let received = 0;
   if (!response.body) {
@@ -39,10 +46,15 @@ async function boundedBody(response, limit) {
       const { done, value } = await reader.read();
       if (done) break;
       received += value.byteLength;
-      if (received > limit) { await reader.cancel(); throw new Error('AI 响应超过允许大小'); }
+      if (received > limit) {
+        await reader.cancel();
+        throw new Error('AI 响应超过允许大小');
+      }
       chunks.push(Buffer.from(value));
     }
-  } finally { reader.releaseLock(); }
+  } finally {
+    reader.releaseLock();
+  }
   return Buffer.concat(chunks, received);
 }
 
@@ -54,7 +66,9 @@ async function boundedFile(file, limit) {
 }
 
 function normalizeBaseUrl(value) {
-  const raw = String(value || '').trim().replace(/\/+$/, '');
+  const raw = String(value || '')
+    .trim()
+    .replace(/\/+$/, '');
   if (!raw) return 'https://api.openai.com/v1';
   let parsed;
   try {
@@ -63,7 +77,8 @@ function normalizeBaseUrl(value) {
     throw new Error('AI 中转地址格式无效，请填写完整的 http(s) URL');
   }
   if (!/^https?:$/.test(parsed.protocol)) throw new Error('AI 中转地址必须使用 http 或 https');
-  if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('AI 中转地址不能包含认证信息、查询参数或片段');
+  if (parsed.username || parsed.password || parsed.search || parsed.hash)
+    throw new Error('AI 中转地址不能包含认证信息、查询参数或片段');
   // OpenAI-compatible relays normally expose the API below /v1. Users can
   // still explicitly set another path and it will be preserved.
   if (!parsed.pathname || parsed.pathname === '/') parsed.pathname = '/v1';
@@ -76,7 +91,9 @@ function normalizeConfig(config = {}) {
     apiKey: String(config.apiKey || config.ai_api_key || '').trim(),
     imageModel: String(config.imageModel || config.ai_image_model || 'gpt-image-2.5').trim(),
     textModel: String(config.textModel || config.ai_text_model || 'gpt-5.6').trim(),
-    transcriptionModel: String(config.transcriptionModel || config.ai_transcription_model || 'gpt-4o-mini-transcribe').trim(),
+    transcriptionModel: String(
+      config.transcriptionModel || config.ai_transcription_model || 'gpt-4o-mini-transcribe',
+    ).trim(),
     imageSize: String(config.imageSize || config.ai_image_size || '1024x1536').trim(),
     imageQuality: String(config.imageQuality || config.ai_image_quality || 'high').trim(),
   };
@@ -98,7 +115,11 @@ function endpoint(baseUrl, suffix) {
 async function readResponse(response, limit) {
   const text = (await boundedBody(response, limit)).toString('utf8');
   if (!text) return null;
-  try { return JSON.parse(text); } catch (_) { return text; }
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return text;
+  }
 }
 
 function errorMessage(payload, fallback) {
@@ -135,7 +156,8 @@ function dataUrlBuffer(value) {
 }
 
 async function readImage(image, signal) {
-  if (image?.byteLength > MAX_IMAGE || (typeof image === 'string' && image.length > MAX_IMAGE * 1.4)) throw new Error('封面图片过大');
+  if (image?.byteLength > MAX_IMAGE || (typeof image === 'string' && image.length > MAX_IMAGE * 1.4))
+    throw new Error('封面图片过大');
   if (Buffer.isBuffer(image)) return { buffer: image, contentType: 'image/png', name: 'cover.png' };
   if (image instanceof Uint8Array) return { buffer: Buffer.from(image), contentType: 'image/png', name: 'cover.png' };
   const value = String(image || '').trim();
@@ -209,7 +231,12 @@ async function editImage(options = {}, baseConfig = {}) {
   form.append('quality', options.quality || config.imageQuality);
   form.append('n', '1');
   form.append('image', new Blob([source.buffer], { type: source.contentType }), source.name);
-  const { payload } = await request(config, '/images/edits', { body: form, signal: options.signal, timeout: 600000, maxBytes: MAX_IMAGE * 1.4 });
+  const { payload } = await request(config, '/images/edits', {
+    body: form,
+    signal: options.signal,
+    timeout: 600000,
+    maxBytes: MAX_IMAGE * 1.4,
+  });
   return fetchImageResult(parseImageData(payload), options.signal);
 }
 
@@ -230,12 +257,19 @@ async function transcribeAudio(filePath, options = {}, baseConfig = {}) {
 
 function parseJsonContent(content) {
   const raw = String(content || '').trim();
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  try { return JSON.parse(cleaned); } catch (_) {}
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (_) {}
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
   if (start >= 0 && end > start) {
-    try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch (_) {}
   }
   return { summary: cleaned };
 }
@@ -255,7 +289,8 @@ async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
       messages: [
         {
           role: 'system',
-          content: '你是短剧发布文案编辑。只根据输入内容提炼剧情，不要编造。输出严格 JSON，字段为 title、summary、hook、hashtags；summary 控制在 80 字以内，hook 控制在 30 字以内，hashtags 为 3-5 个中文标签数组。',
+          content:
+            '你是短剧发布文案编辑。只根据输入内容提炼剧情，不要编造。输出严格 JSON，字段为 title、summary、hook、hashtags；summary 控制在 80 字以内，hook 控制在 30 字以内，hashtags 为 3-5 个中文标签数组。',
         },
         {
           role: 'user',
@@ -267,7 +302,7 @@ async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
   });
   const contentValue = payload?.choices?.[0]?.message?.content;
   const content = Array.isArray(contentValue)
-    ? contentValue.map(part => typeof part === 'string' ? part : part?.text || '').join('')
+    ? contentValue.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
     : contentValue;
   if (!content) throw new Error('文案接口没有返回内容');
   const copy = parseJsonContent(content);
@@ -281,39 +316,43 @@ async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
  */
 function normalizeEpisodeAnalysis(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
-  const number = input => Number.isFinite(Number(input)) ? Number(input) : null;
-  const range = item => {
+  const number = (input) => (Number.isFinite(Number(input)) ? Number(input) : null);
+  const range = (item) => {
     const start = number(item?.start ?? item?.start_time ?? item?.from);
     const end = number(item?.end ?? item?.end_time ?? item?.to);
     if (start == null || end == null || end <= start) return null;
     return { start, end };
   };
   const climaxes = (Array.isArray(source.climaxes) ? source.climaxes : [])
-    .map(item => {
+    .map((item) => {
       const times = range(item);
       if (!times) return null;
       const score = Math.max(1, Math.min(10, Math.round(Number(item.score ?? item.rating) || 0)));
       return { ...times, description: String(item.description ?? item.desc ?? item.reason ?? '').trim(), score };
     })
-    .filter(item => item && item.description)
+    .filter((item) => item && item.description)
     .slice(0, 20);
   const splitPoints = (Array.isArray(source.split_points) ? source.split_points : [])
-    .map(item => {
-      const value = typeof item === 'number' ? item : item?.time ?? item?.at ?? item?.seconds;
+    .map((item) => {
+      const value = typeof item === 'number' ? item : (item?.time ?? item?.at ?? item?.seconds);
       const time = number(value);
       if (time == null || time < 0) return null;
-      return { time, reason: String(typeof item === 'object' ? item.reason ?? item.description ?? '' : '').trim() };
+      return { time, reason: String(typeof item === 'object' ? (item.reason ?? item.description ?? '') : '').trim() };
     })
     .filter(Boolean)
     .sort((a, b) => a.time - b.time)
     .slice(0, 2);
   const hookRange = range(source.best_hook);
-  const bestHook = hookRange ? {
-    ...hookRange,
-    description: String(source.best_hook?.description ?? source.best_hook?.desc ?? '').trim(),
-  } : null;
+  const bestHook = hookRange
+    ? {
+        ...hookRange,
+        description: String(source.best_hook?.description ?? source.best_hook?.desc ?? '').trim(),
+      }
+    : null;
   return {
-    summary: String(source.summary || '').trim().slice(0, 200),
+    summary: String(source.summary || '')
+      .trim()
+      .slice(0, 200),
     climaxes,
     split_points: splitPoints,
     best_hook: bestHook,
@@ -336,7 +375,8 @@ async function analyzeEpisode(transcriptSrt, metadata = {}, baseConfig = {}) {
       messages: [
         {
           role: 'system',
-          content: '你是短剧剪辑导演。只根据输入的 SRT 理解剧情，转写可能有错别字，按语义理解，不要编造。输出严格 JSON，且只能包含 summary、climaxes、split_points、best_hook、arc_end 五个字段。summary 是 200 字以内梗概；climaxes 是数组，每项包含 start、end、description、score(1-10)；split_points 是数组，最多 2 项，每项包含 time、reason，只标场景或话题转换处，禁止标在对话中间；best_hook 是 {start,end,description} 或 null，时长 5-15 秒；arc_end 是布尔值。不要输出 fillers、废话段或其他字段。',
+          content:
+            '你是短剧剪辑导演。只根据输入的 SRT 理解剧情，转写可能有错别字，按语义理解，不要编造。输出严格 JSON，且只能包含 summary、climaxes、split_points、best_hook、arc_end 五个字段。summary 是 200 字以内梗概；climaxes 是数组，每项包含 start、end、description、score(1-10)；split_points 是数组，最多 2 项，每项包含 time、reason，只标场景或话题转换处，禁止标在对话中间；best_hook 是 {start,end,description} 或 null，时长 5-15 秒；arc_end 是布尔值。不要输出 fillers、废话段或其他字段。',
         },
         {
           role: 'user',
@@ -348,7 +388,7 @@ async function analyzeEpisode(transcriptSrt, metadata = {}, baseConfig = {}) {
   });
   const contentValue = response.payload?.choices?.[0]?.message?.content;
   const content = Array.isArray(contentValue)
-    ? contentValue.map(part => typeof part === 'string' ? part : part?.text || '').join('')
+    ? contentValue.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
     : contentValue;
   if (!content) throw new Error('分析接口没有返回内容');
   return normalizeEpisodeAnalysis(parseJsonContent(content));
