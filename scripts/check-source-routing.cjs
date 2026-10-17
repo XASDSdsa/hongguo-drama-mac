@@ -61,21 +61,20 @@ const checks = [
     },
   ],
   [
-    'different sources and same-title Xifan series use different folders',
+    'downloads go straight into the configured download directory for every source',
     () => {
-      const context = { path, createHash, sanitizeFolderName: (value) => value };
-      vm.runInNewContext(extract('seriesDownloadDir'), context);
-      const resolve = context.seriesDownloadDir;
-      // 目录名 = 标题 + 剧 ID 的 SHA-256 前 12 位，所以同名剧不会共用目录。
-      const suffix = (id) => createHash('sha256').update(id).digest('hex').slice(0, 12);
-      assert.equal(resolve('/downloads', '123', '同名剧'), `/downloads/红果短剧/同名剧-${suffix('123')}`);
-      assert.equal(
-        resolve('/downloads', 'xifan:huabo:a', '同名剧'),
-        `/downloads/西饭短剧/同名剧-${suffix('xifan:huabo:a')}`,
-      );
-      const a = resolve('/downloads', 'xifan:huabo:a', '同名剧');
-      assert.notEqual(a, resolve('/downloads', '123', '同名剧'));
-      assert.notEqual(a, resolve('/downloads', 'xifan:huabo:b', '同名剧'));
+      const make = (root) => {
+        const context = {
+          path,
+          app: { getPath: () => '/system/downloads' },
+          getCurrentSettings: () => ({ root }),
+        };
+        vm.runInNewContext(extract('downloadRoot'), context);
+        return context.downloadRoot();
+      };
+      assert.equal(make('/downloads'), path.resolve('/downloads'));
+      assert.equal(make('  /my/videos  '), path.resolve('/my/videos'));
+      assert.equal(make(''), path.resolve('/system/downloads'));
     },
   ],
   [

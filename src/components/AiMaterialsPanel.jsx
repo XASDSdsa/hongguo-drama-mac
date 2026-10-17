@@ -515,7 +515,7 @@ export default function AiMaterialsPanel({
             <div className="aim-section-head">
               <div>
                 <b>剧集封面</b>
-                <span>最终成品就绪后重绘，保存到发布素材/封面</span>
+                <span>最终成品就绪后重绘，保存到设置里的 AI 素材输出目录/封面</span>
               </div>
               <button
                 className="btn btn-outline btn-sm"

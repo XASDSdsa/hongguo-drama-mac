@@ -40,6 +40,17 @@ function describeProxy(settings) {
   return { on: true, text: '跟随系统 / 环境变量代理' };
 }
 
+const OUTPUT_DIRS = [
+  { key: 'dedup_output_dir', label: '去重输出目录', hint: '视频去重后的成片保存到这里。' },
+  {
+    key: 'structure_output_dir',
+    label: '拆解输出目录',
+    hint: '视频结构化拆解的结果（含分镜和剪映草稿素材）保存到这里。',
+  },
+  { key: 'merge_output_dir', label: '合集输出目录', hint: '合并后的整剧合集保存到这里。' },
+  { key: 'ai_output_dir', label: 'AI 素材输出目录', hint: 'AI 生成的封面和文案保存到这里。' },
+];
+
 function SettingsPage({ active = true }) {
   const [settings, setSettings] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -88,10 +99,10 @@ function SettingsPage({ active = true }) {
     setSaveError('');
   };
 
-  const selectFolder = async () => {
+  const selectFolder = async (key = 'root') => {
     try {
       const dir = await window.electronAPI.selectFolder();
-      if (dir) update('root', dir);
+      if (dir) update(key, dir);
     } catch (error) {
       setSaveError(error.message || '文件夹选择失败，请重试');
     }
@@ -108,6 +119,10 @@ function SettingsPage({ active = true }) {
       const current = await window.electronAPI.getSettings();
       const editable = [
         'root',
+        'dedup_output_dir',
+        'structure_output_dir',
+        'merge_output_dir',
+        'ai_output_dir',
         'name_format',
         'max_concurrent',
         'proxy_enabled',
@@ -258,15 +273,34 @@ function SettingsPage({ active = true }) {
               onChange={(e) => update('root', e.target.value)}
               placeholder="选择下载保存目录"
             />
-            <button className="btn btn-outline" onClick={selectFolder}>
+            <button className="btn btn-outline" onClick={() => selectFolder()}>
               <Folder size={16} />
               选择文件夹
             </button>
           </div>
-          <p className="settings-hint">
-            文件将保存到 <code>下载目录/红果短剧/剧名/</code> 下
-          </p>
+          <p className="settings-hint">下载的视频直接保存在这个目录里，不会再自动建子文件夹。</p>
         </div>
+
+        {OUTPUT_DIRS.map(({ key, label, hint }) => (
+          <div className="settings-group" key={key}>
+            <label className="settings-label">{label}</label>
+            <div className="folder-row">
+              <input
+                type="text"
+                className="input-field"
+                aria-label={label}
+                value={settings[key] || ''}
+                onChange={(e) => update(key, e.target.value)}
+                placeholder="未选择：对应功能会提示先选择"
+              />
+              <button className="btn btn-outline" onClick={() => selectFolder(key)}>
+                <Folder size={16} />
+                选择文件夹
+              </button>
+            </div>
+            <p className="settings-hint">{hint}</p>
+          </div>
+        ))}
 
         <div className="settings-group">
           <label className="settings-label">文件命名规则</label>
@@ -342,8 +376,7 @@ function SettingsPage({ active = true }) {
             </select>
           </div>
           <p className="settings-hint">
-            只读取已去重视频，每批开始时固定处理设备。识别完成后，每集完整字幕保存在该剧目录的 <code>transcripts/</code>
-            。
+            只读取已去重视频，每批开始时固定处理设备。识别完成后，字幕保存在应用自己的数据目录里，不会写进你的输出目录。
           </p>
         </div>
 

@@ -38,7 +38,7 @@ async function merge(label, files, compatible, mode = '') {
       name === 'electron'
         ? electron
         : name === './src/store'
-          ? { getSettings: () => ({}), saveMergeTasks() {} }
+          ? { getSettings: () => ({ merge_output_dir: root }), saveMergeTasks() {} }
           : req(name),
     __dirname: path.dirname(source),
     process,
@@ -65,7 +65,6 @@ async function merge(label, files, compatible, mode = '') {
   });
   context.pipelineFileValid = () => true;
   context.collectSeriesEpisodeFiles = () => ({
-    dir: root,
     ordered: files.map((file, i) => ({ path: file, vid_index: i + 1 })),
   });
   let finish;

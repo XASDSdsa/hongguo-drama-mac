@@ -138,6 +138,11 @@ let MAX_CONCURRENT_DOWNLOADS = 3;
 function getDefaultSettings() {
   return {
     root: app.getPath('downloads'),
+    // 各功能的输出目录由用户自己指定；留空时该功能会提示先选择，不会自动建目录。
+    dedup_output_dir: '',
+    structure_output_dir: '',
+    merge_output_dir: '',
+    ai_output_dir: '',
     // 文件命名模板：可用变量 剧名(series_title) 集数(vid_index) 标题(ep_title)
     name_format: '剧名 集数',
     max_concurrent: 3,
@@ -948,20 +953,19 @@ function saveSeriesTranscriptionState(seriesId, nextState) {
 function getSeriesDedupedEpisodes(seriesId) {
   const entry = seriesRegistry.find((item) => String(item.series_id) === String(seriesId));
   if (!entry) return [];
-  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title);
+  const workDir = seriesWorkDir(seriesId);
   return (entry.episodes || [])
     .map((episode) => {
       const episodeIndex = Number(episode.vid_index);
       const record = pipelineEpisode(entry, episodeIndex, false);
       if (!record?.dedupPath || !pipelineFileValid(record.dedupPath, record.dedupFingerprint)) return null;
       const inputPath = record.dedupPath;
-      const baseDir = seriesDir || path.dirname(inputPath);
       return {
         episodeIndex,
         title: episode.title || '',
         inputPath,
         inputFingerprint: pipelineFingerprint(inputPath),
-        srtPath: path.join(baseDir, 'transcripts', `${path.parse(inputPath).name}.srt`),
+        srtPath: path.join(workDir, 'transcripts', `${path.parse(inputPath).name}.srt`),
       };
     })
     .filter(
@@ -1019,7 +1023,7 @@ function saveSeriesAnalysisState(seriesId, nextState) {
 function getSeriesAnalysisEpisodes(seriesId) {
   const entry = seriesRegistry.find((item) => String(item.series_id) === String(seriesId));
   if (!entry) return [];
-  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title);
+  const workDir = seriesWorkDir(seriesId);
   const transcript = transcriptionState(entry);
   const deduped = new Map(getSeriesDedupedEpisodes(seriesId).map((item) => [item.episodeIndex, item]));
   return (entry.episodes || [])
@@ -1029,7 +1033,6 @@ function getSeriesAnalysisEpisodes(seriesId) {
       const current = deduped.get(episodeIndex);
       if (!current || !isSubtitleCompleted(record, current)) return null;
       const srtFingerprint = record.srtHash;
-      const baseDir = seriesDir || path.dirname(record.srtPath);
       return {
         episodeIndex,
         title: episode.title || '',
@@ -1039,7 +1042,7 @@ function getSeriesAnalysisEpisodes(seriesId) {
         srtFingerprint,
         srtRevision: record.revision,
         inputFingerprint: current.inputFingerprint,
-        analysisPath: path.join(baseDir, 'analysis', `ep${String(episodeIndex).padStart(3, '0')}.json`),
+        analysisPath: path.join(workDir, 'analysis', `ep${String(episodeIndex).padStart(3, '0')}.json`),
       };
     })
     .filter((item) => item && Number.isSafeInteger(item.episodeIndex) && item.episodeIndex > 0);
@@ -1088,7 +1091,7 @@ function getReconstructionPipeline() {
           checkScript: resolveJianyingScript('check-jianying-draft.py'),
           outputRoot: userData
             ? path.join(userData, 'Projects', 'com.lveditor.draft')
-            : path.join(path.dirname(ctx.input), '剪映草稿'),
+            : path.join(ctx.projectDir, '剪映草稿'),
           name,
           userData,
           validate: workflowGates().validateDraft,
@@ -1370,8 +1373,7 @@ async function runEpisodeWorkflow(seriesId, episodeIndex, options = {}) {
     if (!input) throw workflowError('当前集没有可用的工作流输入，请先确认视频文件状态', 'WORKFLOW_INPUT_REQUIRED');
     const inputPath = input.path;
     const episode = (entry.episodes || []).find((item) => Number(item.vid_index) === index);
-    const seriesDir = resolveSeriesDir(sid, entry.series_title) || path.dirname(inputPath);
-    const structureRoot = path.join(seriesDir, '结构化拆解');
+    const structureRoot = configuredDir(null, 'structure_output_dir', '拆解输出目录');
     updateWorkflowRecord(entry, index, {
       status: 'running',
       stage: 'structure',
@@ -1840,10 +1842,7 @@ async function executeHongguoDownload(task) {
     task.cancelled = false;
     task.progress = 0;
     sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
-    const settings = getCurrentSettings();
-    const root = String(settings.root || '').trim() || app.getPath('downloads');
-    const downloadDir =
-      task.customDir || path.join(seriesDownloadDir(root, hongguoInfo?.series_id, series_title), '原视频');
+    const downloadDir = task.customDir || downloadRoot();
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
     task.savePath = finalPath;
@@ -2316,82 +2315,6 @@ ipcMain.handle('purge-empty-series', async () => {
   }
   if (removed > 0) saveSeriesRegistry();
   return { success: true, count: removed };
-});
-
-/**
- * 从磁盘补回下载任务记录。
- * 用于任务记录丢失/被清空、或早期版本直接下载没登记的情况——
- * 只要磁盘上有文件且剧集档案里有对应集号，就重新登记为「已完成」。
- */
-function rescanDownloadsFromDisk() {
-  let added = 0;
-  for (const s of seriesRegistry) {
-    const sid = String(s.series_id);
-    let scanned;
-    try {
-      scanned = collectSeriesEpisodeFiles(sid, s.series_title);
-    } catch (_) {
-      continue;
-    }
-    if (!scanned.dir || !scanned.ordered.length) continue;
-
-    const existing = new Set(
-      downloadTasks
-        .filter((t) => t.hongguoInfo && String(t.hongguoInfo.series_id) === sid)
-        .map((t) => Number(t.hongguoInfo.vid_index)),
-    );
-
-    for (const f of scanned.ordered) {
-      if (existing.has(f.vid_index)) continue;
-      const ep = (s.episodes || []).find((e) => Number(e.vid_index) === f.vid_index);
-      let size = 0;
-      try {
-        size = fs.statSync(f.path).size;
-      } catch (_) {}
-      downloadTasks.unshift({
-        id: 'rescanned_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 6),
-        batchId: 'rescanned',
-        savePath: f.path,
-        customDir: path.dirname(f.path),
-        filename: f.filename,
-        title: `《${s.series_title}》第${String(f.vid_index).padStart(3, '0')}集`,
-        platform: 'hongguo',
-        type: 'hongguo',
-        status: 'completed',
-        progress: 100,
-        receivedBytes: size,
-        totalBytes: size,
-        startTime: Date.now(),
-        videoInfo: {
-          author: s.series_title,
-          title: `《${s.series_title}》第${String(f.vid_index).padStart(3, '0')}集`,
-          cover: s.cover || '',
-          aweme_id: ep ? ep.vid : '',
-        },
-        hongguoInfo: {
-          vid: ep ? ep.vid : '',
-          series_id: sid,
-          series_title: s.series_title,
-          vid_index: f.vid_index,
-          ep_title: ep ? ep.title : '',
-        },
-      });
-      existing.add(f.vid_index);
-      added++;
-    }
-  }
-  if (added > 0) saveDownloadTasks();
-  console.log(`[Rescan] 从磁盘补回 ${added} 条下载记录`);
-  return { success: true, count: added };
-}
-
-ipcMain.handle('rescan-downloads', async () => {
-  try {
-    return rescanDownloadsFromDisk();
-  } catch (error) {
-    console.error('[Rescan] 失败:', error.message);
-    return { success: false, error: error.message };
-  }
 });
 
 /** 恢复显示被移除的短剧 */
@@ -2867,11 +2790,9 @@ ipcMain.handle('quchong-start', async (_event, payload = {}) => {
     if (payload.outputDir != null && typeof payload.outputDir !== 'string') {
       return { success: false, error: '请选择有效的输出目录' };
     }
-    const outputDir = payload.outputDir?.trim() ? path.resolve(payload.outputDir.trim()) : '';
-    const outputDirs = sources.map(
-      (file) => outputDir || path.join(seriesRootFromVideoDir(path.dirname(file)), '去重视频'),
-    );
-    for (const dir of new Set(outputDirs)) await fsp.mkdir(dir, { recursive: true });
+    const outputDir = configuredDir(payload.outputDir, 'dedup_output_dir', '去重输出目录');
+    const outputDirs = sources.map(() => outputDir);
+    await fsp.mkdir(outputDir, { recursive: true });
     const opts = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...payload.opts });
     const bgm = payload.bgm ? path.resolve(String(payload.bgm)) : null;
     if (bgm) {
@@ -3026,26 +2947,23 @@ ipcMain.handle('show-in-folder', async (event, filePath) => {
 
 ipcMain.handle('get-merge-tasks', async () => mergeTasks.map(({ child, ...rest }) => rest));
 
-function seriesDownloadDir(root, seriesId, seriesTitle) {
-  const title = sanitizeFolderName(seriesTitle) || '未命名短剧';
-  const suffix = createHash('sha256').update(String(seriesId)).digest('hex').slice(0, 12);
-  return path.join(
-    root,
-    String(seriesId).startsWith('hema:') ? '河马短剧' : String(seriesId).startsWith('xifan:') ? '西饭短剧' : '红果短剧',
-    `${title}-${suffix}`,
-  );
+/** 下载保存目录：直接使用设置里的下载目录，不再按来源/剧名建子目录。 */
+function downloadRoot() {
+  const configured = String(getCurrentSettings().root || '').trim();
+  return path.resolve(configured || app.getPath('downloads'));
 }
 
-function seriesRootFromVideoDir(dir) {
-  return ['原视频', '去重视频'].includes(path.basename(dir)) ? path.dirname(dir) : dir;
+/** 输出目录：先用本次操作明确给出的目录，其次是设置里指定的目录；都没有就报错，绝不自动推导。 */
+function configuredDir(explicit, settingKey, label) {
+  const dir = String(explicit ?? '').trim() || String(getCurrentSettings()[settingKey] || '').trim();
+  if (!dir) throw new Error(`请先选择${label}`);
+  return path.resolve(dir);
 }
 
-/** 某剧在磁盘上的目录：由下载根目录、来源和剧名推导，目录不存在则返回 null。 */
-function resolveSeriesDir(seriesId, seriesTitle) {
-  const settings = getCurrentSettings();
-  const root = settings.root && String(settings.root).trim() ? String(settings.root).trim() : app.getPath('downloads');
-  const guess = seriesDownloadDir(root, seriesId, seriesTitle);
-  return fs.existsSync(guess) ? guess : null;
+/** 应用私有的每剧工作目录，只放字幕、分析等中间文件，不放进用户的输出目录。 */
+function seriesWorkDir(seriesId) {
+  const id = createHash('sha256').update(String(seriesId)).digest('hex').slice(0, 12);
+  return path.join(app.getPath('userData'), 'series-data', id);
 }
 
 function hasCompleteTaskFile(task) {
@@ -3078,10 +2996,7 @@ function repairTaskDestination(task) {
   if (!task.pathConflict) return;
   const settings = getCurrentSettings(),
     info = task.hongguoInfo || {};
-  task.customDir = path.join(
-    seriesDownloadDir(settings.root || app.getPath('downloads'), info.series_id, info.series_title),
-    '原视频',
-  );
+  task.customDir = downloadRoot();
   const filename = uniqueEpisodeFilename(settings, info.series_title, {
     vid_index: info.vid_index,
     title: info.ep_title,
@@ -3100,26 +3015,14 @@ function uniqueEpisodeFilename(settings, title, episode) {
 }
 
 /**
- * 组装合并顺序：只认磁盘上真实存在的文件（任务队列可能因为重复提交、
- * 手动删除、跨会话下载等原因与实际文件不一致）。
- * 有任务记录的按标题模板精确寻址；没有记录的按集号扫描目录兜底。
+ * 组装合并顺序：只认下载任务记录里登记过、且磁盘上真实存在的文件，
+ * 不再扫描任何目录去猜哪些文件属于哪部剧。
  */
-function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
+function collectSeriesEpisodeFiles(seriesId) {
   const sid = String(seriesId);
-  const tasks = downloadTasks.filter((t) => t.hongguoInfo && String(t.hongguoInfo.series_id) === sid && t.savePath);
-  const dir = resolveSeriesDir(sid, seriesTitle);
-
   const byIndex = new Map();
-  const exists = (p) => {
-    try {
-      return fs.existsSync(p) && fs.statSync(p).size > 1024 * 100;
-    } catch (_) {
-      return false;
-    }
-  };
-
-  // 1) 任务记录优先（命名模板可能与默认不同）
-  for (const t of tasks) {
+  for (const t of downloadTasks) {
+    if (!t.hongguoInfo || String(t.hongguoInfo.series_id) !== sid || !t.savePath) continue;
     if (!hasCompleteTaskFile(t)) continue;
     const idx = Number(t.hongguoInfo.vid_index) || 0;
     if (!idx) continue;
@@ -3128,48 +3031,7 @@ function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
       byIndex.set(idx, { vid_index: idx, path: t.savePath, filename: t.filename || path.basename(t.savePath) });
     }
   }
-
-  // 2) 目录扫描兜底：把目录里符合命名规律的剧集文件按集号补进来。
-  //    不依赖「已登记的分集」——磁盘上可能存在没有任务记录的孤儿文件
-  //    （跨会话下载、任务被清理等），这些同样应该合并进去。
-  const sharedDirectory =
-    dir &&
-    downloadTasks.some(
-      (task) =>
-        String(task.hongguoInfo?.series_id) !== sid &&
-        task.savePath &&
-        seriesRootFromVideoDir(path.dirname(task.savePath)) === dir,
-    );
-  const registeredPaths = new Set(downloadTasks.map((task) => task.savePath).filter(Boolean));
-  if (dir && !sharedDirectory) {
-    const sourceDir = path.join(dir, '原视频');
-    let names = [];
-    try {
-      names = fs.readdirSync(sourceDir);
-    } catch (_) {}
-    for (const n of names) {
-      if (
-        !/\.mp4$/i.test(n) ||
-        n.includes('合集') ||
-        /_去重(?:_\d+)?\.mp4$/i.test(n) ||
-        n.startsWith('.hongguo-quchong-')
-      )
-        continue;
-      // 形如「剧名 001.mp4」——取文件名末尾的数字作为集号
-      const m = n.match(/(\d{1,4})\.mp4$/i);
-      if (!m) continue;
-      const idx = parseInt(m[1], 10);
-      if (!idx || byIndex.has(idx)) continue;
-      const full = path.join(sourceDir, n);
-      if (registeredPaths.has(full)) continue;
-      if (exists(full)) byIndex.set(idx, { vid_index: idx, path: full, filename: n });
-    }
-  }
-
-  return {
-    dir,
-    ordered: [...byIndex.values()].sort((a, b) => a.vid_index - b.vid_index),
-  };
+  return { ordered: [...byIndex.values()].sort((a, b) => a.vid_index - b.vid_index) };
 }
 
 ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
@@ -3180,7 +3042,7 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
       entry?.series_title ||
       downloadTasks.find((t) => String(t.hongguoInfo?.series_id) === sid)?.hongguoInfo.series_title ||
       '未命名短剧';
-    const { dir, ordered } = collectSeriesEpisodeFiles(sid, seriesTitle);
+    const { ordered } = collectSeriesEpisodeFiles(sid);
     if (!ordered.length) return { success: false, error: '该剧还没有已下载完成的分集' };
     const requestedIndices = Array.isArray(options?.episodeIndices)
       ? new Set(options.episodeIndices.map(Number).filter((index) => Number.isSafeInteger(index) && index > 0))
@@ -3220,7 +3082,8 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
     if (mergeTasks.filter((t) => t.status === 'running').length >= MAX_CONCURRENT_MERGES) {
       return { success: false, busy: true, error: `当前已有 ${MAX_CONCURRENT_MERGES} 个合并任务运行，请稍后重试` };
     }
-    const outDir = dir || path.dirname(ordered[0].path);
+    const outDir = configuredDir(options?.outputDir, 'merge_output_dir', '合集输出目录');
+    await fsp.mkdir(outDir, { recursive: true });
     const baseName =
       outputName && String(outputName).trim()
         ? sanitizeFolderName(outputName)
@@ -3428,10 +3291,8 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
     const seriesTitle =
       (entry && entry.series_title) || (tasks[0] && tasks[0].hongguoInfo.series_title) || '未命名短剧';
     let scannedByIndex = new Map();
-    let seriesDir = null;
     try {
-      const scanned = collectSeriesEpisodeFiles(sid, seriesTitle);
-      seriesDir = scanned.dir;
+      const scanned = collectSeriesEpisodeFiles(sid);
       for (const e of scanned.ordered) scannedByIndex.set(Number(e.vid_index), e);
     } catch (_) {}
 
@@ -3511,7 +3372,6 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
         pipeline: getPipelineStatus(sid),
         transcription: getTranscriptionManager().status(sid),
         analysis: getAnalysisManager().status(sid),
-        seriesDir,
         web_accessible_episodes: entry?.web_accessible_episodes ?? null,
         total: episodes.length,
         completedCount,
@@ -3616,7 +3476,9 @@ ipcMain.handle('get-reconstruction-status', async (_event, projectId) => {
 
 ipcMain.handle('start-reconstruction', async (_event, payload = {}) => {
   try {
-    return await getReconstructionPipeline().start(payload);
+    const outputRoot =
+      String(payload.outputRoot || '').trim() || String(getCurrentSettings().structure_output_dir || '').trim();
+    return await getReconstructionPipeline().start({ ...payload, outputRoot: outputRoot || undefined });
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -4566,9 +4428,8 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   }
 
   const settings = getCurrentSettings();
-  const root = settings.root && String(settings.root).trim() ? String(settings.root).trim() : app.getPath('downloads');
   const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
-  const downloadDir = path.join(seriesDownloadDir(root, seriesId, cleanSeriesTitle), '原视频');
+  const downloadDir = downloadRoot();
   try {
     fs.mkdirSync(downloadDir, { recursive: true });
   } catch (_) {}
@@ -4709,10 +4570,8 @@ let aiMaterialQueue = null;
 // existed when it was submitted, even if the user edits Settings meanwhile.
 const aiRuntimeConfigs = new Map();
 
-function aiSeriesMaterialDir(seriesId, seriesTitle) {
-  const settings = getCurrentSettings();
-  const root = String(settings.root || '').trim() || app.getPath('downloads');
-  return path.join(seriesDownloadDir(root, seriesId, seriesTitle), '发布素材');
+function aiOutputDir() {
+  return configuredDir(null, 'ai_output_dir', 'AI 素材输出目录');
 }
 
 function aiImageExtension(contentType) {
@@ -5079,7 +4938,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
           settings,
         );
     update({ stage: 'saving', progress: 90 });
-    const outputDir = path.join(aiSeriesMaterialDir(task.seriesId, entry.series_title), '封面');
+    const outputDir = path.join(aiOutputDir(), '封面');
     await fsp.mkdir(outputDir, { recursive: true });
     const outputPath = path.join(
       outputDir,
@@ -5098,7 +4957,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
     throw new Error('输入视频已移动、删除或发生变化，请重新加入任务');
   const latest = aiLatestEntry(task.seriesId);
   const episode = latest?.episodes?.find((item) => Number(item.vid_index) === Number(task.episodeIndex));
-  const materialDir = path.join(aiSeriesMaterialDir(task.seriesId, latest.series_title), '文案');
+  const materialDir = path.join(aiOutputDir(), '文案');
   const productIndices =
     Array.isArray(task.productEpisodeIndices) && task.productEpisodeIndices.length
       ? task.productEpisodeIndices.map(Number).filter(Number.isSafeInteger)
@@ -5604,7 +5463,7 @@ function seriesFilePaths(seriesId) {
   const entry = seriesRegistry.find((s) => String(s.series_id) === sid);
   const paths = new Set();
   try {
-    const { ordered } = collectSeriesEpisodeFiles(sid, entry ? entry.series_title : '');
+    const { ordered } = collectSeriesEpisodeFiles(sid);
     for (const o of ordered) paths.add(o.path);
   } catch (_) {}
   for (const t of downloadTasks) {
@@ -5727,7 +5586,7 @@ ipcMain.handle('delete-series-files', async (event, seriesId, options) => {
     // 合并产物（合集.mp4）与残留的 concat 列表
     const dir = (() => {
       try {
-        const c = collectSeriesEpisodeFiles(sid, title);
+        const c = collectSeriesEpisodeFiles(sid);
         if (c.dir) return c.dir;
       } catch (_) {}
       return null;
@@ -5793,7 +5652,7 @@ ipcMain.handle('delete-episode-file', async (event, seriesId, vidIndex) => {
       ...new Set(
         tasks.length
           ? tasks.map((task) => task.savePath).filter(Boolean)
-          : collectSeriesEpisodeFiles(sid, entry?.series_title || '')
+          : collectSeriesEpisodeFiles(sid)
               .ordered.filter((episode) => episode.vid_index === idx)
               .map((episode) => episode.path),
       ),
@@ -5847,7 +5706,7 @@ ipcMain.handle('get-storage-usage', async () => {
       let merged = 0;
       let mergedBytes = 0;
       try {
-        const c = collectSeriesEpisodeFiles(s.series_id, s.series_title);
+        const c = collectSeriesEpisodeFiles(s.series_id);
         if (c.dir && fs.existsSync(c.dir)) {
           for (const f of fs.readdirSync(c.dir)) {
             if (f.endsWith('.mp4') && f.includes('合集')) {
@@ -5904,7 +5763,7 @@ ipcMain.handle('delete-all-downloaded', async () => {
         }
       }
       try {
-        const c = collectSeriesEpisodeFiles(sid, '');
+        const c = collectSeriesEpisodeFiles(sid);
         if (c.dir && fs.existsSync(c.dir)) {
           for (const f of fs.readdirSync(c.dir)) {
             if (f.endsWith('.mp4') && f.includes('合集')) {
@@ -6182,12 +6041,6 @@ app.whenReady().then(async () => {
     rebuildSeriesRegistryFromTasks();
   } catch (_) {
     /* storage-error reports the failed write when the window opens. */
-  }
-  // 任务记录可能缺失（被清空/跨会话），从磁盘补回，保证下载列表与文件一致
-  try {
-    rescanDownloadsFromDisk();
-  } catch (e) {
-    console.warn('[Rescan] 启动补登记失败:', e.message);
   }
   try {
     loadMergeTasks();

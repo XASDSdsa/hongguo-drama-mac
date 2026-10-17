@@ -131,37 +131,60 @@ async function check(name, run) {
     assert.equal(detail.data.episodes.length, 1);
     assert.equal(detail.data.episodes[0].vid_index, 1);
   });
-  await check('same-title series use independent directories', () => {
-    const h = load();
-    assert.notEqual(
-      h.context.seriesDownloadDir(h.dir, 'S1', 'Short'),
-      h.context.seriesDownloadDir(h.dir, 'S2', 'Short'),
-    );
-  });
-  await check('new episodes share a series root with an originals subdirectory', async () => {
+  await check('downloads are saved directly in the download directory without creating subfolders', async () => {
     const h = load();
     h.set('seriesRegistry', series());
     await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
-    const seriesDir = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
     const tasks = h.run('downloadTasks');
+    assert.equal(tasks.length, 2);
     for (const item of tasks) {
-      assert.equal(item.customDir, path.join(seriesDir, '原视频'));
-      assert.equal(path.dirname(item.savePath), item.customDir);
+      assert.equal(item.customDir, h.dir);
+      assert.equal(path.dirname(item.savePath), h.dir);
       file(item.savePath);
       item.status = 'completed';
     }
-    const scanned = h.context.collectSeriesEpisodeFiles('S', 'Short');
-    assert.equal(scanned.dir, seriesDir, 'series-level outputs must not be placed inside the originals directory');
-    assert.equal(scanned.ordered.length, 2);
-    const source = tasks.find((item) => item.hongguoInfo.vid_index === 1);
-    const output = path.join(seriesDir, '去重视频', 'Short 001_去重.mp4');
-    fs.mkdirSync(path.dirname(output));
+    assert.deepEqual(
+      fs.readdirSync(h.dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()),
+      [],
+      'no folders may be created for series, source or stage',
+    );
+  });
+  await check('episode files come from task records only; directories are never scanned', async () => {
+    const h = load();
+    h.set('seriesRegistry', series());
+    await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[0]] });
+    const tasks = h.run('downloadTasks');
+    file(tasks[0].savePath);
+    tasks[0].status = 'completed';
+    file(path.join(h.dir, 'Short 009.mp4')); // an unrelated file in the same directory
+    const scanned = h.context.collectSeriesEpisodeFiles('S');
+    assert.deepEqual(Array.from(scanned.ordered.map((item) => item.vid_index)), [1]);
+    assert.equal('dir' in scanned, false);
+  });
+  await check('dedup outputs go where the user chose and transcripts stay in private app data', async () => {
+    const h = load();
+    h.set('seriesRegistry', series());
+    await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[0]] });
+    const source = h.run('downloadTasks[0]');
+    file(source.savePath);
+    source.status = 'completed';
+    const outDir = path.join(h.dir, 'chosen-output');
+    const output = path.join(outDir, 'Short 001_去重.mp4');
+    fs.mkdirSync(outDir);
     file(output);
     h.context.markPipelineDownloaded(source, source.savePath);
     h.context.markPipelineDeduped(source.savePath, output);
     const episode = h.context.getSeriesDedupedEpisodes('S')[0];
     assert.equal(episode.inputPath, output);
-    assert.equal(episode.srtPath, path.join(seriesDir, 'transcripts', 'Short 001_去重.srt'));
+    assert.equal(episode.srtPath, path.join(h.context.seriesWorkDir('S'), 'transcripts', 'Short 001_去重.srt'));
+    assert.equal(path.relative(outDir, episode.srtPath).startsWith('..'), true, 'SRT must not be in the output folder');
+  });
+  await check('output folders must be chosen: explicit value, then setting, otherwise an error', () => {
+    const none = load({ dedup_output_dir: '' });
+    assert.throws(() => none.context.configuredDir('', 'dedup_output_dir', '去重输出目录'), /请先选择去重输出目录/);
+    const configured = load({ dedup_output_dir: '/data/dedup' });
+    assert.equal(configured.context.configuredDir('', 'dedup_output_dir', 'x'), path.resolve('/data/dedup'));
+    assert.equal(configured.context.configuredDir(' /tmp/x ', 'dedup_output_dir', 'x'), path.resolve('/tmp/x'));
   });
   await check('analysis accepts only a verified SRT for the current dedup video', async () => {
     const { inspectSubtitle } = require('../src/native/transcription-manager');
@@ -171,14 +194,13 @@ async function check(name, run) {
     const source = h.run('downloadTasks[0]');
     file(source.savePath);
     source.status = 'completed';
-    const seriesDir = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
-    const output = path.join(seriesDir, '去重视频', 'Short 001_去重.mp4');
+    const output = path.join(h.dir, 'chosen-output', 'Short 001_去重.mp4');
     fs.mkdirSync(path.dirname(output));
     file(output);
     h.context.markPipelineDownloaded(source, source.savePath);
     h.context.markPipelineDeduped(source.savePath, output);
     const input = h.context.getSeriesDedupedEpisodes('S')[0];
-    fs.mkdirSync(path.dirname(input.srtPath));
+    fs.mkdirSync(path.dirname(input.srtPath), { recursive: true });
     const text = '1\n00:00:01,000 --> 00:00:02,000\n完整对白。\n\n';
     fs.writeFileSync(input.srtPath, text);
     h.context.saveSeriesTranscriptionState('S', {
@@ -202,49 +224,6 @@ async function check(name, run) {
     h.context.markPipelineDeduped(source.savePath, replacement);
     assert.equal(h.context.getTranscriptionManager().status('S').episodes[0].status, 'stale');
     assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 0, 'previous dedup version must not reach AI');
-  });
-  await check('rescan registers only files inside the originals subdirectory', () => {
-    const h = load();
-    h.set('seriesRegistry', series());
-    const seriesDir = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
-    fs.mkdirSync(path.join(seriesDir, '原视频'), { recursive: true });
-    fs.mkdirSync(path.join(seriesDir, '去重视频'));
-    const current = path.join(seriesDir, '原视频', 'Short 002.mp4');
-    file(path.join(seriesDir, 'Short 001.mp4'));
-    file(current);
-    file(path.join(seriesDir, '去重视频', 'Short 003.mp4'));
-    file(path.join(seriesDir, 'Short 004_去重_1.mp4'));
-    file(path.join(seriesDir, '.hongguo-quchong-0005.mp4'));
-    const result = h.context.rescanDownloadsFromDisk();
-    assert.equal(result.count, 1);
-    const tasks = h.run('downloadTasks');
-    assert.deepEqual(Array.from(tasks.map((item) => item.savePath)), [current]);
-    for (const item of tasks) assert.equal(item.customDir, path.dirname(item.savePath));
-    assert.equal(h.context.rescanDownloadsFromDisk().count, 0, 'rescanning must be idempotent');
-  });
-  await check('downloads always use the ID-based series directory and never adopt a title-only directory', async () => {
-    const h = load();
-    h.set('seriesRegistry', series());
-    const seriesDir = path.join(h.dir, '红果短剧', 'Short');
-    fs.mkdirSync(seriesDir, { recursive: true });
-    file(path.join(seriesDir, 'Short 001.mp4'));
-    assert.equal(h.context.resolveSeriesDir('S', 'Short'), null);
-    await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[1]] });
-    await h.context.enqueueEpisodes({
-      seriesId: 'S',
-      seriesTitle: 'Short',
-      episodes: [{ vid: 'three', vid_index: 3 }],
-    });
-    const tasks = h.run('downloadTasks');
-    const expected = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
-    for (const item of tasks) assert.equal(item.customDir, path.join(expected, '原视频'));
-    assert.equal(h.context.resolveSeriesDir('S', 'Short'), expected);
-  });
-  await check('Windows stage paths retain their drive and series root', () => {
-    const h = load({}, { path: path.win32 });
-    const root = String.raw`D:\短剧\红果短剧\布衣成圣-123456abcdef`;
-    assert.equal(h.context.seriesRootFromVideoDir(path.win32.join(root, '原视频')), root);
-    assert.equal(h.context.seriesRootFromVideoDir(path.win32.join(root, '去重视频')), root);
   });
   await check('missing completed file is shown missing and can be downloaded again', async () => {
     const h = load();

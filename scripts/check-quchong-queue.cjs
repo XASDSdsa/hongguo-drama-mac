@@ -15,7 +15,7 @@ const copy = (value) => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 let serial = 0;
 
-function load() {
+function load(initialSettings = {}) {
   const dir = path.join(temp, String(++serial));
   fs.mkdirSync(dir);
   const handlers = {},
@@ -24,7 +24,7 @@ function load() {
     saved = [],
     jobs = new Map(),
     starts = [];
-  let settings = { quchong_jobs: 2 };
+  let settings = { quchong_jobs: 2, ...initialSettings };
   const app = new EventEmitter();
   Object.assign(app, {
     getVersion: () => 'test',
@@ -117,45 +117,50 @@ async function check(name, run) {
 }
 
 (async () => {
-  await check('automatic output keeps same-title series and platforms isolated', async () => {
+  await check('output goes only to the chosen directory, never beside the sources', async () => {
     const h = load();
-    const roots = [
-      path.join(h.dir, '红果短剧', '同名剧-111111111111'),
-      path.join(h.dir, '红果短剧', '同名剧-222222222222'),
-      path.join(h.dir, '河马短剧', '同名剧-333333333333'),
-    ];
+    const roots = [path.join(h.dir, 'a'), path.join(h.dir, 'b')];
     const sources = roots.map((root) => {
-      fs.mkdirSync(path.join(root, '原视频'), { recursive: true });
-      const source = path.join(root, '原视频', '同名剧 001.mp4');
+      fs.mkdirSync(root, { recursive: true });
+      const source = path.join(root, '同名剧 001.mp4');
       fs.writeFileSync(source, 'original');
       return source;
     });
-    const result = await h.handlers['quchong-start']({}, { sources, opts: { jobs: 3 } });
+    const out = path.join(h.dir, 'chosen');
+    const result = await h.handlers['quchong-start']({}, { sources, outputDir: out, opts: { jobs: 3 } });
     assert.equal(result.success, true, result.error);
     await tick();
-    assert.equal(h.starts.length, 3);
-    for (let index = 0; index < sources.length; index++) {
-      const job = h.jobs.get(sources[index]);
-      assert.equal(job.dst, path.join(roots[index], '去重视频', '同名剧 001_去重.mp4'));
-      assert.equal(fs.readFileSync(sources[index], 'utf8'), 'original');
-      job.resolve();
+    assert.equal(h.starts.length, 2);
+    const names = sources.map((source) => path.basename(h.jobs.get(source).dst)).sort();
+    assert.deepEqual(names, ['同名剧 001_去重.mp4', '同名剧 001_去重_1.mp4']);
+    for (const source of sources) {
+      assert.equal(path.dirname(h.jobs.get(source).dst), out);
+      assert.equal(fs.readFileSync(source, 'utf8'), 'original');
+      h.jobs.get(source).resolve();
     }
     await tick();
   });
-  await check('manually selected files dedup beside their source and keep existing outputs', async () => {
-    const h = load(),
-      source = path.join(h.dir, 'Short 001.mp4');
+  await check('without a chosen output directory the batch is refused; the setting is the only fallback', async () => {
+    const h = load();
+    const source = path.join(h.dir, 'Short 001.mp4');
     fs.writeFileSync(source, 'original');
-    const out = path.join(h.dir, '去重视频');
+    const refused = await h.handlers['quchong-start']({}, { sources: [source], outputDir: '' });
+    assert.equal(refused.success, false);
+    assert.match(refused.error, /请先选择去重输出目录/);
+    assert.equal(h.starts.length, 0);
+    const out = path.join(h.dir, 'configured');
     fs.mkdirSync(out);
     const existing = path.join(out, 'Short 001_去重.mp4');
     fs.writeFileSync(existing, 'existing');
-    const result = await h.handlers['quchong-start']({}, { sources: [source], outputDir: '' });
+    const configured = load({ dedup_output_dir: out });
+    const file = path.join(configured.dir, 'Short 001.mp4');
+    fs.writeFileSync(file, 'original');
+    const result = await configured.handlers['quchong-start']({}, { sources: [file], outputDir: '' });
     assert.equal(result.success, true, result.error);
     await tick();
-    assert.equal(h.jobs.get(source).dst, path.join(out, 'Short 001_去重_1.mp4'));
+    assert.equal(configured.jobs.get(file).dst, path.join(out, 'Short 001_去重_1.mp4'), 'existing output is kept');
     assert.equal(fs.readFileSync(existing, 'utf8'), 'existing');
-    h.jobs.get(source).resolve();
+    configured.jobs.get(file).resolve();
     await tick();
   });
   await check('one batch starts the configured number of jobs and fills each freed slot', async () => {

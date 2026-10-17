@@ -156,8 +156,5 @@ async function check(name, fn) {
     assert.equal((await m.exports.fetchEpisodeList('hema:1')).source, 'hema');
     assert.equal((await m.exports.fetchPlayUrlSingle('hema:1:2', 'hema:1')).source, 'hema');
   });
-  await check('Hema media uses its own directory', () => {
-    assert.equal(path.basename(path.dirname(context.seriesDownloadDir(root, 'hema:1', '同名剧'))), '河马短剧');
-  });
   if (failures) process.exitCode = 1;
 })().finally(() => fs.rmSync(root, { recursive: true, force: true }));

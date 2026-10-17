@@ -443,10 +443,15 @@ function createVideoStructurePipeline({
     starting.add(projectId);
     try {
       const old = getProjectRecord?.(projectId);
-      const root = path.resolve(payload.outputRoot || path.join(path.dirname(input), '结构化拆解'));
-      const dir = old?.manifestPath
-        ? path.dirname(old.manifestPath)
-        : path.join(root, `${safeName(projectId)}-${fingerprint(projectId).slice(0, 8)}`);
+      let dir;
+      if (old?.manifestPath) dir = path.dirname(old.manifestPath);
+      else {
+        requireThat(String(payload.outputRoot || '').trim(), '请先选择拆解输出目录');
+        dir = path.join(
+          path.resolve(String(payload.outputRoot).trim()),
+          `${safeName(projectId)}-${fingerprint(projectId).slice(0, 8)}`,
+        );
+      }
       const manifestPath = path.join(dir, 'project.json');
       let state;
       try {

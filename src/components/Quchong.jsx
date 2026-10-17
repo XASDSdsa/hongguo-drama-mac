@@ -432,7 +432,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
             className="input-field"
             value={outputDir}
             onChange={(event) => setOutputDir(event.target.value)}
-            placeholder="留空：自动保存到各剧目录的「去重视频」"
+            placeholder="留空则使用设置里的「去重输出目录」"
           />
           <button className="btn btn-sm" onClick={chooseOutput}>
             <Folder size={14} /> 选择

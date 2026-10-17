@@ -24,7 +24,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   purgeEmptySeries: () => ipcRenderer.invoke('purge-empty-series'),
   restoreDismissedSeries: () => ipcRenderer.invoke('restore-dismissed-series'),
   dismissedCount: () => ipcRenderer.invoke('dismissed-count'),
-  rescanDownloads: () => ipcRenderer.invoke('rescan-downloads'),
 
   // 在线播放（内存缓存 + 自定义流协议，不落盘）
   prepareOnlinePlay: (payload) => ipcRenderer.invoke('prepare-online-play', payload),

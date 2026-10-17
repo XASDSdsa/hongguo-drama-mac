@@ -206,7 +206,7 @@ export default function Reconstruction({ active = true }) {
               className="input-field"
               value={outputRoot}
               onChange={(e) => setOutputRoot(e.target.value)}
-              placeholder="默认：视频所在目录 / 结构化拆解"
+              placeholder="留空则使用设置里的「拆解输出目录」"
               disabled={busy || loading}
             />
             <button className="btn" onClick={chooseOutput} disabled={busy || loading}>
