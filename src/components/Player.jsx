@@ -146,6 +146,16 @@ function Player({ target, onNavigate, active = true }) {
     toastTimer.current = setTimeout(() => setToast(null), 3000);
   }, []);
 
+  // 合并在后台进行，没有单独的进度页，完成或失败时在这里提示。
+  useEffect(() => {
+    const offDone = window.electronAPI.onMergeCompleted?.((data) => showToast(`合并完成：${data?.path || ''}`));
+    const offFail = window.electronAPI.onMergeFailed?.((data) => showToast(`合并失败：${data?.error || '未知原因'}`));
+    return () => {
+      offDone?.();
+      offFail?.();
+    };
+  }, [showToast]);
+
   // 载入已登记的剧集列表
   const loadSeriesList = useCallback(async () => {
     const list = (await window.electronAPI.getSeriesList()) || [];
@@ -837,7 +847,7 @@ function Player({ target, onNavigate, active = true }) {
       const tip = compatible
         ? `开始兼容格式合并 ${res.count} 集（H.264，耗时较长）`
         : `开始合并 ${res.count} 集，约 ${(res.totalBytes / 1073741824).toFixed(2)} GB`;
-      showToast(`${tip}，可在「下载管理」查看进度`);
+      showToast(`${tip}，在后台进行，完成后会提示`);
       if (res.codecWarning) showToast(res.codecWarning);
     } catch (e) {
       showToast('合并异常: ' + e.message);

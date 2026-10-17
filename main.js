@@ -25,6 +25,7 @@ const seriesInfo = require('./src/native/series-info');
 const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
 const seriesGaps = require('./src/native/series-gaps');
+const downloadErrors = require('./src/native/download-errors');
 const publishMaterials = require('./src/native/publish-materials');
 const posterTitle = require('./src/native/poster-title');
 const posterStyles = require('./src/native/poster-styles');
@@ -1963,6 +1964,9 @@ async function executeHongguoDownload(task) {
     } else {
       task.status = 'failed';
       task.error = error.message;
+      // 保留错误码和 HTTP 状态，管理剧集里据此分辨是资源缺失还是网络失败。
+      task.errorCode = error.code || '';
+      task.errorStatus = error.response?.status || 0;
       task.endTime = Date.now();
       sendToRenderer('download-failed', { id, error: error.message });
     }
@@ -3045,6 +3049,7 @@ ipcMain.handle('library-list', () => {
         ...rest,
         coverUrl: coverPath ? localAssetUrl(coverPath) : entry?.cover || '',
         source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
+        seriesId: entry ? String(entry.series_id) : '',
         totalEpisodes: entry ? Number(entry.total) || 0 : 0,
         linked: !!entry,
       };
@@ -3055,8 +3060,9 @@ ipcMain.handle('library-list', () => {
   }
 });
 
-function libraryTaskStates(seriesId) {
-  const states = new Map();
+/** 这部剧每一集的下载任务：集号 -> { state: 'active' | 'failed', task 摘要 }。 */
+function libraryTaskInfo(seriesId) {
+  const info = new Map();
   for (const task of downloadTasks) {
     if (String(task.hongguoInfo?.series_id ?? '') !== String(seriesId)) continue;
     const index = Number(task.hongguoInfo?.vid_index);
@@ -3066,9 +3072,26 @@ function libraryTaskStates(seriesId) {
       : ['failed', 'stopped'].includes(task.status)
         ? 'failed'
         : null;
-    if (state && states.get(index) !== 'active') states.set(index, state);
+    if (!state || info.get(index)?.state === 'active') continue;
+    const reason =
+      task.status === 'failed'
+        ? downloadErrors.classifyDownloadError({
+            message: task.error,
+            code: task.errorCode,
+            status: task.errorStatus,
+          })
+        : null;
+    info.set(index, {
+      state,
+      task: {
+        id: task.id,
+        status: task.status,
+        progress: Number(task.progress) || 0,
+        reason,
+      },
+    });
   }
-  return states;
+  return info;
 }
 
 let gapNoteStore = null;
@@ -3097,11 +3120,13 @@ function libraryEpisodeDetail(dir) {
     cover: remote.get(episode.index)?.cover || '',
   }));
   const onDisk = new Set(episodes.map((episode) => episode.index).filter((index) => index !== null));
+  const taskInfo = entry ? libraryTaskInfo(entry.series_id) : new Map();
   const missing = seriesGaps.classifyMissing({
     onDisk,
     remote: entry ? entry.episodes || [] : null,
-    tasks: entry ? libraryTaskStates(entry.series_id) : new Map(),
-    upTo: Math.max(0, ...onDisk),
+    tasks: new Map([...taskInfo].map(([index, item]) => [index, item.state])),
+    // 排队中、下载中、失败的集即使排在已下载的最后一集之后，也要在列表里看得到。
+    upTo: Math.max(0, ...onDisk, ...taskInfo.keys()),
   });
   const confirmed = libraryGapNotes().get(folder);
   return {
@@ -3118,6 +3143,7 @@ function libraryEpisodeDetail(dir) {
     episodes,
     missing: missing.map((item) => ({
       ...item,
+      task: taskInfo.get(item.index)?.task || null,
       state: item.state === 'unknown' && confirmed.has(item.index) ? 'confirmed' : item.state,
       text: seriesGaps.STATE_TEXT[item.state === 'unknown' && confirmed.has(item.index) ? 'confirmed' : item.state],
     })),

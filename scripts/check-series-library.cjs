@@ -378,6 +378,52 @@ async function check(name, fn) {
   } catch (_) {
     ffmpegOk = false;
   }
+  await check('main: failed downloads carry a reason (missing resource vs network) and the task to retry', async () => {
+    const root = path.join(tmp, 'fail-dl');
+    const dir = path.join(root, '失败剧');
+    for (const n of [1, 2]) touch(path.join(dir, `失败剧_第00${n}集.mp4`));
+    const registry = [
+      {
+        series_id: '77',
+        series_title: '失败剧',
+        folder: '失败剧',
+        total: 7,
+        episodes: [1, 2, 3, 4, 5, 6, 7].map((n) => ({ vid: `v${n}`, vid_index: n })),
+      },
+    ];
+    const { context, handlers } = makeMain(root, path.join(tmp, 'ud-fail'), registry);
+    const task = (id, index, fields) =>
+      `downloadTasks.push(Object.assign({ id: '${id}', progress: 0, hongguoInfo: { vid: 'v${index}', series_id: '77', vid_index: ${index} } }, ${JSON.stringify(fields)}))`;
+    for (const code of [
+      task('t3', 3, { status: 'failed', error: '未获取到有效播放地址' }),
+      task('t4', 4, { status: 'failed', error: 'socket hang up', errorCode: 'ECONNRESET' }),
+      task('t5', 5, { status: 'stopped' }),
+      task('t6', 6, { status: 'downloading', progress: 40 }),
+    ])
+      vm.runInContext(code, context);
+
+    const list = await handlers['library-list']({});
+    assert.equal(list.folders.find((item) => item.name === '失败剧').seriesId, '77');
+
+    const detail = await handlers['library-episodes']({}, dir);
+    const byIndex = new Map(detail.missing.map((item) => [item.index, item]));
+    assert.equal(detail.seriesId, '77');
+    assert.equal(byIndex.get(3).state, 'failed');
+    assert.equal(byIndex.get(3).task.id, 't3');
+    assert.equal(byIndex.get(3).task.reason.kind, 'missing');
+    assert.equal(byIndex.get(3).task.reason.label, '资源缺失');
+    assert.equal(byIndex.get(3).task.reason.retryHelps, false);
+    assert.equal(byIndex.get(4).task.reason.kind, 'network');
+    assert.equal(byIndex.get(4).task.reason.label, '网络失败');
+    assert.equal(byIndex.get(4).task.reason.retryHelps, true);
+    assert.equal(byIndex.get(5).task.status, 'stopped');
+    assert.equal(byIndex.get(5).task.reason, null, 'a paused task is not a failure');
+    assert.equal(byIndex.get(6).state, 'downloading');
+    assert.equal(byIndex.get(6).task.progress, 40);
+    // 第 7 集排在最后一个任务之后、也没有任务：平台有、没下载。
+    assert.ok(!byIndex.has(7) || byIndex.get(7).state === 'notDownloaded');
+  });
+
   if (ffmpegOk) {
     await check('main: missing episodes — platform gaps splice, undownloaded gaps need a decision', async () => {
       const root = path.join(tmp, 'gap-dl');

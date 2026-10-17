@@ -350,11 +350,11 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
           <span>
             {seriesLoading
               ? '正在读取本剧已下载集…'
-              : `已带入 ${files.length} 集。处理完成后返回下载管理查看每集去重状态。`}
+              : `已带入 ${files.length} 集。处理完成后返回本剧查看。`}
           </span>
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => onNavigate?.('manager', { seriesId: seriesContext.seriesId })}
+            onClick={() => onNavigate?.('library', { seriesId: seriesContext.seriesId })}
           >
             返回本剧
           </button>

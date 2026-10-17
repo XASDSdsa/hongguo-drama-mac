@@ -297,7 +297,7 @@ function Browse({ onNavigate, active = true }) {
       if (res && res.success) {
         showToast(`已加入下载队列：${res.count} 集`);
         setDetail(null);
-        if (onNavigate) onNavigate('manager');
+        if (onNavigate) onNavigate('library');
       } else {
         showToast((res && res.error) || '提交下载失败', 'error');
       }

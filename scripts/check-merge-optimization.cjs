@@ -143,24 +143,6 @@ assert.equal(p.fps, 25, 'do not invent 30 fps when source has 25 fps');
 assert.ok(p.estimatedBytes > 0 && p.estimatedBytes < 15000000);
 assert.equal(p.totalDuration, 40);
 assert.throws(() => plan([info({}, {}, 0)]), /时长|duration/);
-const uiSource = fs.readFileSync(path.resolve(__dirname, '../src/components/DownloadManager.jsx'), 'utf8');
-const sortingSource =
-  uiSource.slice(uiSource.indexOf('const STATUS_ORDER'), uiSource.indexOf('const DEDUP_STAGE_TEXT')) +
-  uiSource.slice(uiSource.indexOf('function sortTasks'), uiSource.indexOf('function fmtBytes'));
-const sortTasks = require('node:vm').runInNewContext(sortingSource + '; sortTasks');
-const sorted = sortTasks(
-  [72, 70, 71].map((index, i) => ({
-    id: String(index),
-    status: i === 1 ? 'pending' : 'completed',
-    endTime: index * 100,
-    hongguoInfo: { series_id: 'same', vid_index: index },
-  })),
-);
-assert.deepEqual(
-  Array.from(sorted, (task) => task.hongguoInfo.vid_index),
-  [70, 71, 72],
-  'episodes in the same series must stay in natural order across completion events',
-);
 checkPublish();
 checkHardware();
 console.log(

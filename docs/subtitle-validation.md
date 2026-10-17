@@ -46,7 +46,6 @@ Windows 媒体/队列/Python 输出检查已接入 Windows 检查及发布流程
 npm run check:subtitles
 python scripts/check-subtitle-alignment.py
 npm run check:premium
-node scripts/check-download-manager.cjs
 node scripts/check-download-safety.cjs
 node scripts/check-renderer-lifecycle.cjs
 npm run build:react

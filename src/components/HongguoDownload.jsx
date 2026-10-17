@@ -191,7 +191,7 @@ function HongguoDownload({ onNavigate, active = true }) {
         episodes: selectedEps,
       });
       if (res.success) {
-        setSuccessMsg(`已成功将 ${res.count} 集提交至下载队列！点击下方按钮跳转至“下载管理”查看实时进度。`);
+        setSuccessMsg(`已成功将 ${res.count} 集提交至下载队列！点击下方按钮到“管理剧集”查看下载进度和失败原因。`);
       } else {
         setErrorMsg(res.error || '提交下载失败');
       }
@@ -350,9 +350,9 @@ function HongguoDownload({ onNavigate, active = true }) {
                 </span>
               </button>
               {onNavigate && (
-                <button className="btn btn-outline" onClick={() => onNavigate('manager')}>
+                <button className="btn btn-outline" onClick={() => onNavigate('library', { seriesId: seriesData.series_id })}>
                   <Folder size={16} />
-                  <span>查看下载管理</span>
+                  <span>到管理剧集查看</span>
                 </button>
               )}
             </div>

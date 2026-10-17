@@ -7,7 +7,6 @@ const root = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const main = read('main.js');
 const preload = read('preload.js');
-const ui = read('src/components/DownloadManager.jsx');
 const settings = read('src/components/Settings.jsx');
 const packageJson = JSON.parse(read('package.json'));
 const { ALGORITHM, POLICY } = require('../src/native/video-structure/alignment');
@@ -54,7 +53,6 @@ const checks = [
   ],
   ['工作流状态持久化到短剧档案', main.includes('entry.workflow') && main.includes('saveSeriesRegistry')],
   ['渲染进程暴露工作流接口', preload.includes('startSeriesWorkflow') && preload.includes('onEpisodeWorkflowProgress')],
-  ['下载管理有一键工作流入口', ui.includes('一键处理本剧') && ui.includes('startSeriesWorkflow')],
   [
     '设置页可调整工作流门禁',
     settings.includes('workflow_require_dedup') && settings.includes('workflow_validate_draft'),

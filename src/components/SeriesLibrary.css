@@ -128,7 +128,6 @@
   font-size: 11px;
   color: var(--text-secondary);
 }
-
 .lib-mask {
   position: fixed;
   inset: 0;
@@ -138,248 +137,6 @@
   justify-content: center;
   background: #29231b40;
   padding: 48px 24px 24px;
-}
-.lib-dialog {
-  width: 100%;
-  max-width: 900px;
-  max-height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-card);
-  border-radius: 16px;
-  box-shadow: var(--shadow-lg);
-}
-.lib-dialog-head,
-.lib-dialog-foot {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-shrink: 0;
-  padding: 14px 20px;
-}
-.lib-dialog-head {
-  align-items: center;
-  border-bottom: 1px solid var(--border-muted);
-}
-.lib-dialog-foot {
-  border-top: 1px solid var(--border-muted);
-}
-.lib-dialog-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 17px;
-  font-weight: 600;
-  min-width: 0;
-}
-.lib-dialog-title span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lib-loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 22px 20px;
-  color: var(--text-secondary);
-}
-.lib-dialog-body {
-  overflow: auto;
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.lib-synopsis {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.lib-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.lib-episodes {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 16px 14px;
-}
-.lib-episode {
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-.lib-episode-cover {
-  position: relative;
-  aspect-ratio: 3/4;
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--bg-inset);
-  outline: 2px solid transparent;
-  outline-offset: -2px;
-  transition: outline-color 0.15s;
-}
-.lib-episode.is-selected .lib-episode-cover {
-  outline-color: var(--accent);
-}
-.lib-episode:focus-visible .lib-episode-cover {
-  outline-color: var(--text);
-}
-.lib-episode-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  opacity: 0.92;
-}
-.lib-episode-no {
-  position: absolute;
-  left: 7px;
-  bottom: 7px;
-  font-size: 11px;
-  color: white;
-  background: #1e1d1bbf;
-  padding: 2px 6px;
-  border-radius: 5px;
-}
-.lib-check {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  background: var(--accent);
-  border-radius: 50%;
-}
-.lib-episode-name {
-  margin-top: 6px;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lib-episode-size {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-.lib-foot-info {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-}
-.lib-path {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-all;
-}
-.lib-notice {
-  margin-top: 8px;
-  color: var(--primary);
-}
-.lib-foot-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-@media (max-width: 900px) {
-  .lib-header {
-    flex-direction: column;
-  }
-  .lib-dialog-foot {
-    flex-direction: column;
-  }
-}
-.lib-modes {
-  display: grid;
-  gap: 6px;
-}
-.lib-mode {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.lib-mode span {
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-.lib-mode.is-active {
-  font-weight: 600;
-}
-.lib-number {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 13px;
-}
-.lib-number input {
-  width: 72px;
-}
-.lib-notice-lines {
-  white-space: pre-line;
-}
-.lib-episode.is-missing {
-  cursor: default;
-}
-.lib-ghost {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border: 1.5px dashed var(--border-strong);
-  background: transparent;
-  outline: none;
-}
-.lib-ghost-no {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.lib-ghost-state {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  color: var(--text-secondary);
-  background: var(--bg-inset);
-}
-.lib-episode.is-notDownloaded .lib-ghost,
-.lib-episode.is-downloading .lib-ghost,
-.lib-episode.is-failed .lib-ghost,
-.lib-episode.is-unknown .lib-ghost {
-  border-color: var(--primary);
-}
-.lib-episode.is-notDownloaded .lib-ghost-state,
-.lib-episode.is-downloading .lib-ghost-state,
-.lib-episode.is-failed .lib-ghost-state,
-.lib-episode.is-unknown .lib-ghost-state {
-  color: var(--primary);
-  background: var(--accent-soft);
-}
-.lib-remote-note {
-  font-size: 12px;
-  color: var(--text-tertiary);
 }
 .lib-jobs {
   display: grid;
@@ -443,6 +200,22 @@
   gap: 8px;
   margin-top: 18px;
 }
-.lib-dialog-body > * {
-  flex-shrink: 0;
+.lib-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.lib-search .input-field {
+  width: 260px;
+  max-width: 100%;
+}
+.lib-search span {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+@media (max-width: 900px) {
+  .lib-header {
+    flex-direction: column;
+  }
 }

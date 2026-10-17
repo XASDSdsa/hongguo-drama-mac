@@ -846,7 +846,7 @@ function mount(file, api, props = {}) {
     const target = player().props.target;
     assert.equal(target.seriesId, 'A');
     assert.equal(target.vidIndex, 2);
-    ui.button('下载管理').props.onClick();
+    ui.button('管理剧集').props.onClick();
     ui.render();
     assert.equal(player().props.target, target, 'background navigation must not reset playback initialization');
     ui.button('我的剧库').props.onClick();
