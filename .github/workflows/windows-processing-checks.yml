@@ -25,9 +25,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.12.0
 
@@ -36,7 +36,7 @@ jobs:
           node scripts/check-ffmpeg-setup.cjs
           node scripts/setup-ffmpeg.js
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 

@@ -30,14 +30,14 @@ jobs:
           exit 1
 
       - name: Check out the requested revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # A manual dispatch builds the requested tag. A push of this branch
           # builds that commit and must not fall back to v1.1.30.
           ref: ${{ github.event_name == 'push' && github.sha || inputs.ref || inputs.tag || 'main' }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22.12.0
           cache: npm
@@ -46,7 +46,7 @@ jobs:
         run: npm ci
 
       - name: Set up build-only Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           architecture: arm64
@@ -158,7 +158,7 @@ jobs:
           fi
 
       - name: Keep a workflow artifact copy
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hongguo-downloader-${{ github.event_name == 'push' && '1.1.41-breath-on-shot' || inputs.tag || github.sha }}-macos
           path: dist/release/*

@@ -21,12 +21,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22.12.0
           cache: npm
@@ -35,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: Set up build-only Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           architecture: x64
@@ -52,7 +52,7 @@ jobs:
           npm run check:structure
 
       - name: Download tested Windows FFmpeg build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ffmpeg-9.0.2-nvenc12.2-win-x64
           run-id: ${{ inputs.ffmpeg_run_id }}
@@ -236,7 +236,7 @@ jobs:
         run: gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
 
       - name: Keep a workflow artifact copy
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hongguo-downloader-${{ inputs.tag }}-windows
           path: dist/release/*
