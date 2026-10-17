@@ -91,22 +91,22 @@ async function main() {
   lost.segments[0].speech_spans.pop();
   assert.throws(() => mapTranscript(lost, separated, media, 'lost'), /遗漏/);
   assert.throws(() => voiceSegments(raw, { offset: NaN }, media), /偏移无效/);
-  const cuts = [0, 0.3, 0.6, 0.9, 1.2].slice(0, -1).map((start, i) => ({
+  const cuts = [0, 0.3, 0.5, 0.9, 1.2].slice(0, -1).map((start, i) => ({
     shot_id: `s${i}`,
     order: i + 1,
     start,
-    end: [0, 0.3, 0.6, 0.9, 1.2][i + 1],
+    end: [0, 0.3, 0.5, 0.9, 1.2][i + 1],
     start_frame: i * 10,
     end_frame_exclusive: (i + 1) * 10,
   }));
   const indexed = align(cuts, { ...mapped, voice_timeline: { segments: voices } }, 'test');
   // Visual cuts at .3 (inside speech) and .9 (pause shorter than 0.2 s) are merged;
-  // only the cut at .6 sits in a real 0.25 s pause, so two output shots remain.
+  // only the cut at .5, in the middle of the real 0.25 s pause (0.375–0.625), clears the 40 ms edge margin, so two output shots remain.
   assert.deepEqual(
     indexed.boundary_decisions.map((d) => [d.time, d.status]),
     [
       [0.3, 'merged'],
-      [0.6, 'kept'],
+      [0.5, 'kept'],
       [0.9, 'merged'],
     ],
   );

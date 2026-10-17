@@ -41,6 +41,9 @@ BOUNDARY_POLICY = "shot_cut_requires_acoustic_pause"
 ALIGNMENT_ALGORITHM = "visual-shot-on-acoustic-pause-v1"
 SUBTITLE_POLICY = "voice-segments-v1"
 PAUSE_SECONDS = 0.2
+# Mirrors PAUSE_TIERS in alignment.js: a cut must sit at least `margin` inside a pause of at least `pause` seconds.
+# Levels 1-2 only break up segments longer than the maximum and never cut inside speech.
+PAUSE_TIERS = ({"level": 0, "pause": 0.2, "margin": 0.04}, {"level": 1, "pause": 0.14, "margin": 0.03}, {"level": 2, "pause": 0.1, "margin": 0.025})
 
 
 def progress(value: float, message: str) -> None:
@@ -102,18 +105,21 @@ def speech_ranges(transcript: dict) -> list[tuple[float, float]]:
     return merged
 
 
-def acoustic_pauses(transcript: dict) -> list[tuple[float, float]]:
+def acoustic_pauses(transcript: dict, min_pause: float = PAUSE_SECONDS) -> list[tuple[float, float]]:
     speech = speech_ranges(transcript)
-    return [(speech[index][1], speech[index + 1][0]) for index in range(len(speech) - 1) if speech[index + 1][0] - speech[index][1] >= PAUSE_SECONDS - 1e-4]
+    return [(speech[index][1], speech[index + 1][0]) for index in range(len(speech) - 1) if speech[index + 1][0] - speech[index][1] >= min_pause - 1e-4]
 
 
-def breath_on_cut(time: float, transcript: dict) -> bool:
+def breath_on_cut(time: float, transcript: dict, level: int = 0) -> bool:
+    tier = PAUSE_TIERS[level]
     if any(start < time < end for start, end in speech_ranges(transcript)):
         return False
-    return any(start - 1e-6 <= time <= end + 1e-6 for start, end in acoustic_pauses(transcript))
+    margin = tier["margin"]
+    return any(start + margin - 1e-6 <= time <= end - margin + 1e-6 for start, end in acoustic_pauses(transcript, tier["pause"]))
 
 
 def output_groups(raw_shots: list[dict], transcript: dict) -> list[list[dict]]:
+    """Standard (level 0) grouping; segments longer than the maximum are split by groups_from_decisions."""
     original = sorted(raw_shots, key=lambda item: int(item["order"]))
     if not original:
         return []
@@ -126,6 +132,33 @@ def output_groups(raw_shots: list[dict], transcript: dict) -> list[list[dict]]:
     return groups
 
 
+def groups_from_decisions(raw_shots: list[dict], aligned: dict, transcript: dict) -> list[list[dict]]:
+    """Rebuild the output groups from the recorded decisions, re-checking each one against the audio."""
+    original = sorted(raw_shots, key=lambda item: int(item["order"]))
+    if not original:
+        return []
+    decisions = aligned.get("boundary_decisions")
+    if aligned.get("pause_tiers") != list(PAUSE_TIERS) or not isinstance(decisions, list) or len(decisions) != len(original) - 1:
+        raise RuntimeError("最终分段的气口判定记录缺失或版本不一致，请继续完整流程重新关联。")
+    relaxed_allowed = bool(aligned.get("max_shot_seconds"))
+    groups = [[original[0]]]
+    for raw, decision in zip(original[1:], decisions):
+        if decision.get("frame") != raw.get("start_frame") or us(decision.get("time")) != us(raw.get("start")):
+            raise RuntimeError(f"气口判定与画面切镜不对应：{raw.get('shot_id')}")
+        status, tier = decision.get("status"), decision.get("tier", 0)
+        if status == "kept":
+            if tier not in (0, 1, 2) or (tier > 0 and not relaxed_allowed) or not breath_on_cut(float(raw["start"]), transcript, tier):
+                raise RuntimeError(f"切镜没有落在满足要求的气口上却被切开：{raw.get('shot_id')}")
+            groups.append([raw])
+        elif status == "merged":
+            if breath_on_cut(float(raw["start"]), transcript, 0):
+                raise RuntimeError(f"气口落在切镜上却被并进同一段：{raw.get('shot_id')}")
+            groups[-1].append(raw)
+        else:
+            raise RuntimeError(f"气口判定状态无效：{raw.get('shot_id')}")
+    return groups
+
+
 def validate_dialogue_timeline(aligned: dict, clips: dict, transcript: dict, export: dict, srt_path: Path, raw_shots: dict) -> tuple[list[dict], list[dict], list[dict]]:
     """Cut only where a visual boundary and an acoustic pause coincide."""
     if aligned.get("algorithm_id") != ALIGNMENT_ALGORITHM or aligned.get("boundary_policy") != BOUNDARY_POLICY or clips.get("boundary_policy") != BOUNDARY_POLICY:
@@ -135,7 +168,7 @@ def validate_dialogue_timeline(aligned: dict, clips: dict, transcript: dict, exp
     if not final_shots or len(final_shots) != len(ordered_clips):
         raise RuntimeError("最终分镜与视频切片数量不一致，请继续完整流程重新导出。")
     original_shots = sorted(raw_shots.get("shots", []), key=lambda item: int(item["order"]))
-    groups = output_groups(original_shots, transcript)
+    groups = groups_from_decisions(original_shots, aligned, transcript)
     expected_merged = sum(len(group) - 1 for group in groups)
     if len(final_shots) != len(groups) or aligned.get("merged_boundary_count") != expected_merged or aligned.get("raw_shot_count") != len(original_shots):
         raise RuntimeError("最终分段没有遵守「只有气口落在切镜上才切」，请继续完整流程重新关联。")
@@ -155,7 +188,7 @@ def validate_dialogue_timeline(aligned: dict, clips: dict, transcript: dict, exp
         if len(internals) != len(group) - 1:
             raise RuntimeError(f"被并掉的切镜没有记在段内：{shot_id}")
         for boundary, raw in zip(internals, group[1:]):
-            if boundary.get("frame") != raw.get("start_frame") or us(boundary.get("time")) != us(raw.get("start")) or breath_on_cut(float(raw["start"]), transcript):
+            if boundary.get("frame") != raw.get("start_frame") or us(boundary.get("time")) != us(raw.get("start")) or breath_on_cut(float(raw["start"]), transcript, 0):
                 raise RuntimeError(f"气口落在切镜上却被并进同一段，或段内切镜记录不对：{raw.get('shot_id')}")
         for earlier, later in zip(group, group[1:]):
             if earlier.get("end_frame_exclusive") != later.get("start_frame") or us(earlier.get("end")) != us(later.get("start")):

@@ -271,6 +271,61 @@ async function main() {
     const varied = speech(ranges, 10);
     verify(raw, varied, align(raw, varied, 'varied'));
   }
+  // 切点必须离停顿边缘至少 40 ms：停顿 0.9–1.1 s 里，0.92 和 1.07 太靠边，1.0 在中间。
+  const edgeSpeech = voicedSpeech(
+    [
+      [0, 0.9],
+      [1.1, 2],
+    ],
+    2.5,
+  );
+  for (const [time, expected] of [
+    [0.92, 'merged'],
+    [1.0, 'kept'],
+    [1.07, 'merged'],
+  ]) {
+    const edgeShots = shotsAt([0, time, 2.5]);
+    assert.equal(align(edgeShots, edgeSpeech, 'edge').boundary_decisions[0].status, expected, `cut at ${time}`);
+  }
+  // 超过最长时长的段，用更短的停顿在已有画面切点处拆开；说话中间永远不切。
+  const longShots = shotsAt([0, 30, 62, 90]);
+  const shortPauses = voicedSpeech(
+    [
+      [0, 29.9],
+      [30.04, 61.95],
+      [62.09, 89.5],
+    ],
+    90,
+  );
+  const relaxed = align(longShots, shortPauses, 'relaxed');
+  assert.deepEqual(
+    relaxed.shots.map((shot) => [shot.start, shot.end]),
+    [
+      [0, 30],
+      [30, 90],
+    ],
+  );
+  assert.equal(relaxed.boundary_decisions[0].tier, 1);
+  assert.equal(relaxed.boundary_decisions[0].reason, 'shorter_pause_to_limit_shot_length');
+  assert.equal(relaxed.boundary_decisions[1].status, 'merged');
+  assert.equal(relaxed.statistics.relaxed_cut_count, 1);
+  assert.equal(relaxed.statistics.longest_shot_seconds, 60);
+  assert.deepEqual(relaxed.statistics.over_limit_shot_ids, []);
+  assert.equal(relaxed.merged_boundary_count, 1);
+  assert.equal(relaxed.max_shot_seconds, 60);
+  // 不超限、或明确关闭上限时，不放宽。
+  assert.equal(align(longShots, shortPauses, 'unlimited', { maxShotSeconds: 0 }).shots.length, 1);
+  assert.equal(align(longShots, shortPauses, 'roomy', { maxShotSeconds: 100 }).shots.length, 1);
+  // 一口气说到底：没有可用停顿，保持整段并记录，不在话中间硬切。
+  const nonStop = voicedSpeech([[0, 90]], 90);
+  const kept = align(longShots, nonStop, 'non-stop');
+  assert.equal(kept.shots.length, 1);
+  assert.equal(
+    kept.boundary_decisions.every((d) => d.status === 'merged' && d.reason === 'speech_not_finished'),
+    true,
+  );
+  assert.equal(kept.statistics.over_limit_shot_ids.length, 1);
+  assert.equal(kept.statistics.longest_shot_seconds, 90);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dialogue-boundaries-'));
   try {
     await fs.writeFile(path.join(dir, 'clip.mp4'), 'fixture');

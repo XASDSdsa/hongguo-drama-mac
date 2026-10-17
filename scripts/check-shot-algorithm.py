@@ -27,4 +27,16 @@ edges = [b['frame_times'][0], *[b['frame_times'][c] for c in cuts], b['source_du
 assert len(edges) - 1 == b['expected_shots']
 assert abs(min(y - x for x, y in zip(edges, edges[1:])) - b['expected_min_seconds']) < 1e-5
 assert minimum_duration([], [2.1, 2.14], 2.18, [0, 0], 2) == ([], 'source_shorter_than_minimum')
+
+# Candidate selection under the 2 s rule maximizes expected value (confidence - 0.5), not the raw sum.
+times = [i / 25 for i in range(250)]
+def pick(cuts_scores):
+    score = [0.0] * 250
+    for cut, value in cuts_scores.items():
+        score[cut] = value
+    return minimum_duration(sorted(cuts_scores), times, 10.0, score, 2)[0]
+# Two weak cuts 1.8 s apart must not beat one strong cut between them.
+assert pick({100: 0.55, 145: 0.99, 190: 0.55}) == [145]
+# A cluster of confident cuts keeps the two outer ones (more true cuts survive than with the middle one alone).
+assert pick({100: 0.92, 145: 0.985, 190: 0.95}) == [100, 190]
 print(f"PASS episode 103: {b['expected_shots']} shots, {len(cuts)} cuts, minimum {b['expected_min_seconds']}s; short source kept whole")

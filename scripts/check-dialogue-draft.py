@@ -57,7 +57,16 @@ def assemble(adapter, raw, transcript, cues):
             cue["shot_id"] = owners[0]
         else:
             cue.pop("shot_id", None)
+    decisions = []
+    for group in groups:
+        for index, row in enumerate(group):
+            if row is raw["shots"][0]:
+                continue
+            decisions.append({"time": row["start"], "frame": row["start_frame"], "status": "merged" if index else "kept"})
     aligned = {
+        "pause_tiers": list(adapter.PAUSE_TIERS),
+        "max_shot_seconds": 60,
+        "boundary_decisions": decisions,
         "algorithm_id": adapter.ALIGNMENT_ALGORITHM,
         "boundary_policy": adapter.BOUNDARY_POLICY,
         "raw_shot_count": len(raw["shots"]),
@@ -115,6 +124,9 @@ def main() -> int:
             ("missing subtitle", lambda a, c, t, e, s, r: e["subtitle_cues"].pop()),
             ("truncated subtitle", lambda a, c, t, e, s, r: e["subtitle_cues"][0].update(end=1)),
             ("changed subtitle text", lambda a, c, t, e, s, r: e["subtitle_cues"][0].update(text="被改了")),
+            ("cut kept inside speech", lambda a, c, t, e, s, r: a["boundary_decisions"][0].update(status="kept", tier=0)),
+            ("relaxed cut without a limit", lambda a, c, t, e, s, r: (a.update(max_shot_seconds=None), a["boundary_decisions"][-1].update(status="kept", tier=1))),
+            ("missing decision record", lambda a, c, t, e, s, r: a["boundary_decisions"].pop()),
             ("old subtitle policy", lambda a, c, t, e, s, r: e.pop("subtitle_policy")),
             ("duplicated voice reference", lambda a, c, t, e, s, r: e["subtitle_cues"][1].update(voice_segment_id="v0")),
             ("sub-millisecond subtitle drift", lambda a, c, t, e, s, r: e["subtitle_cues"][0].update(start=.200001)),
