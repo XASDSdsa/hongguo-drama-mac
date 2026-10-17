@@ -180,6 +180,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   quchongDefaults: () => ipcRenderer.invoke('quchong-defaults'),
   quchongSetConcurrency: (jobs) => ipcRenderer.invoke('quchong-set-concurrency', jobs),
   getQuchongTasks: () => ipcRenderer.invoke('get-quchong-tasks'),
+  oneclickScan: (dir) => ipcRenderer.invoke('oneclick-scan', dir),
+  oneclickStart: (payload) => ipcRenderer.invoke('oneclick-start', payload),
+  oneclickStop: () => ipcRenderer.invoke('oneclick-stop'),
+  oneclickStatus: () => ipcRenderer.invoke('oneclick-status'),
+  oneclickClearLogs: () => ipcRenderer.invoke('oneclick-clear-logs'),
+  oneclickSelectImage: () => ipcRenderer.invoke('oneclick-select-image'),
+  onOneclickUpdate: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('oneclick-update', listener);
+    return () => ipcRenderer.removeListener('oneclick-update', listener);
+  },
   quchongSelectVideos: () => ipcRenderer.invoke('quchong-select-videos'),
   quchongSelectAudio: () => ipcRenderer.invoke('quchong-select-audio'),
   quchongStart: (payload) => ipcRenderer.invoke('quchong-start', payload),

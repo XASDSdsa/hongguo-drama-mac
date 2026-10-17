@@ -31,6 +31,7 @@
     "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
     "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:jianying && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
     "check:workflow": "node scripts/check-workflow-wiring.cjs",
+    "check:oneclick": "node scripts/check-oneclick.cjs",
     "setup:structure": "node scripts/setup-video-structure.cjs",
     "check:structure": "node scripts/check-video-structure.cjs",
     "check:shots": "python3 scripts/check-shot-boundary-convention.py && python3 scripts/check-shot-algorithm.py",

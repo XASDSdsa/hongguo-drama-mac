@@ -2776,6 +2776,28 @@ ipcMain.handle('quchong-select-audio', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+// ===== 一键处理：独立菜单，自带任务状态，不读写其他页面的队列和记录 =====
+const { createOneclick } = require('./src/native/oneclick');
+const oneclick = createOneclick({
+  quchong,
+  openai,
+  resolveFfmpeg: (name) => resolveFfmpeg(name),
+  getSettings: () => getCurrentSettings(),
+  send: (channel, payload) => sendToRenderer(channel, payload),
+});
+ipcMain.handle('oneclick-scan', (_event, dir) => oneclick.scan(dir));
+ipcMain.handle('oneclick-start', (_event, payload) => oneclick.start(payload || {}));
+ipcMain.handle('oneclick-stop', () => oneclick.stop());
+ipcMain.handle('oneclick-status', () => oneclick.status());
+ipcMain.handle('oneclick-clear-logs', () => oneclick.clearLogs());
+ipcMain.handle('oneclick-select-image', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
 ipcMain.handle('quchong-start', async (_event, payload = {}) => {
   try {
     const sources = [...new Set(Array.isArray(payload.sources) ? payload.sources : [])].map((file) =>
