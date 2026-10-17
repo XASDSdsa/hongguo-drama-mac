@@ -1,6 +1,6 @@
 {
   "name": "hongguo-downloader",
-  "version": "1.1.30",
+  "version": "1.1.41",
   "description": "红果短剧全集批量下载器（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -9,11 +9,11 @@
     "dev": "node scripts/dev.js",
     "dev:react": "vite",
     "build:react": "vite build",
-    "build": "npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --win",
-    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
-    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --win --dir",
-    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --win portable",
-    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --win nsis",
+    "build": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win",
+    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
+    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win --dir",
+    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win portable",
+    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
     "check:openai": "node scripts/check-openai-adapter.cjs",
     "check:pipeline": "node scripts/check-pipeline-gate.cjs",
@@ -25,11 +25,19 @@
     "setup:transcription": "node scripts/setup-faster-whisper.cjs",
     "check:transcription-bundle": "node scripts/check-faster-whisper-bundle.cjs",
     "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-ai-materials-panel.cjs",
-    "pack": "npm run setup:transcription && electron-builder --dir",
+    "pack": "npm run setup:transcription && npm run setup:structure && electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
-    "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
-    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --mac --arm64 --dir --publish never"
+    "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
+    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:jianying && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
+    "check:workflow": "node scripts/check-workflow-wiring.cjs",
+    "setup:structure": "node scripts/setup-video-structure.cjs",
+    "check:structure": "node scripts/check-video-structure.cjs",
+    "check:structure-bundle": "node scripts/check-video-structure-bundle.cjs",
+    "check:structure-ui": "npm run build:react && electron scripts/check-video-structure-ui.cjs",
+    "setup:jianying": "node scripts/setup-jianying-runtime.cjs",
+    "check:reconstruction": "node scripts/check-reconstruction.cjs",
+    "check:dialogue": "node scripts/check-dialogue-boundaries.cjs"
   },
   "dependencies": {
     "axios": "^1.13.2"
@@ -58,7 +66,7 @@
       "src/store.js"
     ],
     "asar": true,
-    "beforePack": "scripts/check-faster-whisper-bundle.cjs",
+    "beforePack": "scripts/check-app-runtimes.cjs",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "win": {
       "target": [
@@ -87,21 +95,31 @@
         {
           "from": "build/whisper/win32-x64",
           "to": "bin",
-          "filter": ["whisper-cli.exe"]
+          "filter": [
+            "whisper-cli.exe"
+          ]
         },
         {
           "from": "build/whisper/models",
           "to": "models",
-          "filter": ["ggml-tiny.bin"]
+          "filter": [
+            "ggml-tiny.bin"
+          ]
         },
         {
           "from": "build/whisper",
           "to": ".",
-          "filter": ["WHISPER-LICENSE.txt"]
+          "filter": [
+            "WHISPER-LICENSE.txt"
+          ]
         },
         {
           "from": "build/faster-whisper/win32-x64",
           "to": "faster-whisper"
+        },
+        {
+          "from": "build/video-structure/win32-x64",
+          "to": "video-structure"
         }
       ],
       "extraFiles": [
@@ -167,17 +185,23 @@
         {
           "from": "build/whisper/darwin-arm64",
           "to": "bin",
-          "filter": ["whisper-cli"]
+          "filter": [
+            "whisper-cli"
+          ]
         },
         {
           "from": "build/whisper/models",
           "to": "models",
-          "filter": ["ggml-tiny.bin"]
+          "filter": [
+            "ggml-tiny.bin"
+          ]
         },
         {
           "from": "build/whisper",
           "to": ".",
-          "filter": ["WHISPER-LICENSE.txt"]
+          "filter": [
+            "WHISPER-LICENSE.txt"
+          ]
         },
         {
           "from": "build/faster-whisper/darwin-arm64",
@@ -194,15 +218,36 @@
         {
           "from": "THIRD-PARTY-NOTICES.md",
           "to": "THIRD-PARTY-NOTICES.md"
+        },
+        {
+          "from": "build/video-structure/darwin-arm64",
+          "to": "video-structure"
+        },
+        {
+          "from": "build/jianying/darwin-arm64",
+          "to": "jianying"
         }
       ],
       "binaries": [
         "Contents/Resources/bin/ffmpeg",
         "Contents/Resources/bin/ffprobe",
         "Contents/Resources/bin/whisper-cli",
-        "Contents/Resources/faster-whisper/hongguo-transcribe"
+        "Contents/Resources/faster-whisper/hongguo-transcribe",
+        "Contents/Resources/video-structure/worker/hongguo-structure",
+        "Contents/Resources/video-structure/bin/sherpa-onnx-offline-source-separation",
+        "Contents/Resources/jianying/hongguo-jianying"
       ]
-    }
+    },
+    "extraResources": [
+      {
+        "from": "scripts/create-jianying-draft.py",
+        "to": "workflow/create-jianying-draft.py"
+      },
+      {
+        "from": "scripts/check-jianying-draft.py",
+        "to": "workflow/check-jianying-draft.py"
+      }
+    ]
   },
   "engines": {
     "node": ">=22.12"

@@ -26,6 +26,8 @@ const fasterWhisper = require('./src/native/faster-whisper');
 const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
 const { createAnalysisManager } = require('./src/native/analysis-manager');
 const { createAiMaterialQueue } = require('./src/native/ai-material-queue');
+const { createVideoStructurePipeline } = require('./src/native/video-structure/pipeline');
+const { createJianyingDraft } = require('./src/native/video-structure/jianying');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
@@ -174,6 +176,19 @@ function getDefaultSettings() {
     ai_image_size: '1024x1536',
     ai_image_quality: 'high',
     ai_concurrency: 2,
+    // 本地视频结构化拆解。
+    structure_threads: 2,
+    structure_threshold: 0.5,
+    structure_device: 'cpu',
+    structure_sherpa_provider: 'cpu',
+    structure_clip_audio: 'original',
+    structure_punctuation_model: '',
+    // 剪映草稿创建器。为空时使用应用目录的本地运行时或系统 Python。
+    jianying_python_path: '',
+    jianying_user_data_path: '',
+    workflow_require_dedup: true,
+    workflow_validate_draft: true,
+
   };
 }
 
@@ -707,6 +722,20 @@ function loadSeriesRegistry() {
         }))
         : {},
     } : { version: 1, updatedAt: 0, episodes: {} };
+    // 整集工作流运行中退出时不自动续跑；下次由用户明确点击重新开始。
+    next.workflow = entry.workflow && typeof entry.workflow === 'object' ? {
+      version: 1,
+      updatedAt: Number(entry.workflow.updatedAt) || 0,
+      episodes: entry.workflow.episodes && typeof entry.workflow.episodes === 'object'
+        ? Object.fromEntries(Object.entries(entry.workflow.episodes).map(([key, record]) => {
+          const copy = record && typeof record === 'object' ? { ...record } : { episodeIndex: Number(key) };
+          if (copy.status === 'running' || copy.status === 'queued' || copy.status === 'stopping') {
+            copy.status = 'stopped'; copy.stage = 'stopped'; copy.error = '应用关闭时中断，请重新开始工作流'; copy.updatedAt = Date.now(); changed = true;
+          }
+          return [key, copy];
+        }))
+        : {},
+    } : { version: 1, updatedAt: 0, episodes: {} };
     if (next.ai_cover?.status === 'processing') {
       next.ai_cover = { ...next.ai_cover, status: 'stopped', error: '应用关闭时中断', updatedAt: Date.now() };
       changed = true;
@@ -871,6 +900,318 @@ function getAnalysisManager() {
     });
   }
   return analysisManager;
+}
+
+let reconstructionPipeline = null;
+function getReconstructionPipeline() {
+  if (!reconstructionPipeline) {
+    reconstructionPipeline = createVideoStructurePipeline({
+      getSettings: () => ({ ...getCurrentSettings(), isPackaged: !!app.isPackaged, resourcesPath: process.resourcesPath, platform: process.platform, arch: process.arch }),
+      getFfmpegPath: () => resolveFfmpeg('ffmpeg'),
+      getFfprobePath: () => resolveFfmpeg('ffprobe'),
+      getProjectRecord: projectId => store.getStructureProjects()[String(projectId)] || null,
+      saveProjectRecord: (projectId, record) => store.saveStructureProject(projectId, record),
+      createDraft: ctx => {
+        const userData = resolveJianyingUserData();
+        const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+        const name = `${sanitizeFolderName(path.parse(ctx.input).name)}-剪映草稿-${stamp}-${randomUUID().slice(0, 4)}`;
+        return createJianyingDraft(ctx, {
+          executable: resolveJianyingRuntime()?.executable,
+          createScript: resolveJianyingScript('create-jianying-draft.py'),
+          checkScript: resolveJianyingScript('check-jianying-draft.py'),
+          outputRoot: userData ? path.join(userData, 'Projects', 'com.lveditor.draft') : path.join(path.dirname(ctx.input), '剪映草稿'),
+          name, userData, validate: workflowGates().validateDraft,
+        });
+      },
+      sendProgress: payload => {
+        sendToRenderer('reconstruction-progress', payload);
+        const run = [...episodeWorkflowRuns.values()].find(item => item.projectId === payload?.projectId);
+        if (!run) return;
+        const entry = seriesRegistry.find(item => String(item.series_id) === String(run.seriesId));
+        if (!entry) return;
+        const record = workflowEpisode(entry, run.episodeIndex);
+        record.stage = payload?.stage === 'jianying' ? 'jianying' : 'structure';
+        const stages = Object.values(payload?.modules || {});
+        const finished = stages.filter(stage => stage.status === 'succeeded').length;
+        const currentProgress = payload?.modules?.[payload?.stage]?.progress;
+        record.progress = Math.min(99, (finished + (Number.isFinite(currentProgress) ? currentProgress / 100 : 0)) / 9 * 100);
+        record.message = payload?.modules?.[payload?.stage]?.message || payload?.stage || record.message;
+        record.updatedAt = Date.now();
+        workflowEmit(run.seriesId, run.episodeIndex, record);
+      },
+    });
+  }
+  return reconstructionPipeline;
+}
+
+// ===== 单集工作流：去重输出 -> 结构化拆解 -> 剪映草稿 =====
+// 这是下载管理里的“一键处理”唯一入口。每集单独保存状态，任何一步失败只
+// 影响这一集；下一集不会拿到上一集的路径或中间结果。
+const episodeWorkflowRuns = new Map();
+const episodeWorkflowBatches = new Map();
+
+function workflowForEntry(entry) {
+  if (!entry.workflow || typeof entry.workflow !== 'object') entry.workflow = { version: 1, updatedAt: 0, episodes: {} };
+  if (!entry.workflow.episodes || typeof entry.workflow.episodes !== 'object') entry.workflow.episodes = {};
+  return entry.workflow;
+}
+
+function workflowEpisode(entry, episodeIndex) {
+  const workflow = workflowForEntry(entry);
+  const key = String(Number(episodeIndex));
+  if (!workflow.episodes[key] || typeof workflow.episodes[key] !== 'object') {
+    workflow.episodes[key] = { episodeIndex: Number(episodeIndex), status: 'idle', stage: 'waiting_dedup', progress: 0, updatedAt: Date.now() };
+  }
+  return workflow.episodes[key];
+}
+
+function workflowKey(seriesId, episodeIndex) {
+  return `${String(seriesId)}:${Number(episodeIndex)}`;
+}
+
+function workflowProjectId(seriesId, episodeIndex) {
+  return `workflow:${String(seriesId)}:${Number(episodeIndex)}`;
+}
+
+function workflowEmit(seriesId, episodeIndex, record, extra = {}) {
+  sendToRenderer('episode-workflow-progress', {
+    seriesId: String(seriesId),
+    episodeIndex: Number(episodeIndex),
+    ...record,
+    ...extra,
+  });
+}
+
+function updateWorkflowRecord(entry, episodeIndex, patch, persist = true) {
+  const record = workflowEpisode(entry, episodeIndex);
+  Object.assign(record, patch, { episodeIndex: Number(episodeIndex), updatedAt: Date.now() });
+  const workflow = workflowForEntry(entry);
+  workflow.updatedAt = Date.now();
+  if (persist) {
+    try { saveSeriesRegistry(); } catch (_) {}
+  }
+  workflowEmit(entry.series_id, episodeIndex, record);
+  return record;
+}
+
+function workflowDraftExists(record) {
+  try {
+    if (!record?.draftPath || !fs.statSync(record.draftPath).isDirectory()) return false;
+    const manifestPath = path.join(record.draftPath, 'hongguo-draft-manifest.json');
+    if (!fs.existsSync(manifestPath)) return false;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return manifest.boundary_policy === 'preserve_visual_cuts_dialogue_index' && manifest.alignment_algorithm === 'visual-shots-with-dialogue-index-v2';
+  } catch (_) { return false; }
+}
+
+function workflowGates() {
+  const settings = getCurrentSettings();
+  return {
+    requireDedup: settings.workflow_require_dedup !== false,
+    validateDraft: settings.workflow_validate_draft !== false,
+  };
+}
+
+function workflowInput(entry, episodeIndex) {
+  const pipelineRecord = pipelineEpisode(entry, episodeIndex, false);
+  const dedupValid = !!pipelineRecord?.dedupPath && pipelineFileValid(pipelineRecord.dedupPath, pipelineRecord.dedupFingerprint);
+  if (dedupValid) return { path: pipelineRecord.dedupPath, stage: 'deduped' };
+  const gates = workflowGates();
+  if (gates.requireDedup) return null;
+  const downloadedValid = !!pipelineRecord?.downloadPath && pipelineFileValid(pipelineRecord.downloadPath, pipelineRecord.downloadFingerprint);
+  return downloadedValid ? { path: pipelineRecord.downloadPath, stage: 'downloaded' } : null;
+}
+
+function getSeriesWorkflowStatus(seriesId) {
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(seriesId));
+  if (!entry) return { success: false, error: '未找到该剧档案' };
+  // 先让下载/去重状态按当前磁盘文件完成一次指纹回填，避免刚启动应用时
+  // 工作流页面比流水线页面更早读取而暂时看不到可用输入。
+  try { getPipelineStatus(seriesId); } catch (_) {}
+  const workflow = workflowForEntry(entry);
+  const episodes = (entry.episodes || []).map(item => {
+    const episodeIndex = Number(item.vid_index);
+    const record = workflowEpisode(entry, episodeIndex);
+    const currentInput = workflowInput(entry, episodeIndex);
+    const inputChanged = record.inputFingerprint && (!currentInput || record.inputFingerprint !== pipelineFingerprint(currentInput.path));
+    if (record.status === 'completed' && (!workflowDraftExists(record) || inputChanged)) {
+      record.status = 'stale';
+      record.stage = 'jianying';
+      record.error = inputChanged ? '输入视频已变化，请重新生成工作流' : '剪映草稿缺失或仍使用旧版合并分镜，请继续完整流程更新';
+      record.updatedAt = Date.now();
+    }
+    return { ...record, episodeIndex };
+  });
+  const activeBatch = [...episodeWorkflowBatches.values()].find(batch => String(batch.seriesId) === String(seriesId) && ['queued', 'running', 'stopping'].includes(batch.status));
+  const counts = {
+    total: episodes.length,
+    completed: episodes.filter(item => item.status === 'completed').length,
+    running: episodes.filter(item => ['queued', 'running', 'stopping'].includes(item.status)).length,
+    failed: episodes.filter(item => ['failed', 'stale'].includes(item.status)).length,
+  };
+  return { success: true, seriesId: String(seriesId), status: activeBatch?.status || (counts.running ? 'running' : counts.completed === counts.total && counts.total ? 'completed' : 'idle'), batchId: activeBatch?.id || null, counts, gates: workflowGates(), episodes };
+}
+
+function findExecutableInPath(names) {
+  const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const name of names) {
+    for (const dir of pathDirs) {
+      const candidate = path.join(dir, name);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch (_) {}
+    }
+  }
+  return null;
+}
+
+function resolveJianyingPython() {
+  const settings = getCurrentSettings();
+  const configured = String(settings.jianying_python_path || process.env.JIANYING_PYTHON || '').trim();
+  const candidates = [];
+  if (configured) candidates.push(configured);
+  candidates.push(
+    path.join(__dirname, '.cache', 'jianying-venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+    path.join(process.cwd(), '.cache', 'jianying-venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+  );
+  const found = candidates.find(candidate => {
+    try { return fs.statSync(candidate).isFile(); } catch (_) { return false; }
+  });
+  if (found) return found;
+  return findExecutableInPath(process.platform === 'win32' ? ['python.exe', 'python', 'py.exe'] : ['python3', 'python']);
+}
+
+function resolveBundledJianyingRuntime() {
+  const executableName = process.platform === 'win32' ? 'hongguo-jianying.exe' : 'hongguo-jianying';
+  const roots = [];
+  if (app.isPackaged) roots.push(path.join(process.resourcesPath, 'jianying', executableName));
+  roots.push(path.join(__dirname, 'build', 'jianying', `${process.platform}-${process.arch}`, executableName));
+  return roots.find(candidate => {
+    try { return fs.statSync(candidate).isFile(); } catch (_) { return false; }
+  }) || null;
+}
+
+function resolveJianyingRuntime() {
+  const bundled = resolveBundledJianyingRuntime();
+  if (bundled) return { executable: bundled, bundled: true };
+  const python = resolveJianyingPython();
+  return python ? { executable: python, bundled: false } : null;
+}
+
+function resolveJianyingScript(name) {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, 'workflow', name), path.join(__dirname, 'scripts', name)]
+    : [path.join(__dirname, 'scripts', name)];
+  return candidates.find(candidate => fs.existsSync(candidate)) || null;
+}
+
+function resolveJianyingUserData() {
+  const configured = String(getCurrentSettings().jianying_user_data_path || '').trim();
+  const candidates = [];
+  if (configured) candidates.push(configured);
+  if (process.platform === 'darwin') candidates.push(path.join(app.getPath('home'), 'Movies', 'JianyingPro', 'User Data'));
+  if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'JianyingPro', 'User Data'));
+  return candidates.find(candidate => fs.existsSync(candidate)) || null;
+}
+
+function workflowError(message, code = 'WORKFLOW_FAILED') {
+  return Object.assign(new Error(message), { code });
+}
+
+async function runEpisodeWorkflow(seriesId, episodeIndex, options = {}) {
+  const sid = String(seriesId);
+  const index = Number(episodeIndex);
+  const key = workflowKey(sid, index);
+  if (episodeWorkflowRuns.has(key)) return { success: false, error: '该集工作流正在运行' };
+  const entry = seriesRegistry.find(item => String(item.series_id) === sid);
+  if (!entry) return { success: false, error: '未找到该剧档案' };
+  const run = { key, seriesId: sid, episodeIndex: index, child: null, projectId: workflowProjectId(sid, index), cancelled: false };
+  episodeWorkflowRuns.set(key, run);
+  const record = workflowEpisode(entry, index);
+  try {
+    if (record.status === 'completed' && workflowDraftExists(record) && options.force !== true) return { success: true, ...record };
+    const input = workflowInput(entry, index);
+    if (!input) throw workflowError('当前集没有可用的工作流输入，请先确认视频文件状态', 'WORKFLOW_INPUT_REQUIRED');
+    const inputPath = input.path;
+    const episode = (entry.episodes || []).find(item => Number(item.vid_index) === index);
+    const tasks = downloadTasks.filter(task => String(task.hongguoInfo?.series_id) === sid);
+    const seriesDir = resolveSeriesDir(sid, entry.series_title, tasks) || path.dirname(inputPath);
+    const structureRoot = path.join(seriesDir, '结构化拆解');
+    updateWorkflowRecord(entry, index, { status: 'running', stage: 'structure', progress: 0, message: '开始结构化拆解', error: null, inputPath, inputFingerprint: pipelineFingerprint(inputPath), projectId: run.projectId, draftPath: record.draftPath || null });
+    if (run.cancelled) throw workflowError('工作流已停止', 'WORKFLOW_STOPPED');
+    await getReconstructionPipeline().start({ inputPath, projectId: run.projectId, outputRoot: structureRoot, force: options.force === true });
+    const structure = await getReconstructionPipeline().wait(run.projectId);
+    if (run.cancelled || structure?.status === 'stopped') throw workflowError('工作流已停止', 'WORKFLOW_STOPPED');
+    const moduleIds = ['media', 'audio', 'shots', 'clips', 'separation', 'transcript', 'alignment', 'export', 'jianying'];
+    const incomplete = moduleIds.filter(id => structure?.modules?.[id]?.status !== 'succeeded');
+    if (incomplete.length) throw workflowError(structure.error || `工作流未完成：${incomplete.join('、')}`, 'STRUCTURE_FAILED');
+    const draft = structure.modules.jianying.summary;
+    if (!workflowDraftExists({ draftPath: draft?.draft_path })) throw workflowError('剪映草稿目录不存在', 'JIAN_YING_OUTPUT_MISSING');
+    return updateWorkflowRecord(entry, index, { status: 'completed', stage: 'completed', progress: 100, message: draft.validated ? '完成：结构化与剪映草稿已校验' : '完成：剪映草稿已生成', error: null, draftPath: draft.draft_path, projectDir: structure.projectDir, finishedAt: Date.now() });
+  } catch (error) {
+    const stopped = error?.code === 'WORKFLOW_STOPPED' || run.cancelled;
+    return updateWorkflowRecord(entry, index, { status: stopped ? 'stopped' : 'failed', stage: stopped ? 'stopped' : (record.stage || 'structure'), progress: stopped ? null : record.progress, message: '', error: error.message || String(error) });
+  } finally {
+    episodeWorkflowRuns.delete(key);
+  }
+}
+
+async function runSeriesWorkflow(batch) {
+  batch.status = 'running';
+  const entry = seriesRegistry.find(item => String(item.series_id) === String(batch.seriesId));
+  if (!entry) { batch.status = 'failed'; batch.error = '未找到该剧档案'; return; }
+  for (const index of batch.episodeIndices) {
+    if (batch.cancelled) break;
+    batch.currentEpisode = index;
+    await runEpisodeWorkflow(batch.seriesId, index, { force: batch.force });
+  }
+  batch.status = batch.cancelled ? 'stopped' : 'completed';
+  batch.currentEpisode = null;
+  sendToRenderer('episode-workflow-progress', { seriesId: String(batch.seriesId), batchId: batch.id, batchStatus: batch.status });
+}
+
+function startSeriesWorkflow(payload = {}) {
+  const sid = String(payload.seriesId || '');
+  const entry = seriesRegistry.find(item => String(item.series_id) === sid);
+  if (!entry) return { success: false, error: '未找到该剧档案' };
+  const existing = [...episodeWorkflowBatches.values()].find(batch => String(batch.seriesId) === sid && ['queued', 'running', 'stopping'].includes(batch.status));
+  if (existing) return { success: false, error: '该剧工作流正在运行', batchId: existing.id };
+  const requested = Array.isArray(payload.episodeIndices) && payload.episodeIndices.length
+    ? payload.episodeIndices.map(Number).filter(Number.isSafeInteger)
+    : (entry.episodes || []).map(item => Number(item.vid_index)).filter(Number.isSafeInteger);
+  const episodeIndices = [...new Set(requested)].sort((a, b) => a - b).filter(index => {
+    return !!workflowInput(entry, index);
+  });
+  if (!episodeIndices.length) return { success: false, error: '没有已完成去重的集数可处理，请先完成去重' };
+  const batch = { id: randomUUID(), seriesId: sid, episodeIndices, force: payload.force === true, status: 'queued', currentEpisode: null, cancelled: false, createdAt: Date.now() };
+  episodeWorkflowBatches.set(batch.id, batch);
+  Promise.resolve().then(() => runSeriesWorkflow(batch)).catch(error => { batch.status = 'failed'; batch.error = error.message; }).finally(() => {
+    setTimeout(() => episodeWorkflowBatches.delete(batch.id), 10 * 60 * 1000);
+  });
+  return { success: true, batchId: batch.id, seriesId: sid, episodeIndices };
+}
+
+function cancelSeriesWorkflow(batchId) {
+  const batch = episodeWorkflowBatches.get(String(batchId));
+  if (!batch || !['queued', 'running'].includes(batch.status)) return { success: false, error: '工作流未在运行' };
+  batch.cancelled = true;
+  batch.status = 'stopping';
+  const run = batch.currentEpisode == null ? null : episodeWorkflowRuns.get(workflowKey(batch.seriesId, batch.currentEpisode));
+  if (run) {
+    run.cancelled = true;
+    if (run.projectId) getReconstructionPipeline().cancel(run.projectId);
+    try { run.child?.kill('SIGTERM'); } catch (_) {}
+  }
+  return { success: true };
+}
+
+function cancelAllEpisodeWorkflows() {
+  for (const batch of episodeWorkflowBatches.values()) batch.cancelled = true;
+  for (const run of episodeWorkflowRuns.values()) {
+    run.cancelled = true;
+    try { if (run.projectId) getReconstructionPipeline().cancel(run.projectId); } catch (_) {}
+    try { run.child?.kill('SIGTERM'); } catch (_) {}
+  }
 }
 
 /**
@@ -2067,6 +2408,14 @@ ipcMain.handle('quchong-select-videos', async () => {
   return result.canceled ? [] : result.filePaths;
 });
 
+ipcMain.handle('reconstruction-select-video', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
 ipcMain.handle('quchong-select-audio', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
@@ -2588,6 +2937,43 @@ ipcMain.handle('start-series-analysis', async (_event, payload = {}) => {
 
 ipcMain.handle('cancel-series-analysis', async (_event, batchId) => {
   try { return getAnalysisManager().cancel(batchId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+// 本地结构化拆解：独立模块与完整流程共用同一项目索引。
+ipcMain.handle('get-structure-runtime', async () => {
+  try { return { success: true, ...await getReconstructionPipeline().availability() }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+ipcMain.handle('get-structure-projects', () => Object.entries(store.getStructureProjects()).map(([projectId, record]) => ({ projectId, ...record })).sort((a, b) => b.updatedAt - a.updatedAt));
+
+ipcMain.handle('get-reconstruction-status', async (_event, projectId) => {
+  try { return await getReconstructionPipeline().status(projectId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('start-reconstruction', async (_event, payload = {}) => {
+  try { return await getReconstructionPipeline().start(payload); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('cancel-reconstruction', async (_event, projectId) => {
+  try { return getReconstructionPipeline().cancel(projectId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('get-series-workflow-status', async (_event, seriesId) => {
+  try { return getSeriesWorkflowStatus(seriesId); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('start-series-workflow', async (_event, payload = {}) => {
+  try { return startSeriesWorkflow(payload); }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('cancel-series-workflow', async (_event, batchId) => {
+  try { return cancelSeriesWorkflow(batchId); }
   catch (error) { return { success: false, error: error.message }; }
 });
 
@@ -4552,6 +4938,8 @@ function createWindow() {
     clearOnlineCache();
     for (const job of compatPreparing.values()) { job.cancelled = true; job.controller.abort(); }
     cancelAllQuchongBatches();
+    cancelAllEpisodeWorkflows();
+    reconstructionPipeline?.cancelAll().catch(error => console.warn('[Structure]', error.message));
     transcriptionManager?.cancelAll().catch(error => console.warn('[Subtitles] 停止任务失败:', error.message));
   });
 }
@@ -4661,10 +5049,10 @@ app.on('window-all-closed', () => {
 
 let waitingForSubtitles = false;
 app.on('before-quit', event => {
-  if (!transcriptionManager?.hasActive()) return;
+  if (!transcriptionManager?.hasActive() && !reconstructionPipeline?.hasActive()) return;
   event.preventDefault();
   if (waitingForSubtitles) return;
   waitingForSubtitles = true;
-  transcriptionManager.cancelAll().catch(error => console.warn('[Subtitles] 停止任务失败:', error.message))
+  Promise.allSettled([transcriptionManager?.cancelAll(), reconstructionPipeline?.cancelAll()])
     .finally(() => { waitingForSubtitles = false; app.quit(); });
 });

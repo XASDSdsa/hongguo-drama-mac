@@ -1,0 +1,10 @@
+{
+  "algorithm_id": "transnetv2-temporal-min2s-v1",
+  "sha256": {
+    "verify.py": "0118cf2f27eca79fbbe14c23554a850617793df59441d8654703427bacdb8b39",
+    "duration_policy.py": "8f47ecf2eca299685ff91af5b55df2797edd4289b1d4c9cbf128a53050da29b9",
+    "accepted-baseline.json": "45a0808b2cb85a1357c38899a0bfdc85fb66006ace9a285fe7fc21d2122895a0",
+    "recipe.json": "395e29f4aee8447287b4c5070a9d5c494e0754f5ca8e9e323a1c465f5d1a2d28",
+    "verify-baseline.py": "f11ccb25f374fe3cf7979993f35e05f3c3e0a072b4641d3c23f24e6c523b20cc"
+  }
+}

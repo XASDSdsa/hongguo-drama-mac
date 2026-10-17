@@ -45,6 +45,12 @@ jobs:
           npm run setup:transcription
           npm run check:transcription-bundle
 
+      - name: Bundle offline video structure runtime
+        run: |
+          npm run setup:structure
+          npm run check:structure-bundle
+          npm run check:structure
+
       - name: Download tested Windows FFmpeg build artifact
         uses: actions/download-artifact@v4
         with:

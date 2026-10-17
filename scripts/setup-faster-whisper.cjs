@@ -7,7 +7,7 @@ const { createHash } = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const target = `${process.platform}-${process.arch}`;
 const output = path.join(root, 'build/faster-whisper', target);
-const sources = ['scripts/faster-whisper-requirements.txt', 'scripts/faster-whisper.spec', 'scripts/build-faster-whisper.py', 'src/native/faster_whisper_cli.py'];
+const sources = ['scripts/faster-whisper-requirements.txt', 'scripts/faster-whisper.spec', 'scripts/build-faster-whisper.py', 'src/native/faster_whisper_cli.py', 'src/native/scenedetect_runner.py', 'src/native/sentence_alignment.py'];
 const buildId = createHash('sha256').update(Buffer.concat(sources.map(file => fs.readFileSync(path.join(root, file))))).digest('hex');
 
 function run(command, args) {

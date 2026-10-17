@@ -1,0 +1,44 @@
+{
+  "algorithm_id": "transnetv2-temporal-min2s-v1",
+  "candidate_head": "single",
+  "candidate_threshold": 0.5,
+  "candidate_peak": "first maximum of contiguous >=0.5 run",
+  "review_decode_rgb": [
+    160,
+    90
+  ],
+  "review_gray_size": [
+    64,
+    36
+  ],
+  "gaussian_kernel": [
+    3,
+    3
+  ],
+  "normalization_std_floor": 0.04,
+  "translation_offsets": [
+    -2,
+    0,
+    2
+  ],
+  "distance_quantile": 0.2,
+  "frames_per_window_max": 4,
+  "window_span_max_s": 0.32,
+  "window_span_min_s": 0.08,
+  "window_neighbor_fraction": 0.6,
+  "window_guard_s": 0.04,
+  "reject_continuity_near_lt": 0.23,
+  "reject_continuity_later_lt": 0.25,
+  "warn_distance_lt": 0.32,
+  "leading_fade_max_s": 1,
+  "leading_fade_initial_mean_lt": 0.015,
+  "leading_fade_initial_std_lt": 0.015,
+  "leading_fade_brightness_rise_gt": 0.025,
+  "minimum_output_duration_s": 2,
+  "duration_tolerance_s": 1e-09,
+  "selection_objective": "maximize sum of retained single scores subject to >=2s first/interior/last intervals",
+  "short_source_behavior": "preserve as single segment and flag source_shorter_than_minimum",
+  "timebase": "original per-frame PTS plus exact video_end",
+  "transnet_model_sha256": "a03191f1d886181b2d51508475761e15fd5c865ebc44494db443058cc051c918",
+  "status": "user-approved tested baseline, not yet integrated into application"
+}

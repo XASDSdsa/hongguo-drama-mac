@@ -166,6 +166,8 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const [loaded, setLoaded] = useState(false);
   const [confirmAsk, setConfirmAsk] = useState(null); // 删除确认（可勾选删除本地文件）
   const [pipelineStatus, setPipelineStatus] = useState(null);
+  const [workflowStatus, setWorkflowStatus] = useState(null);
+  const [workflowStarting, setWorkflowStarting] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState(null);
   const [analysisStatus, setAnalysisStatus] = useState(null);
   const [transcriptionRuntime, setTranscriptionRuntime] = useState(null);
@@ -227,6 +229,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     setConfirmAsk(null);
     setDedupRuntime({});
     setPipelineStatus(null);
+    setWorkflowStatus(null);
     setTranscriptionStatus(null);
     setAnalysisStatus(null);
     setTranscriptionRuntime(null);
@@ -240,6 +243,19 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     }).catch(() => {});
     return () => { alive = false; };
   }, [active, selectedSeries?.seriesId, orderVersion]);
+
+  const loadWorkflow = useCallback(async () => {
+    const seriesId = selectedSeries?.seriesId;
+    if (!seriesId || typeof window.electronAPI.getSeriesWorkflowStatus !== 'function') return;
+    const result = await window.electronAPI.getSeriesWorkflowStatus(seriesId).catch(() => null);
+    if (result?.success !== false && String(selectedSeriesIdRef.current) === String(seriesId)) setWorkflowStatus(result);
+  }, [selectedSeries?.seriesId]);
+
+  useEffect(() => {
+    if (!active || !selectedSeries?.seriesId) return undefined;
+    loadWorkflow();
+    return undefined;
+  }, [active, loadWorkflow, selectedSeries?.seriesId, orderVersion]);
 
   const loadTranscription = useCallback(async (checkRuntime = false) => {
     const seriesId = selectedSeries?.seriesId;
@@ -493,6 +509,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
           if (selectedSeriesIdRef.current === seriesId) showToast(data?.success ? '本批视频去重完成' : '本批去重结束，部分视频失败', data?.success ? 'success' : 'error');
         }
       })] : []),
+      ...(typeof window.electronAPI.onEpisodeWorkflowProgress === 'function' ? [window.electronAPI.onEpisodeWorkflowProgress((data) => {
+        if (!activeRef.current || String(data?.seriesId) !== String(selectedSeriesIdRef.current)) return;
+        loadWorkflow();
+      })] : []),
     ];
     if (typeof window.electronAPI.onSeriesRefreshProgress === 'function') {
       cleanups.push(window.electronAPI.onSeriesRefreshProgress((data) => {
@@ -514,7 +534,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
       clearTimeout(batchTimer);
       for (const key of Object.keys(requests.current)) requests.current[key]++;
     };
-  }, [active, refresh, loadQueue, loadSeriesList, showToast, selectedSeries?.seriesId]);
+  }, [active, refresh, loadQueue, loadSeriesList, loadWorkflow, showToast, selectedSeries?.seriesId]);
 
   const toggleSelect = (id) => {
     const next = new Set(selected);
@@ -571,6 +591,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
   const pipelineEpisodeMap = useMemo(
     () => new Map((pipelineStatus?.episodes || []).map(item => [Number(item.episodeIndex), item])),
     [pipelineStatus]
+  );
+  const workflowEpisodeMap = useMemo(
+    () => new Map((workflowStatus?.episodes || []).map(item => [Number(item.episodeIndex), item])),
+    [workflowStatus]
   );
   const dedupCandidates = useMemo(() => {
     const seen = new Set();
@@ -653,6 +677,30 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
     }
   }, [currentSeries, dedupCandidates, dedupJobs, dedupJobsSaving, selectedSeries, showToast]);
 
+  const startWorkflow = useCallback(async () => {
+    if (!selectedSeries?.seriesId || workflowStarting || typeof window.electronAPI.startSeriesWorkflow !== 'function') return;
+    setWorkflowStarting(true);
+    try {
+      const selectedIndices = scopedTasks.filter(task => selected.has(task.id)).map(task => Number(task.hongguoInfo?.vid_index)).filter(Number.isSafeInteger);
+      const result = await window.electronAPI.startSeriesWorkflow({ seriesId: selectedSeries.seriesId, episodeIndices: selectedIndices.length ? selectedIndices : undefined });
+      if (!result?.success) throw new Error(result?.error || '启动工作流失败');
+      await loadWorkflow();
+      showToast(`已串联 ${result.episodeIndices?.length || 0} 集：结构化拆解 → 剪映草稿${selectedIndices.length ? '（按选中集数）' : ''}`);
+    } catch (error) {
+      showToast(error?.message || '启动工作流失败', 'error');
+    } finally {
+      setWorkflowStarting(false);
+    }
+  }, [loadWorkflow, scopedTasks, selected, selectedSeries, showToast, workflowStarting]);
+
+  const cancelWorkflow = useCallback(async () => {
+    const batchId = workflowStatus?.batchId;
+    if (!batchId || typeof window.electronAPI.cancelSeriesWorkflow !== 'function') return;
+    const result = await window.electronAPI.cancelSeriesWorkflow(batchId).catch(error => ({ success: false, error: error.message }));
+    if (!result?.success) showToast(result?.error || '停止工作流失败', 'error');
+    else await loadWorkflow();
+  }, [loadWorkflow, showToast, workflowStatus?.batchId]);
+
   const startTranscription = useCallback(async () => {
     if (!selectedSeries?.seriesId || typeof window.electronAPI.startSeriesTranscription !== 'function') return;
     try {
@@ -711,6 +759,20 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
 
   const activeCount = scopedTasks.filter((t) => t.status === 'downloading' || t.status === 'pending').length;
   const completedCount = scopedTasks.filter((t) => t.status === 'completed').length;
+  const workflowBusy = ['queued', 'running', 'stopping'].includes(String(workflowStatus?.status || ''));
+  const workflowCompleted = Number(workflowStatus?.counts?.completed) || 0;
+  const workflowEligible = scopedTasks.filter(task => {
+    const index = Number(task.hongguoInfo?.vid_index);
+    const pipeline = pipelineEpisodeMap.get(index);
+    const deduped = pipeline?.deduped || ['deduped', 'segmented', 'ready'].includes(String(pipeline?.status || ''));
+    const rawAllowed = workflowStatus?.gates?.requireDedup === false && pipeline?.downloaded;
+    return task.status === 'completed' && (deduped || rawAllowed);
+  }).length;
+  const workflowSelectedEligible = selected.size > 0 ? scopedTasks.filter(task => {
+    if (!selected.has(task.id) || task.status !== 'completed') return false;
+    const pipeline = pipelineEpisodeMap.get(Number(task.hongguoInfo?.vid_index));
+    return pipeline?.deduped || ['deduped', 'segmented', 'ready'].includes(String(pipeline?.status || '')) || (workflowStatus?.gates?.requireDedup === false && pipeline?.downloaded);
+  }).length : workflowEligible;
   const failedTasks = useMemo(
     () => scopedTasks.filter((t) => t.status === 'failed' || t.status === 'stopped'),
     [scopedTasks]
@@ -768,6 +830,10 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
             </select>
           </label>
           <button className="btn btn-primary btn-sm" onClick={startDedup} disabled={dedupStarting || dedupJobs == null || dedupJobsSaving || dedupCandidates.length === 0} title={dedupJobs == null ? '正在读取去重设置，请稍候' : dedupCandidates.length === 0 ? '当前没有待去重的视频' : '处理本剧所有已下载但尚未去重的视频'}>{dedupStarting ? '提交中…' : '一键去重'}</button>
+          <span className="dm-dedup-count">工作流 {workflowCompleted}/{workflowStatus?.counts?.total || 0}</span>
+          {workflowBusy
+            ? <button className="btn btn-outline btn-sm" onClick={cancelWorkflow} disabled={workflowStatus?.status === 'stopping'}>{workflowStatus?.status === 'stopping' ? '停止中…' : '停止工作流'}</button>
+            : <button className="btn btn-primary btn-sm" onClick={startWorkflow} disabled={workflowStarting || workflowSelectedEligible === 0} title={workflowSelectedEligible === 0 ? (workflowStatus?.gates?.requireDedup === false ? '请先下载至少一集视频' : '请先完成至少一集去重') : selected.size > 0 ? '按选中的集数执行结构化拆解并生成剪映草稿' : '按本剧全部可用集数执行结构化拆解并生成剪映草稿'}>{workflowStarting ? '启动中…' : selected.size > 0 ? '处理选中集' : '一键处理本剧'}</button>}
         </div>
       </div>}
       {!selectedSeries && <div className="dm-toolbar">
@@ -889,6 +955,8 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
             const transcriptionStage = String(transcription?.status || 'pending');
             const subtitleStep = { extracting: '校正音频时间轴', aligning: '识别并对齐', validating: '校验字幕时间轴' }[transcription?.stage] || '识别中';
             const transcriptionLabel = transcriptionStage === 'completed' ? '已生成 SRT · 时间轴已校验' : transcriptionStage === 'running' ? `${subtitleStep}${transcription?.stage === 'aligning' ? ` ${Math.round(Number(transcription.progress) || 0)}%` : ''}` : transcriptionStage === 'queued' ? '等待识别' : transcriptionStage === 'failed' ? '识别失败' : transcriptionStage === 'stopped' ? '已停止' : transcriptionStage === 'stale' ? '字幕已失效，请重新识别' : '未识别';
+            const workflow = workflowEpisodeMap.get(Number(task.hongguoInfo?.vid_index));
+            const workflowLabel = workflow?.status === 'completed' ? '已生成剪映草稿' : workflow?.status === 'running' ? (workflow.stage === 'structure' ? '结构化拆解中' : '剪映草稿生成中') : workflow?.status === 'stopped' ? '工作流已停止' : workflow?.status === 'stale' ? '草稿已失效' : workflow?.status === 'failed' ? '工作流失败' : isDeduped ? '待一键处理' : '等待去重';
             return (
               <div key={task.id} className={`dm-task ${isSel ? 'selected' : ''}`} onClick={() => toggleSelect(task.id)}>
                 <input className="dm-task-select" type="checkbox" aria-label={`选择 ${task.title || task.filename}`} checked={isSel} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(task.id)} />
@@ -912,6 +980,7 @@ function DownloadManager({ onNavigate, active = true, target = null }) {
                     <span>去重：{dedupLabel}</span>
                   </div>
                   {isDeduped && <div className={`dm-transcription-row-status ${transcriptionStage === 'completed' ? 'is-done' : transcriptionStage === 'running' ? 'is-running' : transcriptionStage === 'failed' ? 'is-failed' : ''}`}>字幕：{transcriptionLabel}</div>}
+                  <div className={`dm-transcription-row-status ${workflow?.status === 'completed' ? 'is-done' : ['running', 'queued', 'stopping'].includes(workflow?.status) ? 'is-running' : ['failed', 'stale'].includes(workflow?.status) ? 'is-failed' : ''}`}>工作流：{workflowLabel}{workflow?.error ? ` · ${workflow.error}` : ''}</div>
                   {isDeduped && transcription?.error && <div className="dm-error">{transcription.error}</div>}
                   {isDeduped && transcriptionStage === 'running' && <div className="dm-progress" role="progressbar" aria-label={`第 ${task.hongguoInfo?.vid_index || ''} 集字幕识别进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Number(transcription.progress) || 0} aria-valuetext={transcriptionLabel}>
                     <div className="dm-progress-bar"><div className="dm-progress-fill" style={{ width: `${Number(transcription.progress) || 0}%` }} /></div>

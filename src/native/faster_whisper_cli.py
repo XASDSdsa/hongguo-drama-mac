@@ -56,8 +56,11 @@ def probe() -> int:
         "python": sys.executable,
         "faster_whisper": False,
         "cuda": False,
+        "scenedetect": False,
+        "scene_backend": "pyav",
         "bundled": bool(getattr(sys, 'frozen', False)),
         "error": "",
+        "sentence_alignment": "whisper-audio-pause-v4",
     }
     try:
         import faster_whisper  # noqa: F401  # type: ignore
@@ -66,6 +69,12 @@ def probe() -> int:
         result["cuda"] = detect_cuda()
     except Exception as exc:  # pragma: no cover - depends on user runtime
         result["error"] = str(exc)
+    try:
+        from scenedetect_runner import self_test as scene_self_test
+        scene_self_test()
+        result["scenedetect"] = True
+    except Exception as exc:  # keep transcription capability separate from scene detection
+        result["scene_error"] = str(exc)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     # Probe is a capability query.  A missing package is represented in JSON
     # so the Electron side can show the actionable install/path error instead
@@ -95,8 +104,20 @@ def self_test(args) -> int:
     model = load_model(args)
     segments, _ = model.transcribe(audio, language='zh', beam_size=1, vad_filter=False, word_timestamps=True)
     list(segments)
+    from scenedetect_runner import self_test as scene_self_test
+    scene_self_test()
+    from sentence_alignment import align_transcript, whisper_aligner
+    # Exercise the acoustic alignment API in the frozen worker, without speech downloads.
+    checked = align_transcript({'sample_rate': 16000, 'duration': 1,
+                               'segments': [{'start_sample': 0, 'end_sample_exclusive': 16000, 'text': '你好。'}]},
+                              audio, whisper_aligner(model))
+    if ''.join(row['text'] for row in checked['segments']) != '你好。':
+        raise RuntimeError('句级对齐自检没有完整保留原文')
+    if any('对齐引擎失败' in row.get('reason', '') for row in checked['warnings']):
+        raise RuntimeError('句级声学对齐引擎自检失败')
     print(json.dumps({'ok': True, 'bundled': bool(getattr(sys, 'frozen', False)),
-                      'model': str(args.model), 'device': args.device, 'vad': True}), flush=True)
+                      'model': str(args.model), 'device': args.device, 'vad': True, 'scene_detect': True,
+                      'sentence_alignment': 'whisper-audio-pause-v4'}), flush=True)
     return 0
 
 
@@ -188,9 +209,42 @@ def transcribe(args: argparse.Namespace) -> int:
     return 0
 
 
+def align_transcript_file(args) -> int:
+    import wave
+    import numpy as np
+    from sentence_alignment import align_transcript, whisper_aligner
+
+    data = json.loads(Path(args.align_transcript).read_text(encoding='utf-8'))
+    with wave.open(args.input, 'rb') as wav:
+        if wav.getframerate() != 16000 or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+            raise ValueError('句级对齐输入必须为 16kHz 单声道 PCM16 音频')
+        audio = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2').astype(np.float32) / 32768
+    emit_progress(0, '加载句级声学对齐模型')
+    model = load_model(args)
+    result = align_transcript(data, audio, whisper_aligner(model), emit_progress)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f'.{output.stem}-', suffix='.tmp', dir=output.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(result, handle, ensure_ascii=False, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    print(json.dumps(result['alignment_summary'], ensure_ascii=False), flush=True)
+    emit_progress(100, '句级声学对齐完成')
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--scene-detect")
+    parser.add_argument("--align-transcript", help="Paraformer 原始 JSON；按真实音频停顿分段并对齐，不改写台词")
+    parser.add_argument("--min-scene-seconds", type=float, default=0.2)
+    parser.add_argument("--adaptive-threshold", type=float, default=3.0)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--input")
@@ -203,11 +257,17 @@ def main() -> int:
     args = parser.parse_args()
     if args.probe:
         return probe()
-    if not args.self_test and (not args.input or not args.output):
+    if not args.self_test and not args.scene_detect and (not args.input or not args.output):
         parser.error("转写需要 --input 和 --output")
     try:
+        if args.scene_detect:
+            from scenedetect_runner import detect
+            print(json.dumps(detect(args.scene_detect, args.min_scene_seconds, args.adaptive_threshold), ensure_ascii=False), flush=True)
+            return 0
         if args.self_test:
             return self_test(args)
+        if args.align_transcript:
+            return align_transcript_file(args)
         return transcribe(args)
     except Exception as exc:
         print(f"ERROR {exc}", file=sys.stderr, flush=True)

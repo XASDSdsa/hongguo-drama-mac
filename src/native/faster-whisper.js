@@ -55,6 +55,19 @@ function resolveBundledRuntime(settings = {}) {
   return null;
 }
 
+function resolveBundledSceneDetector(settings = {}) {
+  const platform = settings.platform || process.platform;
+  const resources = settings.resourcesPath || process.resourcesPath;
+  const root = settings.projectRoot || path.resolve(__dirname, '../..');
+  const roots = [resources && path.join(resources, 'faster-whisper')];
+  if (!settings.isPackaged) roots.push(path.join(root, 'build/faster-whisper', `${platform}-${settings.arch || process.arch}`));
+  for (const candidateRoot of roots.filter(Boolean)) {
+    const command = path.join(candidateRoot, platform === 'win32' ? 'hongguo-transcribe.exe' : 'hongguo-transcribe');
+    if (usableFile(command)) return { command, prefixArgs: [], bundled: true };
+  }
+  return null;
+}
+
 function cleanOutput(value) {
   const text = String(value || '');
   return text.length > MAX_OUTPUT_BYTES ? text.slice(-MAX_OUTPUT_BYTES) : text;
@@ -262,5 +275,6 @@ module.exports = {
   resolvePython,
   resolveScript,
   resolveBundledRuntime,
+  resolveBundledSceneDetector,
   prepareAudio,
 };

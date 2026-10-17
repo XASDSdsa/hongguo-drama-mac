@@ -16,6 +16,7 @@ build/ffmpeg/*
 # 本地 whisper.cpp 二进制和模型（由 setup:whisper 准备，不进入源码仓库）
 build/whisper/
 build/faster-whisper/
+build/video-structure/
 __pycache__/
 
 # 构建与打包输出

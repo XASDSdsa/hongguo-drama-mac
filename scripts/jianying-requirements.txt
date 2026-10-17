@@ -1,0 +1,2 @@
+# Jianying 6+ requires the current fork, which writes draft_info.json.
+pyJianYingDraft @ git+https://github.com/aoguai/pyJianYingDraft.git

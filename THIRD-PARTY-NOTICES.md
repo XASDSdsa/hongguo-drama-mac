@@ -102,3 +102,12 @@ cuBLAS、cuDNN 9 及 CUDA runtime 的可再分发动态库和 Microsoft Visual C
 
 独立编写适配器；接口路径核对参考 [Hululu007/drpy-node](https://github.com/Hululu007/drpy-node/tree/295f2b7047e14122d542a7736cb931e81abcf85c)（GPL-3.0）。
 未复制其中的会话标识或解锁流程。公开接口可访问不代表作品获得再分发授权；安装包不包含剧集媒体。
+
+## 本地视频结构化拆解
+
+- TransNet V2：MIT，Tomáš Souček 等。PyTorch 网络文件固定于提交 85cef72af9a916bdfd7cc94a670c9cdfbf12d1ed；许可证随源码存放于 src/native/video-structure/vendor/TRANSNET-LICENSE.txt。模型由该提交的官方权重转换，构建记录包含哈希。
+- sherpa-onnx 1.13.8：Apache-2.0，原生音源分离程序和离线识别绑定，许可证随运行时收集。
+- 分离模型采用 k2-fsa/sherpa-onnx 官方 source-separation-models 发布的适配版 UVR-MDX-NET-Inst_HQ_3.onnx，上游模型来源 TRvlvr/model_repo。
+- Paraformer 和 Silero VAD 采用 sherpa-onnx 官方 asr-models 发布文件，构建脚本固定 SHA256。模型来源和版本随 runtime.json 保存；模型使用条件独立于推理程序许可证。
+- 中文标点恢复采用 sherpa-onnx 官方发布的 CT-Transformer 2024-04-12 int8 转换模型；上游 [ModelScope iic 模型卡](https://modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch/) 标注 Apache-2.0。安装包仅在本机运行该模型，构建脚本校验模型 SHA256；标点只是句界候选，不能保证语义准确。
+- PyTorch 2.5.1、NumPy 1.26.4 许可证随内置运行时收集；用户端不会执行 pip 或在线安装模型。

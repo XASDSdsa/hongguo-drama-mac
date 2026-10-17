@@ -83,6 +83,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('series-analysis-progress', listener);
     return () => ipcRenderer.removeListener('series-analysis-progress', listener);
   },
+  // 本地结构化拆解：独立模块与显式编排
+  getStructureRuntime: () => ipcRenderer.invoke('get-structure-runtime'),
+  getStructureProjects: () => ipcRenderer.invoke('get-structure-projects'),
+  reconstructionSelectVideo: () => ipcRenderer.invoke('reconstruction-select-video'),
+  getReconstructionStatus: (projectId) => ipcRenderer.invoke('get-reconstruction-status', projectId),
+  startReconstruction: (payload) => ipcRenderer.invoke('start-reconstruction', payload),
+  cancelReconstruction: (projectId) => ipcRenderer.invoke('cancel-reconstruction', projectId),
+  onReconstructionProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('reconstruction-progress', listener);
+    return () => ipcRenderer.removeListener('reconstruction-progress', listener);
+  },
+  // 下载管理的一键工作流：只接收已完成去重的集，逐集完成结构化并校验剪映草稿。
+  getSeriesWorkflowStatus: (seriesId) => ipcRenderer.invoke('get-series-workflow-status', seriesId),
+  startSeriesWorkflow: (payload) => ipcRenderer.invoke('start-series-workflow', payload),
+  cancelSeriesWorkflow: (batchId) => ipcRenderer.invoke('cancel-series-workflow', batchId),
+  onEpisodeWorkflowProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('episode-workflow-progress', listener);
+    return () => ipcRenderer.removeListener('episode-workflow-progress', listener);
+  },
   aiGenerateCover: (payload) => ipcRenderer.invoke('ai-generate-cover', payload),
   aiStartCopies: (payload) => ipcRenderer.invoke('ai-start-copies', payload),
   aiGenerateEpisodeCopy: (payload) => ipcRenderer.invoke('ai-generate-episode-copy', payload),

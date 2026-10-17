@@ -119,6 +119,29 @@ function saveMergeTasks(list) {
   flush();
 }
 
+// ===== v2 漫剧重建项目索引 =====
+function getReconstructionProjects() {
+  const c = loadCache();
+  if (!c.reconstructionProjects || typeof c.reconstructionProjects !== 'object') c.reconstructionProjects = {};
+  return c.reconstructionProjects;
+}
+
+function saveReconstructionProject(projectId, record) {
+  const projects = getReconstructionProjects();
+  projects[String(projectId)] = { ...record, projectId: String(projectId), updatedAt: Date.now() };
+  flush();
+}
+
+function getStructureProjects() {
+  const c = loadCache();
+  if (!c.structureProjects || typeof c.structureProjects !== 'object') c.structureProjects = {};
+  return c.structureProjects;
+}
+function saveStructureProject(projectId, record) {
+  getStructureProjects()[String(projectId)] = { ...record, updatedAt: Date.now() };
+  flush();
+}
+
 module.exports = {
   setErrorHandler: (handler) => { errorHandler = handler; },
   init,
@@ -134,4 +157,8 @@ module.exports = {
   savePlayback,
   getMergeTasks,
   saveMergeTasks,
+  getStructureProjects,
+  saveStructureProject,
+  getReconstructionProjects,
+  saveReconstructionProject,
 };

@@ -101,6 +101,8 @@ function SettingsPage({ active = true }) {
         'root', 'name_format', 'max_concurrent',
         'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password',
         'ai_base_url', 'ai_api_key', 'ai_image_model', 'ai_text_model', 'ai_transcription_model', 'ai_transcription_engine', 'whisper_binary_path', 'whisper_model_path', 'whisper_language', 'whisper_threads', 'faster_whisper_python_path', 'faster_whisper_script_path', 'faster_whisper_model', 'faster_whisper_device', 'faster_whisper_compute_type', 'faster_whisper_concurrency', 'ai_concurrency',
+        'structure_threads', 'structure_device', 'structure_sherpa_provider', 'structure_clip_audio', 'structure_punctuation_model',
+        'jianying_python_path', 'jianying_user_data_path', 'workflow_require_dedup', 'workflow_validate_draft',
       ];
       const submitted = { ...current };
       for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
@@ -264,6 +266,20 @@ function SettingsPage({ active = true }) {
         </div>
 
         <div className="settings-group">
+          <label className="settings-label">视频结构化拆解（本地）</label>
+          <p className="settings-hint">TransNet V2 分镜、FFmpeg 切片、sherpa-onnx 分离和 Paraformer 识别。第一版一次处理一集，重模型顺序运行。</p>
+          <div className="settings-grid mt8">
+            <label className="settings-field"><span>处理线程数</span><input className="input-field" type="number" min="1" max="32" value={settings.structure_threads ?? 2} onChange={e => update('structure_threads', Number(e.target.value))} /></label>
+            <label className="settings-field"><span>已确认分镜算法</span><input className="input-field" readOnly value="单路 0.5 · 时间结构复核 · 最短 2 秒" /></label>
+            <label className="settings-field"><span>TransNet V2 设备</span><select className="input-field" value={settings.structure_device || 'cpu'} onChange={e => update('structure_device', e.target.value)}><option value="cpu">CPU</option><option value="cuda">CUDA（需要兼容运行时）</option><option value="mps">Apple MPS（需要兼容运行时）</option></select></label>
+            <label className="settings-field"><span>分离 / 识别设备</span><select className="input-field" value="cpu" onChange={() => update('structure_sherpa_provider', 'cpu')}><option value="cpu">CPU（本版内置，支持线程设置）</option></select></label>
+            <label className="settings-field"><span>镜头视频音轨</span><select className="input-field" value={settings.structure_clip_audio || 'original'} onChange={e => update('structure_clip_audio', e.target.value)}><option value="original">保留原声</option><option value="mute">静音</option></select></label>
+            <label className="settings-field"><span>标点模型（可选覆盖）</span><input className="input-field" value={settings.structure_punctuation_model || ''} onChange={e => update('structure_punctuation_model', e.target.value)} placeholder="留空使用内置中文标点模型" /></label>
+          </div>
+          <p className="settings-hint">设备在运行前固定，不自动切换。安装包使用内置工具。修改参数后，重跑会使受影响的下游结果失效。</p>
+        </div>
+
+        <div className="settings-group">
           <label className="settings-label">网络代理</label>
           <div className="proxy-status-row">
             <span className={`proxy-dot ${proxyInfo.on ? 'proxy-dot-on' : 'proxy-dot-off'}`} />
@@ -278,6 +294,23 @@ function SettingsPage({ active = true }) {
           <p className="settings-hint">
             本机有代理（Clash / V2rayN 等）时在这里填上，解析剧集与下载视频都会走该代理。保存后立即生效，无需重启。
           </p>
+        </div>
+
+        <div className="settings-group">
+          <label className="settings-label">整集工作流</label>
+          <p className="settings-hint">工作流按每集独立记录：输入 → 结构化拆解 → 剪映草稿。这里控制两个阶段门禁，不把规则固定在程序里。</p>
+          <label className="proxy-switch-row">
+            <input type="checkbox" checked={settings.workflow_require_dedup !== false} onChange={e => update('workflow_require_dedup', e.target.checked)} />
+            <span className="proxy-switch-text">要求去重结果作为输入<em>关闭后允许使用已下载原视频进入结构化</em></span>
+          </label>
+          <label className="proxy-switch-row">
+            <input type="checkbox" checked={settings.workflow_validate_draft !== false} onChange={e => update('workflow_validate_draft', e.target.checked)} />
+            <span className="proxy-switch-text">生成后校验剪映草稿<em>关闭后只检查生成进程，不运行结构校验器</em></span>
+          </label>
+          <div className="settings-grid mt8">
+            <label className="settings-field"><span>剪映 Python 路径（可选）</span><input className="input-field" value={settings.jianying_python_path || ''} onChange={e => update('jianying_python_path', e.target.value)} placeholder="留空自动查找" /></label>
+            <label className="settings-field"><span>剪映 User Data（可选）</span><input className="input-field" value={settings.jianying_user_data_path || ''} onChange={e => update('jianying_user_data_path', e.target.value)} placeholder="留空使用默认目录" /></label>
+          </div>
         </div>
 
         <div className="settings-footer">

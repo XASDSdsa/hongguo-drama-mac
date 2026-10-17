@@ -24,10 +24,10 @@ if sys.platform == 'win32':
 
 a = Analysis(
     [str(root / 'src/native/faster_whisper_cli.py')],
-    pathex=[str(root)],
+    pathex=[str(root), str(root / 'src/native')],
     binaries=binaries,
     datas=datas,
-    hiddenimports=collect_submodules('av') + collect_submodules('huggingface_hub'),
+    hiddenimports=['scenedetect_runner', 'sentence_alignment'] + collect_submodules('av') + collect_submodules('huggingface_hub') + collect_submodules('scenedetect'),
     excludes=['torch', 'tensorflow', 'transformers', 'matplotlib', 'scipy', 'pandas', 'IPython'],
     noarchive=False,
 )

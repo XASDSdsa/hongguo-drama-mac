@@ -1,0 +1,6 @@
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+torch==2.5.1
+sherpa-onnx==1.13.8
+soundfile==0.13.1
+pyinstaller==6.16.0
