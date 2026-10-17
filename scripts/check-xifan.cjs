@@ -6,29 +6,74 @@ const vm = require('node:vm');
 const sourcePath = path.join(__dirname, '../src/native/xifan.js');
 const sid = 'xifan:huabo:drama1';
 const vid = `${sid}:episode1`;
-const list = { elements: [{ contents: [{ duanjuVo: { source: 'huabo', duanjuId: 'drama1', title: '<tag>测试剧</tag>', total: 3, categories: ['都市'] } }] }], hasMore: true, offset: 30 };
-const detail = { source: 'huabo', duanjuId: 'drama1', title: '测试剧', episodeList: [
-  { episodeId: 'episode1', index: 1, unlock: true, playUrl: 'https://dj.youlishipin.com/duanju/video302?episodeId=episode1' },
-  { episodeId: 'episode2', index: 2, unlock: false, playUrl: 'https://dj.youlishipin.com/duanju/video302?episodeId=episode2' },
-  { episodeId: 'episode3', index: 3, playUrl: 'https://dj.youlishipin.com/duanju/video302?episodeId=episode3' },
-] };
+const list = {
+  elements: [
+    {
+      contents: [
+        {
+          duanjuVo: { source: 'huabo', duanjuId: 'drama1', title: '<tag>测试剧</tag>', total: 3, categories: ['都市'] },
+        },
+      ],
+    },
+  ],
+  hasMore: true,
+  offset: 30,
+};
+const detail = {
+  source: 'huabo',
+  duanjuId: 'drama1',
+  title: '测试剧',
+  episodeList: [
+    {
+      episodeId: 'episode1',
+      index: 1,
+      unlock: true,
+      playUrl: 'https://dj.youlishipin.com/duanju/video302?episodeId=episode1',
+    },
+    {
+      episodeId: 'episode2',
+      index: 2,
+      unlock: false,
+      playUrl: 'https://dj.youlishipin.com/duanju/video302?episodeId=episode2',
+    },
+    { episodeId: 'episode3', index: 3, playUrl: 'https://dj.youlishipin.com/duanju/video302?episodeId=episode3' },
+  ],
+};
 
 async function check() {
   assert.ok(fs.existsSync(sourcePath), '缺少西饭原生适配器');
   const requests = [];
-  const axios = { get: async (url, options) => {
-    requests.push({ url, options });
-    assert.equal(new URL(url).origin, 'https://xifan-api-cn.youlishipin.com');
-    assert.ok(!/cookie|authorization|session|token/i.test(JSON.stringify(options)));
-    const data = url.includes('getDuanjuInfo') ? detail : options.params.reqType === 'duanjuCategory'
-      ? { elements: [{ contents: [
-        { categoryItemVo: { categoryId: 68, oppoCategory: '都市', version: 1 } },
-        { categoryItemVo: { categoryId: 68, oppoCategory: '青春', version: 1 } },
-      ] }] } : list;
-    return { data: { ret: 0, result: structuredClone(data) } };
-  } };
-  const context = { module: { exports: {} }, require: name => name === 'axios' ? axios : require(name),
-    Buffer, URL, AbortController, setTimeout, clearTimeout };
+  const axios = {
+    get: async (url, options) => {
+      requests.push({ url, options });
+      assert.equal(new URL(url).origin, 'https://xifan-api-cn.youlishipin.com');
+      assert.ok(!/cookie|authorization|session|token/i.test(JSON.stringify(options)));
+      const data = url.includes('getDuanjuInfo')
+        ? detail
+        : options.params.reqType === 'duanjuCategory'
+          ? {
+              elements: [
+                {
+                  contents: [
+                    { categoryItemVo: { categoryId: 68, oppoCategory: '都市', version: 1 } },
+                    { categoryItemVo: { categoryId: 68, oppoCategory: '青春', version: 1 } },
+                  ],
+                },
+              ],
+            }
+          : list;
+      return { data: { ret: 0, result: structuredClone(data) } };
+    },
+  };
+  const context = {
+    module: { exports: {} },
+    require: (name) => (name === 'axios' ? axios : require(name)),
+    Buffer,
+    URL,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  };
   vm.runInNewContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   const xifan = context.module.exports;
   const browse = await xifan.browseList({ page: 1 });
@@ -59,15 +104,33 @@ async function check() {
   assert.equal((await xifan.fetchPlayUrlSingle(vid, sid)).url, null, '原先可用地址也必须重新验锁');
   assert.equal((await xifan.fetchPlayUrlSingle(`${sid}:episode2`, sid)).locked, true);
   detail.episodeList[0].unlock = true;
-  for (const invalid of ['http://media.example/file.mp4', 'https://user:pass@dj.youlishipin.com/file', 'file:///tmp/video.mp4']) {
+  for (const invalid of [
+    'http://media.example/file.mp4',
+    'https://user:pass@dj.youlishipin.com/file',
+    'file:///tmp/video.mp4',
+  ]) {
     detail.episodeList[0].playUrl = invalid;
     assert.equal((await xifan.fetchPlayUrlSingle(vid, sid)).url, null);
   }
   assert.equal((await xifan.fetchPlayUrlSingle(vid, 'xifan:other:drama1')).url, null);
   assert.equal((await xifan.fetchPlayUrlSingle('123', sid)).url, null);
   await assert.rejects(xifan.fetchEpisodeList('xifan:huabo:../outside'));
-  const nativeContext = { module: { exports: {} }, Buffer, process: { env: {} },
-    require: name => name === './xifan' ? xifan : name === 'axios' ? { get: () => { throw Error('西饭不得回退红果'); } } : require(name), console };
+  const nativeContext = {
+    module: { exports: {} },
+    Buffer,
+    process: { env: {} },
+    require: (name) =>
+      name === './xifan'
+        ? xifan
+        : name === 'axios'
+          ? {
+              get: () => {
+                throw Error('西饭不得回退红果');
+              },
+            }
+          : require(name),
+    console,
+  };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/native/hongguo.js'), 'utf8'), nativeContext);
   assert.equal((await nativeContext.module.exports.fetchEpisodeList(sid)).source, 'xifan');
   assert.equal((await nativeContext.module.exports.fetchPlayUrlSingle(`${sid}:episode2`, sid)).locked, true);
@@ -87,7 +150,7 @@ async function live() {
   const search = await xifan.search('老婆大人别想逃');
   assert.ok(search.results.length);
   const detail = await xifan.fetchEpisodeList('xifan:huabo:hbEpisodes0000000000000000000083');
-  const locked = detail.episodes.find(episode => episode.locked);
+  const locked = detail.episodes.find((episode) => episode.locked);
   assert.ok(locked);
   assert.equal((await xifan.fetchPlayUrlSingle(locked.vid, detail.series_id)).url, null);
   const play = await xifan.fetchPlayUrlSingle(detail.episodes[0].vid, detail.series_id);
@@ -95,9 +158,24 @@ async function live() {
   const head = await require('axios').head(play.url, { timeout: 10000, maxRedirects: 5 });
   assert.equal(head.status, 200);
   assert.match(head.headers['content-type'], /video/);
-  console.log(JSON.stringify({ live: 'PASS', browse: browse.results.length, page2: next.results.length,
-    search: search.results.length, episodes: detail.episodes.length, locked: detail.episodes.filter(e => e.locked).length,
-    headStatus: head.status, mediaType: head.headers['content-type'], bytes: head.headers['content-length'] }));
+  console.log(
+    JSON.stringify({
+      live: 'PASS',
+      browse: browse.results.length,
+      page2: next.results.length,
+      search: search.results.length,
+      episodes: detail.episodes.length,
+      locked: detail.episodes.filter((e) => e.locked).length,
+      headStatus: head.status,
+      mediaType: head.headers['content-type'],
+      bytes: head.headers['content-length'],
+    }),
+  );
 }
 
-check().then(() => process.argv.includes('--live') ? live() : undefined).catch(error => { console.error(error.message); process.exitCode = 1; });
+check()
+  .then(() => (process.argv.includes('--live') ? live() : undefined))
+  .catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });

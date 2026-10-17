@@ -60,11 +60,14 @@ function Browse({ onNavigate, active = true }) {
     setDetailLoading(false);
   }, []);
 
-  useEffect(() => () => {
-    detailRequest.current++;
-    invalidateList();
-    clearTimeout(toastTimer.current);
-  }, [invalidateList]);
+  useEffect(
+    () => () => {
+      detailRequest.current++;
+      invalidateList();
+      clearTimeout(toastTimer.current);
+    },
+    [invalidateList],
+  );
 
   // 已下载统计（按 series_id -> 已下载集数）
   const [downloadedMap, setDownloadedMap] = useState({});
@@ -130,7 +133,12 @@ function Browse({ onNavigate, active = true }) {
         if (!res?.success) throw new Error(res?.error || '来源暂时不可用');
         const next = {
           results: Array.isArray(res.results) ? res.results : [],
-          meta: { total: res.total || 0, totalPages: res.totalPages || 0, genres: res.genres || [], hasMore: res.hasMore === true },
+          meta: {
+            total: res.total || 0,
+            totalPages: res.totalPages || 0,
+            genres: res.genres || [],
+            hasMore: res.hasMore === true,
+          },
           sourceUrl: res.sourceUrl || '',
           savedAt: Date.now(),
         };
@@ -156,14 +164,16 @@ function Browse({ onNavigate, active = true }) {
         }
       }
     },
-    [invalidateList, source]
+    [invalidateList, source],
   );
 
   useEffect(() => {
     loadCategories();
   }, [loadCategories]);
 
-  useEffect(() => { if (active) loadDownloadedMap(); }, [active, loadDownloadedMap]);
+  useEffect(() => {
+    if (active) loadDownloadedMap();
+  }, [active, loadDownloadedMap]);
 
   useEffect(() => {
     loadList(category, genre, page);
@@ -265,9 +275,13 @@ function Browse({ onNavigate, active = true }) {
     if (!detail) return;
     try {
       const nums = parseEpisodeRange(expr, detail.episodes.length);
-      setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked && nums.has(e.vid_index)).map((e) => e.vid_index)));
+      setSelectedIdx(
+        new Set(detail.episodes.filter((e) => !e.locked && nums.has(e.vid_index)).map((e) => e.vid_index)),
+      );
       setRangeError('');
-    } catch (error) { setRangeError(error.message); }
+    } catch (error) {
+      setRangeError(error.message);
+    }
   };
 
   const downloadSelected = async () => {
@@ -314,7 +328,9 @@ function Browse({ onNavigate, active = true }) {
       const res = await window.electronAPI.searchWindowShow(true, sourceUrl);
       if (res?.success === false) throw new Error(res.error || '来源页面打开失败');
       showToast('已打开当前来源页面');
-    } catch (e) { showToast(e.message || '来源页面打开失败', 'error'); }
+    } catch (e) {
+      showToast(e.message || '来源页面打开失败', 'error');
+    }
   };
 
   useDialogKeyboard(active && (!!detail || detailLoading), closeDetail, '.browse-drawer');
@@ -337,40 +353,61 @@ function Browse({ onNavigate, active = true }) {
     <div className="browse-container">
       <div className="browse-header">
         <div className="browse-title">
-          <div><h2>发现短剧</h2><p className="page-description">挑一部喜欢的，让故事继续。</p></div>
+          <div>
+            <h2>发现短剧</h2>
+            <p className="page-description">挑一部喜欢的，让故事继续。</p>
+          </div>
         </div>
         <div className="browse-header-right">
-          <label className="source-control">来源<select className="input-field" aria-label="短剧来源" value={source} onChange={(e) => switchSource(e.target.value)}><option value="hongguo">红果短剧</option><option value="xifan">西饭短剧</option></select></label>
-          <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />搜索短剧</button>
-          <button className="btn btn-outline" disabled={loading} onClick={() => loadList(category, genre, page, true)}><RefreshCw size={15} />刷新片单</button>
+          <label className="source-control">
+            来源
+            <select
+              className="input-field"
+              aria-label="短剧来源"
+              value={source}
+              onChange={(e) => switchSource(e.target.value)}
+            >
+              <option value="hongguo">红果短剧</option>
+              <option value="xifan">西饭短剧</option>
+            </select>
+          </label>
+          <button className="btn btn-primary" onClick={() => onNavigate('download')}>
+            <Search size={15} />
+            搜索短剧
+          </button>
+          <button className="btn btn-outline" disabled={loading} onClick={() => loadList(category, genre, page, true)}>
+            <RefreshCw size={15} />
+            刷新片单
+          </button>
           {meta.total > 0 && <span className="browse-stat">共 {meta.total} 部</span>}
-          {source === 'hongguo' && sourceUrl && <button className="btn btn-outline" onClick={showBrowser}>
-            <ExternalLink size={15} />
-            打开来源页面
-          </button>}
+          {source === 'hongguo' && sourceUrl && (
+            <button className="btn btn-outline" onClick={showBrowser}>
+              <ExternalLink size={15} />
+              打开来源页面
+            </button>
+          )}
         </div>
       </div>
 
       {/* 分类 tab */}
-      {source === 'hongguo' && <div className="browse-cats">
-        {(categories.length ? categories : [{ slug: 'real-drama', label: '真人剧' }]).map((c) => (
-          <button
-            key={c.slug}
-            className={`browse-cat ${category === c.slug ? 'active' : ''}`}
-            onClick={() => switchCategory(c.slug)}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>}
+      {source === 'hongguo' && (
+        <div className="browse-cats">
+          {(categories.length ? categories : [{ slug: 'real-drama', label: '真人剧' }]).map((c) => (
+            <button
+              key={c.slug}
+              className={`browse-cat ${category === c.slug ? 'active' : ''}`}
+              onClick={() => switchCategory(c.slug)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 题材 chips */}
       {meta.genres.length > 0 && (
         <div className="browse-genres">
-          <button
-            className={`genre-chip ${genre === '' ? 'active' : ''}`}
-            onClick={() => switchGenre('')}
-          >
+          <button className={`genre-chip ${genre === '' ? 'active' : ''}`} onClick={() => switchGenre('')}>
             {source === 'xifan' ? '默认分类' : '全部'}
           </button>
           {meta.genres.map((g) => (
@@ -385,12 +422,58 @@ function Browse({ onNavigate, active = true }) {
         </div>
       )}
 
-      {error && <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}><Film size={36} /><h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3><p>{error}</p><div className="search-empty-actions">{unsupported ? <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>查看漫剧</button> : <button className="btn btn-primary" onClick={() => loadList(category, genre, page, true)}><RefreshCw size={15} />重新加载</button>}<button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
+      {error && (
+        <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}>
+          <Film size={36} />
+          <h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3>
+          <p>{error}</p>
+          <div className="search-empty-actions">
+            {unsupported ? (
+              <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>
+                查看漫剧
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={() => loadList(category, genre, page, true)}>
+                <RefreshCw size={15} />
+                重新加载
+              </button>
+            )}
+            <button className="btn btn-outline" onClick={() => onNavigate('download')}>
+              按剧名搜索
+            </button>
+          </div>
+        </div>
+      )}
 
-      {loading && results.length > 0 && <div className="browse-loading" role="status"><RefreshCw size={18} className="spin" /><span>正在更新片单，仍可浏览上次结果…</span><button className="btn btn-outline btn-sm" onClick={cancelList}>取消加载</button></div>}
+      {loading && results.length > 0 && (
+        <div className="browse-loading" role="status">
+          <RefreshCw size={18} className="spin" />
+          <span>正在更新片单，仍可浏览上次结果…</span>
+          <button className="btn btn-outline btn-sm" onClick={cancelList}>
+            取消加载
+          </button>
+        </div>
+      )}
 
       {loading && results.length === 0 ? (
-        <div className="browse-loading-state" role="status"><div className="browse-loading"><RefreshCw size={18} className="spin" /><span>正在加载{categories.find((item) => item.slug === category)?.label || '短剧'}…</span><button className="btn btn-outline btn-sm" onClick={cancelList}>取消加载</button></div><div className="poster-skeletons" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <div className="poster-skeleton" key={i}><div /><span /><span /></div>)}</div></div>
+        <div className="browse-loading-state" role="status">
+          <div className="browse-loading">
+            <RefreshCw size={18} className="spin" />
+            <span>正在加载{categories.find((item) => item.slug === category)?.label || '短剧'}…</span>
+            <button className="btn btn-outline btn-sm" onClick={cancelList}>
+              取消加载
+            </button>
+          </div>
+          <div className="poster-skeletons" aria-hidden="true">
+            {Array.from({ length: 5 }, (_, i) => (
+              <div className="poster-skeleton" key={i}>
+                <div />
+                <span />
+                <span />
+              </div>
+            ))}
+          </div>
+        </div>
       ) : (
         <div className="browse-grid">
           {results.map((item) => {
@@ -407,11 +490,11 @@ function Browse({ onNavigate, active = true }) {
                   {item.cover ? (
                     <img src={item.cover} alt={item.series_title} loading="lazy" />
                   ) : (
-                    <div className="cover-placeholder"><Film size={22} /></div>
+                    <div className="cover-placeholder">
+                      <Film size={22} />
+                    </div>
                   )}
-                  {item.episode_count > 0 && (
-                    <span className="browse-ep-badge">全{item.episode_count}集</span>
-                  )}
+                  {item.episode_count > 0 && <span className="browse-ep-badge">全{item.episode_count}集</span>}
                   {dl && dl.completed > 0 && (
                     <span className="browse-dl-badge">
                       <Check size={11} /> {dl.completed}/{dl.total}
@@ -427,7 +510,9 @@ function Browse({ onNavigate, active = true }) {
                 {item.tags && item.tags.length > 0 && (
                   <div className="browse-card-tags">
                     {item.tags.slice(0, 2).map((t) => (
-                      <span key={t} className="browse-tag">{t}</span>
+                      <span key={t} className="browse-tag">
+                        {t}
+                      </span>
                     ))}
                   </div>
                 )}
@@ -440,28 +525,51 @@ function Browse({ onNavigate, active = true }) {
       {/* 分页 */}
       {totalPages > 1 && (
         <div className="browse-pager">
-          <button className="pager-item" aria-label="上一页" disabled={page <= 1} onClick={() => gotoPage(page - 1)}>‹</button>
+          <button className="pager-item" aria-label="上一页" disabled={page <= 1} onClick={() => gotoPage(page - 1)}>
+            ‹
+          </button>
           {pageNumbers.map((n, i) => (
             <React.Fragment key={n}>
               {i > 0 && n - pageNumbers[i - 1] > 1 && <span className="pager-gap">…</span>}
-              <button
-                className={`pager-item ${n === page ? 'active' : ''}`}
-                onClick={() => gotoPage(n)}
-              >
+              <button className={`pager-item ${n === page ? 'active' : ''}`} onClick={() => gotoPage(n)}>
                 {n}
               </button>
             </React.Fragment>
           ))}
-          <button className="pager-item" aria-label="下一页" disabled={page >= totalPages} onClick={() => gotoPage(page + 1)}>›</button>
+          <button
+            className="pager-item"
+            aria-label="下一页"
+            disabled={page >= totalPages}
+            onClick={() => gotoPage(page + 1)}
+          >
+            ›
+          </button>
         </div>
       )}
 
-      {source === 'xifan' && (page > 1 || meta.hasMore) && <div className="browse-pager"><button className="pager-item" disabled={page <= 1 || loading} onClick={() => gotoPage(page - 1)}>上一页</button><span>第 {page} 页</span><button className="pager-item" disabled={!meta.hasMore || loading} onClick={() => gotoPage(page + 1)}>下一页</button></div>}
+      {source === 'xifan' && (page > 1 || meta.hasMore) && (
+        <div className="browse-pager">
+          <button className="pager-item" disabled={page <= 1 || loading} onClick={() => gotoPage(page - 1)}>
+            上一页
+          </button>
+          <span>第 {page} 页</span>
+          <button className="pager-item" disabled={!meta.hasMore || loading} onClick={() => gotoPage(page + 1)}>
+            下一页
+          </button>
+        </div>
+      )}
 
       {/* ===== 剧集详情抽屉 ===== */}
       {(detail || detailLoading) && (
         <div className="browse-drawer-mask" onClick={closeDetail}>
-          <div className="browse-drawer" role="dialog" aria-modal="true" aria-label="剧集详情" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+          <div
+            className="browse-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="剧集详情"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="browse-drawer-head">
               <div className="browse-drawer-title">
                 <Film size={18} />
@@ -486,12 +594,21 @@ function Browse({ onNavigate, active = true }) {
                     {detail.cover && <img src={detail.cover} alt="" className="browse-drawer-cover" />}
                     <div className="browse-drawer-meta">
                       <div className="browse-drawer-count">
-                        {String(detail.series_id).startsWith('hema:') ? '河马短剧' : String(detail.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'} · 共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
+                        {String(detail.series_id).startsWith('hema:')
+                          ? '河马短剧'
+                          : String(detail.series_id).startsWith('xifan:')
+                            ? '西饭短剧'
+                            : '红果短剧'}{' '}
+                        · 共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
                       </div>
                       {detail.web_accessible_episodes != null && detail.web_accessible_episodes < detail.total && (
-                        <div className="browse-drawer-sub">网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</div>
+                        <div className="browse-drawer-sub">
+                          网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。
+                        </div>
                       )}
-                      {detail.episodes.some((ep) => ep.locked) && <div className="browse-drawer-sub">标记“锁定”的集数需在来源平台解锁，本应用不提供解锁。</div>}
+                      {detail.episodes.some((ep) => ep.locked) && (
+                        <div className="browse-drawer-sub">标记“锁定”的集数需在来源平台解锁，本应用不提供解锁。</div>
+                      )}
                       <div className="browse-drawer-sub">选中 {selectedIdx.size} 集待下载</div>
                       <div className="browse-range-row">
                         <input
@@ -500,18 +617,45 @@ function Browse({ onNavigate, active = true }) {
                           aria-label="选择集数范围"
                           placeholder="区间，如 1-50 或 1,3,5"
                           value={rangeInput}
-                          onChange={(e) => { setRangeInput(e.target.value); setRangeError(''); }}
+                          onChange={(e) => {
+                            setRangeInput(e.target.value);
+                            setRangeError('');
+                          }}
                           onKeyDown={(e) => isSubmitKey(e) && applyRange(rangeInput)}
                         />
-                        <button className="btn btn-outline btn-sm" onClick={() => applyRange(rangeInput)}>应用</button>
+                        <button className="btn btn-outline btn-sm" onClick={() => applyRange(rangeInput)}>
+                          应用
+                        </button>
                       </div>
-                      {rangeError && <p className="alert alert-error" role="alert">{rangeError}</p>}
+                      {rangeError && (
+                        <p className="alert alert-error" role="alert">
+                          {rangeError}
+                        </p>
+                      )}
                       <div className="preset-row mt8">
-                        <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(10, detail.total)}`)}>前10集</button>
-                        <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(30, detail.total)}`)}>前30集</button>
-                        <button className="btn-chip" onClick={() => applyRange(`${Math.max(1, detail.total - 29)}-${detail.total}`)}>后30集</button>
-                        <button className="btn-chip" onClick={() => setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked).map((e) => e.vid_index)))}>全选</button>
-                        <button className="btn-chip" onClick={() => setSelectedIdx(new Set())}>清空</button>
+                        <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(10, detail.total)}`)}>
+                          前10集
+                        </button>
+                        <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(30, detail.total)}`)}>
+                          前30集
+                        </button>
+                        <button
+                          className="btn-chip"
+                          onClick={() => applyRange(`${Math.max(1, detail.total - 29)}-${detail.total}`)}
+                        >
+                          后30集
+                        </button>
+                        <button
+                          className="btn-chip"
+                          onClick={() =>
+                            setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked).map((e) => e.vid_index)))
+                          }
+                        >
+                          全选
+                        </button>
+                        <button className="btn-chip" onClick={() => setSelectedIdx(new Set())}>
+                          清空
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -526,7 +670,8 @@ function Browse({ onNavigate, active = true }) {
                         onClick={() => toggleIdx(ep.vid_index)}
                         title={ep.locked ? '需在来源平台解锁' : ep.title || `第 ${ep.vid_index} 集`}
                       >
-                        <span className="ep-num">{ep.vid_index}</span>{ep.locked && <span className="ep-lock-label">锁定</span>}
+                        <span className="ep-num">{ep.vid_index}</span>
+                        {ep.locked && <span className="ep-lock-label">锁定</span>}
                         {ep.status === 'completed' && <Check size={11} className="ep-badge" />}
                         {selectedIdx.has(ep.vid_index) && <span className="ep-pick-dot" />}
                       </button>
@@ -535,7 +680,11 @@ function Browse({ onNavigate, active = true }) {
                 </div>
 
                 <div className="browse-drawer-foot">
-                  <button className="btn btn-outline" disabled={!detail.episodes.some((ep) => !ep.locked)} onClick={playNow}>
+                  <button
+                    className="btn btn-outline"
+                    disabled={!detail.episodes.some((ep) => !ep.locked)}
+                    onClick={playNow}
+                  >
                     <Play size={15} />
                     立即播放
                   </button>

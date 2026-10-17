@@ -39,9 +39,13 @@ function flush() {
     fs.renameSync(temporary, dataFile);
     durable = serialized;
   } catch (e) {
-    try { fs.unlinkSync(temporary); } catch {}
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
     cache = JSON.parse(durable);
-    try { errorHandler?.({ error: '保存失败，请检查磁盘空间或目录权限；本次变更未能保存。' }); } catch {}
+    try {
+      errorHandler?.({ error: '保存失败，请检查磁盘空间或目录权限；本次变更未能保存。' });
+    } catch {}
     throw e;
   }
 }
@@ -120,7 +124,9 @@ function saveMergeTasks(list) {
 }
 
 module.exports = {
-  setErrorHandler: (handler) => { errorHandler = handler; },
+  setErrorHandler: (handler) => {
+    errorHandler = handler;
+  },
   init,
   getSettings,
   saveSettings,

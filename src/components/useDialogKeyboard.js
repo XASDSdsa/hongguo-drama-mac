@@ -9,8 +9,12 @@ export default function useDialogKeyboard(open, close, selector) {
     const trigger = document.activeElement;
     const dialog = document.querySelector(selector);
     if (!dialog) return;
-    const controls = () => [...dialog.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]')]
-      .filter((element) => element.getClientRects().length > 0);
+    const controls = () =>
+      [
+        ...dialog.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]',
+        ),
+      ].filter((element) => element.getClientRects().length > 0);
     const first = controls()[0];
     (first || dialog).focus();
     const onKey = (event) => {
@@ -20,13 +24,18 @@ export default function useDialogKeyboard(open, close, selector) {
       }
       if (event.key !== 'Tab') return;
       const items = controls();
-      if (!items.length) { event.preventDefault(); return; }
+      if (!items.length) {
+        event.preventDefault();
+        return;
+      }
       const firstItem = items[0];
       const lastItem = items[items.length - 1];
       if (event.shiftKey && (document.activeElement === firstItem || !dialog.contains(document.activeElement))) {
-        event.preventDefault(); lastItem.focus();
+        event.preventDefault();
+        lastItem.focus();
       } else if (!event.shiftKey && (document.activeElement === lastItem || !dialog.contains(document.activeElement))) {
-        event.preventDefault(); firstItem.focus();
+        event.preventDefault();
+        firstItem.focus();
       }
     };
     document.addEventListener('keydown', onKey);

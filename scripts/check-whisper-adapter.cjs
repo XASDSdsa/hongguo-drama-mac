@@ -13,17 +13,21 @@ const { transcribeAudio, checkWhisper, cleanTranscript } = require('../src/nativ
     const model = path.join(root, 'ggml-tiny.bin');
     await fsp.writeFile(model, Buffer.alloc(4096, 1));
     const fakeScript = path.join(root, 'fake-whisper.js');
-    await fsp.writeFile(fakeScript, String.raw`const fs = require('node:fs');
+    await fsp.writeFile(
+      fakeScript,
+      String.raw`const fs = require('node:fs');
 const args = process.argv.slice(2);
 const i = args.indexOf('-of');
 const prefix = i >= 0 ? args[i + 1] : '';
 if (prefix) fs.writeFileSync(prefix + '.txt', '[00:00:00.000 --> 00:00:01.000]\n你好，这是本地识别。\n');
 process.stdout.write('system_info: fake\n');
-`);
+`,
+    );
     const fake = path.join(root, process.platform === 'win32' ? 'whisper-cli.cmd' : 'whisper-cli');
-    const fakeContent = process.platform === 'win32'
-      ? `@echo off\r\nnode "%~dp0fake-whisper.js" %*\r\n`
-      : String.raw`#!/usr/bin/env node
+    const fakeContent =
+      process.platform === 'win32'
+        ? `@echo off\r\nnode "%~dp0fake-whisper.js" %*\r\n`
+        : String.raw`#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const i = args.indexOf('-of');
@@ -37,7 +41,11 @@ process.stdout.write('system_info: fake\n');
 
     const status = checkWhisper({ whisper_binary_path: fake, whisper_model_path: model, projectRoot: root });
     assert.equal(status.available, true);
-    const text = await transcribeAudio(audio, { language: 'zh' }, { whisper_binary_path: fake, whisper_model_path: model, projectRoot: root });
+    const text = await transcribeAudio(
+      audio,
+      { language: 'zh' },
+      { whisper_binary_path: fake, whisper_model_path: model, projectRoot: root },
+    );
     assert.equal(text, '你好，这是本地识别。');
     assert.equal(cleanTranscript('[00:01.000 --> 00:02.000] 台词'), '台词');
 
@@ -48,4 +56,7 @@ process.stdout.write('system_info: fake\n');
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+})().catch((error) => {
+  console.error(error.stack || error.message);
+  process.exitCode = 1;
+});

@@ -3,67 +3,71 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const API = "https://api5-normal-sinfonlineb.fqnovel.com";
-const UA = "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)";
-const VIDEO_REFERER = "https://novelquickapp.com/";
+const API = 'https://api5-normal-sinfonlineb.fqnovel.com';
+const UA = 'com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)';
+const VIDEO_REFERER = 'https://novelquickapp.com/';
 
 // ===== 优先使用官网网页版，App 接口保留为回退 =====
 // 官网 player 页是服务端渲染的：完整分集 vid 列表与可直接下载的 MP4 直链
 // 都内嵌在 HTML 里，无需任何签名。走的是官网对普通用户开放的同一层。
-const SITE_ORIGIN = "https://hongguoduanju.com";
-const WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-const WEB_REFERER = SITE_ORIGIN + "/";
+const SITE_ORIGIN = 'https://hongguoduanju.com';
+const WEB_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+const WEB_REFERER = SITE_ORIGIN + '/';
 
 const COMMON_QUERY = {
-  ...Object.fromEntries([
-    ['klink_egdi', process.env.HONGGUO_KLINK_EGDI],
-    ['iid', process.env.HONGGUO_IID],
-    ['device_id', process.env.HONGGUO_DEVICE_ID],
-    ['cdid', process.env.HONGGUO_CDID],
-  ].filter(([, value]) => value)),
-  ac: "wifi",
-  channel: "oppo_8662_64",
-  aid: "8662",
-  app_name: "novelread",
-  version_code: "71532",
-  version_name: "7.1.5.32",
-  device_platform: "android",
-  os: "android",
-  ssmix: "a",
-  device_type: "SM-N9860",
-  device_brand: "Samsung",
-  language: "zh",
-  os_api: "28",
-  os_version: "9",
-  manifest_version_code: "71532",
-  resolution: "900*1600",
-  dpi: "320",
-  update_version_code: "71532",
-  host_abi: "arm64-v8a",
-  dragon_device_type: "pad",
-  pv_player: "71532",
-  compliance_status: "0",
-  need_personal_recommend: "1",
-  player_so_load: "1",
-  is_android_pad_screen: "0",
-  rom_version: "PQ3A.190705.10241111+release-keys",
+  ...Object.fromEntries(
+    [
+      ['klink_egdi', process.env.HONGGUO_KLINK_EGDI],
+      ['iid', process.env.HONGGUO_IID],
+      ['device_id', process.env.HONGGUO_DEVICE_ID],
+      ['cdid', process.env.HONGGUO_CDID],
+    ].filter(([, value]) => value),
+  ),
+  ac: 'wifi',
+  channel: 'oppo_8662_64',
+  aid: '8662',
+  app_name: 'novelread',
+  version_code: '71532',
+  version_name: '7.1.5.32',
+  device_platform: 'android',
+  os: 'android',
+  ssmix: 'a',
+  device_type: 'SM-N9860',
+  device_brand: 'Samsung',
+  language: 'zh',
+  os_api: '28',
+  os_version: '9',
+  manifest_version_code: '71532',
+  resolution: '900*1600',
+  dpi: '320',
+  update_version_code: '71532',
+  host_abi: 'arm64-v8a',
+  dragon_device_type: 'pad',
+  pv_player: '71532',
+  compliance_status: '0',
+  need_personal_recommend: '1',
+  player_so_load: '1',
+  is_android_pad_screen: '0',
+  rom_version: 'PQ3A.190705.10241111+release-keys',
 };
 
 const HEADERS = {
-  "User-Agent": UA,
-  "Accept-Encoding": "gzip",
-  "Accept": "application/json; charset=utf-8,application/x-protobuf",
-  "Content-Type": "application/json; charset=utf-8",
-  "Host": "api5-normal-sinfonlineb.fqnovel.com",
+  'User-Agent': UA,
+  'Accept-Encoding': 'gzip',
+  Accept: 'application/json; charset=utf-8,application/x-protobuf',
+  'Content-Type': 'application/json; charset=utf-8',
+  Host: 'api5-normal-sinfonlineb.fqnovel.com',
 };
 
 const DETAIL_BIZ_PARAM = {
   detail_page_version: 0,
   disable_digg_stat: false,
-  image_shrink_datas_str: "W3siaW1hZ2VfdHlwZSI6MywiaW1hZ2Vfd2lkdGgiOjkwMCwic2hyaW5rX3R5cGUiOjN9LHsiaW1hZ2VfdHlwZSI6NCwiaW1hZ2Vfd2lkdGgiOjcyLCJzaHJpbmtfdHlwZSI6NH1d\n",
+  image_shrink_datas_str:
+    'W3siaW1hZ2VfdHlwZSI6MywiaW1hZ2Vfd2lkdGgiOjkwMCwic2hyaW5rX3R5cGUiOjN9LHsiaW1hZ2VfdHlwZSI6NCwiaW1hZ2Vfd2lkdGgiOjcyLCJzaHJpbmtfdHlwZSI6NH1d\n',
   need_all_video_definition: false,
   need_mp4_align: false,
-  screen_width_px: "900",
+  screen_width_px: '900',
   source: 7,
   use_os_player: false,
   use_server_dns: false,
@@ -105,9 +109,7 @@ async function apiCall(apiPath, body, retries = 3) {
       }
       if (buf.length === 0) {
         // 服务端返回 200 但无任何内容：网关在做业务处理前就丢弃了请求
-        const err = new Error(
-          `接口返回空响应（HTTP 200，0 字节）${signal.logid ? ' logid=' + signal.logid : ''}`
-        );
+        const err = new Error(`接口返回空响应（HTTP 200，0 字节）${signal.logid ? ' logid=' + signal.logid : ''}`);
         err.emptyResponse = true;
         err.detail = signal;
         throw err;
@@ -125,7 +127,7 @@ async function apiCall(apiPath, body, retries = 3) {
         if (err.detail === undefined) err.detail = signal;
         throw err;
       }
-      await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
     }
   }
 }
@@ -141,11 +143,14 @@ async function cachedRequest(key, ttl, load) {
   if (cached && cached.expires > Date.now()) return cached.value;
   responseCache.delete(key);
   if (pendingRequests.has(key)) return pendingRequests.get(key);
-  const request = Promise.resolve().then(load).then(value => {
-    responseCache.set(key, { value, expires: Date.now() + ttl });
-    if (responseCache.size > 128) responseCache.delete(responseCache.keys().next().value);
-    return value;
-  }).finally(() => pendingRequests.delete(key));
+  const request = Promise.resolve()
+    .then(load)
+    .then((value) => {
+      responseCache.set(key, { value, expires: Date.now() + ttl });
+      if (responseCache.size > 128) responseCache.delete(responseCache.keys().next().value);
+      return value;
+    })
+    .finally(() => pendingRequests.delete(key));
   pendingRequests.set(key, request);
   return request;
 }
@@ -171,9 +176,9 @@ async function fetchSiteHtml(url) {
   const res = await axios.get(url, {
     headers: {
       'User-Agent': WEB_UA,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'zh-CN,zh;q=0.9',
-      'Referer': WEB_REFERER,
+      Referer: WEB_REFERER,
     },
     timeout: 30000,
     responseType: 'text',
@@ -264,7 +269,8 @@ async function resolveSeriesId(shareUrl) {
   }
   const res = await axios.get(trimmed, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Linux; Android 9; SM-N9860) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.152 Mobile Safari/537.36",
+      'User-Agent':
+        'Mozilla/5.0 (Linux; Android 9; SM-N9860) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.152 Mobile Safari/537.36',
     },
     timeout: 25000,
     maxRedirects: 10,
@@ -282,10 +288,13 @@ async function resolveSeriesId(shareUrl) {
   }
 
   const bodyText = typeof res.data === 'string' ? res.data : JSON.stringify(res.data || '');
-  m = bodyText.match(/video_series_id=(\d+)/) || bodyText.match(/"video_id"\s*:\s*"(\d+)"/) || bodyText.match(/"series_id"\s*:\s*"(\d+)"/);
+  m =
+    bodyText.match(/video_series_id=(\d+)/) ||
+    bodyText.match(/"video_id"\s*:\s*"(\d+)"/) ||
+    bodyText.match(/"series_id"\s*:\s*"(\d+)"/);
   if (m) return m[1];
 
-  throw new Error("无法从链接解析 series_id: " + finalUrl);
+  throw new Error('无法从链接解析 series_id: ' + finalUrl);
 }
 
 /**
@@ -310,22 +319,22 @@ async function fetchEpisodeListFresh(seriesId) {
   }
   const body = {
     biz_param: DETAIL_BIZ_PARAM,
-    dr_scene: "preload",
+    dr_scene: 'preload',
     series_id: seriesId,
   };
   let j;
   try {
-    j = await apiCall("/novel/player/multi_video_detail/preload/v1", body);
+    j = await apiCall('/novel/player/multi_video_detail/preload/v1', body);
   } catch (e) {
     throw new Error(`获取分集失败：官网数据源（${webError.message}），备用接口（${e.message}）`);
   }
   if (!j || j.code !== 0) {
-    throw new Error("detail API 失败: " + JSON.stringify(j || {}).slice(0, 200));
+    throw new Error('detail API 失败: ' + JSON.stringify(j || {}).slice(0, 200));
   }
   const d = j.data || {};
   const sid = Object.keys(d)[0];
   if (!sid) {
-    throw new Error("未获取到剧集数据");
+    throw new Error('未获取到剧集数据');
   }
   const vd = d[sid]?.video_data || {};
   const vl = vd.video_list || [];
@@ -360,7 +369,7 @@ function streamScore(v) {
   if (m) {
     defNum = parseInt(m[1], 10);
   } else {
-    const map = { '4k': 2160, '2k': 1440, 'fhd': 1080, 'fullhd': 1080, 'hd': 720, 'sd': 480, 'ld': 360 };
+    const map = { '4k': 2160, '2k': 1440, fhd: 1080, fullhd: 1080, hd: 720, sd: 480, ld: 360 };
     defNum = map[defStr.toLowerCase()] || 0;
   }
   const w = parseInt(meta.vwidth, 10) || 0;
@@ -413,8 +422,10 @@ function parseModelVideo(vm) {
  * 获取单集播放直链与 spade_a 加密 key
  */
 async function fetchPlayUrlSingle(vid, sid) {
-  if (String(vid).startsWith('hema:') || String(sid).startsWith('hema:')) return require('./hema').fetchPlayUrlSingle(vid, sid);
-  if (String(vid).startsWith('xifan:') || String(sid).startsWith('xifan:')) return require('./xifan').fetchPlayUrlSingle(vid, sid);
+  if (String(vid).startsWith('hema:') || String(sid).startsWith('hema:'))
+    return require('./hema').fetchPlayUrlSingle(vid, sid);
+  if (String(vid).startsWith('xifan:') || String(sid).startsWith('xifan:'))
+    return require('./xifan').fetchPlayUrlSingle(vid, sid);
   try {
     return await cachedRequest(`play:${sid || ''}:${vid}`, 30000, () => fetchPlayUrlFresh(vid, sid));
   } catch (error) {
@@ -434,11 +445,11 @@ async function fetchPlayUrlFresh(vid, sid) {
 
   const body = {
     biz_param: MODEL_BIZ_PARAM,
-    dr_scene: "preload",
-    mixed_video_id_map: { "1004": [vid] },
+    dr_scene: 'preload',
+    mixed_video_id_map: { 1004: [vid] },
   };
   try {
-    const j = await apiCall("/novel/player/multi_video_model/preload/v1", body);
+    const j = await apiCall('/novel/player/multi_video_model/preload/v1', body);
     const item = j?.data?.[vid] || {};
     const [url, spadeA, codec] = parseModelVideo(item.video_model);
     if (url) return { url, spadeA, codec, source: 'api' };
@@ -448,8 +459,10 @@ async function fetchPlayUrlFresh(vid, sid) {
   // 旧剧库可能没有网页可用范围；仅在取地址失败后补查，不拖慢正常播放。
   if (sid) {
     let series;
-    try { series = await cachedRequest(`episodes:${sid}`, 60000, () => fetchEpisodeListFromWeb(sid)); } catch (_) {}
-    const index = series?.episodes.findIndex(episode => episode.vid === String(vid));
+    try {
+      series = await cachedRequest(`episodes:${sid}`, 60000, () => fetchEpisodeListFromWeb(sid));
+    } catch (_) {}
+    const index = series?.episodes.findIndex((episode) => episode.vid === String(vid));
     const accessible = series?.web_accessible_episodes;
     if (Number.isInteger(accessible) && index >= accessible) {
       const range = accessible > 0 ? `仅提供前 ${accessible} 集` : '暂未提供可播放分集';
@@ -517,7 +530,9 @@ function deriveKey(spadeA) {
   if (x27 < 2 || w22 < 2 || w22 > L - 1) return null;
 
   const x21 = Buffer.from(buf.subarray(1, 1 + w22));
-  let w11 = 0x55, w12 = 0xfa, w10 = 0xeb;
+  let w11 = 0x55,
+    w12 = 0xfa,
+    w10 = 0xeb;
   for (let i = 0; i < x21.length; i++) {
     const w13 = x21[i];
     const pc = i.toString(2).split('1').length - 1;
@@ -614,7 +629,7 @@ function parseBoxes(data, start, end) {
  * 重建 moov box
  */
 function rebuildMoov(data, moovOff, moovSize, top) {
-  const moovBox = top.find(b => b.typ === 'moov');
+  const moovBox = top.find((b) => b.typ === 'moov');
   if (!moovBox) throw new Error('no moov box');
 
   function clone(box) {
@@ -623,7 +638,7 @@ function rebuildMoov(data, moovOff, moovSize, top) {
       off: box.off,
       size: box.size,
       hdr: box.hdr,
-      children: box.children ? box.children.map(clone) : null
+      children: box.children ? box.children.map(clone) : null,
     };
   }
 
@@ -641,7 +656,7 @@ function rebuildMoov(data, moovOff, moovSize, top) {
   const tree = prune(clone(moovBox));
 
   function* walkChildren(box) {
-    for (const c of (box.children || [])) {
+    for (const c of box.children || []) {
       yield c;
       for (const x of walkChildren(c)) yield x;
     }
@@ -739,11 +754,11 @@ function rebuildMoov(data, moovOff, moovSize, top) {
 function decryptMp4Buffer(data, key) {
   const total = data.length;
   const top = parseBoxes(data, 0, total);
-  const moov = top.find(b => b.typ === 'moov');
+  const moov = top.find((b) => b.typ === 'moov');
   if (!moov) throw new Error('no moov box found in MP4');
 
   function getBox(boxes, typ) {
-    return (boxes || []).find(b => b.typ === typ);
+    return (boxes || []).find((b) => b.typ === typ);
   }
 
   function* walkBoxes(boxes) {
@@ -755,7 +770,7 @@ function decryptMp4Buffer(data, key) {
     }
   }
 
-  const stbls = Array.from(walkBoxes(top)).filter(b => b.typ === 'stbl');
+  const stbls = Array.from(walkBoxes(top)).filter((b) => b.typ === 'stbl');
   const trackInfo = [];
   for (const stbl of stbls) {
     const stsz = getBox(stbl.children, 'stsz');
@@ -803,7 +818,7 @@ function decryptMp4Buffer(data, key) {
     for (let i = 0; i < stscTab.length; i++) {
       const fc = stscTab[i][0];
       const spc = stscTab[i][1];
-      const nxt = (i + 1 < stscTab.length) ? stscTab[i + 1][0] : (nc + 1);
+      const nxt = i + 1 < stscTab.length ? stscTab[i + 1][0] : nc + 1;
       for (let ci = fc - 1; ci < nxt - 1; ci++) {
         chunkSpc[ci] = spc;
       }

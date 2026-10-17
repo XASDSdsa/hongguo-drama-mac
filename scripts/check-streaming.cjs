@@ -10,37 +10,107 @@ const { createRequire } = require('node:module');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-stream-'));
 const source = path.resolve(__dirname, '../main.js');
 const req = createRequire(source);
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function load(fetchPlayUrlSingle, overrides = {}) {
-  const handlers = {}, protocols = {}, app = new EventEmitter();
-  Object.assign(app, { getVersion: () => 'test', getPath: () => root, commandLine: { appendSwitch() {} }, whenReady: () => ({ then() {} }) });
-  const electron = { app, ipcMain: { handle: (n, f) => handlers[n] = f }, protocol: { registerSchemesAsPrivileged() {}, handle: (n, f) => protocols[n] = f } };
-  const native = { fetchPlayUrlSingle, UA: 'test', VIDEO_REFERER: 'https://example.com/', deriveKey: () => Buffer.alloc(16), decryptMp4Buffer: b => b };
-  const context = vm.createContext({ require: n => overrides[n] || (n === 'electron' ? electron : n === './src/native/hongguo' ? native : n === './src/store' ? { saveTasks() {}, getSettings: () => ({ root }) } : req(n)), __dirname: path.dirname(source), console: { log() {}, warn() {}, error() {} }, process, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
+  const handlers = {},
+    protocols = {},
+    app = new EventEmitter();
+  Object.assign(app, {
+    getVersion: () => 'test',
+    getPath: () => root,
+    commandLine: { appendSwitch() {} },
+    whenReady: () => ({ then() {} }),
+  });
+  const electron = {
+    app,
+    ipcMain: { handle: (n, f) => (handlers[n] = f) },
+    protocol: { registerSchemesAsPrivileged() {}, handle: (n, f) => (protocols[n] = f) },
+  };
+  const native = {
+    fetchPlayUrlSingle,
+    UA: 'test',
+    VIDEO_REFERER: 'https://example.com/',
+    deriveKey: () => Buffer.alloc(16),
+    decryptMp4Buffer: (b) => b,
+  };
+  const context = vm.createContext({
+    require: (n) =>
+      overrides[n] ||
+      (n === 'electron'
+        ? electron
+        : n === './src/native/hongguo'
+          ? native
+          : n === './src/store'
+            ? { saveTasks() {}, getSettings: () => ({ root }) }
+            : req(n)),
+    __dirname: path.dirname(source),
+    console: { log() {}, warn() {}, error() {} },
+    process,
+    Buffer,
+    URL,
+    Response,
+    Request,
+    Headers,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  });
   vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
   context.registerStreamProtocol();
-  return { context, handlers, protocols, run: s => vm.runInContext(s, context) };
+  return { context, handlers, protocols, run: (s) => vm.runInContext(s, context) };
 }
 (async () => {
-  let hits = 0, streamClosed = false;
+  let hits = 0,
+    streamClosed = false;
   const server = http.createServer((r, s) => {
     hits++;
-    if (r.url === '/slow') { s.writeHead(200, { 'content-type': 'video/mp4', 'content-length': '99999' }); s.write('hello'); r.on('close', () => streamClosed = true); return; }
-    if (r.url === '/broken') { s.writeHead(200, { 'content-length': '99999' }); s.write('hello'); setTimeout(() => s.destroy(), 20); return; }
+    if (r.url === '/slow') {
+      s.writeHead(200, { 'content-type': 'video/mp4', 'content-length': '99999' });
+      s.write('hello');
+      r.on('close', () => (streamClosed = true));
+      return;
+    }
+    if (r.url === '/broken') {
+      s.writeHead(200, { 'content-length': '99999' });
+      s.write('hello');
+      setTimeout(() => s.destroy(), 20);
+      return;
+    }
     const body = Buffer.from('0123456789');
-    if (r.headers.range === 'bytes=2-4') { s.writeHead(206, { 'content-type': 'video/mp4', 'content-length': '3', 'content-range': 'bytes 2-4/10' }); s.end(body.subarray(2,5)); }
-    else { s.writeHead(200, { 'content-type': 'video/mp4', 'content-length': body.length }); s.end(body); }
+    if (r.headers.range === 'bytes=2-4') {
+      s.writeHead(206, { 'content-type': 'video/mp4', 'content-length': '3', 'content-range': 'bytes 2-4/10' });
+      s.end(body.subarray(2, 5));
+    } else {
+      s.writeHead(200, { 'content-type': 'video/mp4', 'content-length': body.length });
+      s.end(body);
+    }
   });
-  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   let failures = 0;
-  async function check(name, f) { if (process.argv.includes('--extras') && !name.startsWith('extra:')) return; try { await f(); console.log('PASS ' + name); } catch (e) { failures++; console.error('FAIL ' + name + ': ' + e.message); } }
+  async function check(name, f) {
+    if (process.argv.includes('--extras') && !name.startsWith('extra:')) return;
+    try {
+      await f();
+      console.log('PASS ' + name);
+    } catch (e) {
+      failures++;
+      console.error('FAIL ' + name + ': ' + e.message);
+    }
+  }
   const harnesses = [];
-  const hload = (fn, overrides) => { const h = load(fn, overrides); harnesses.push(h); return h; };
+  const hload = (fn, overrides) => {
+    const h = load(fn, overrides);
+    harnesses.push(h);
+    return h;
+  };
   await check('plain source returns before downloading a single byte', async () => {
     const h = hload(async () => ({ url: base + '/slow', spadeA: '' }));
     const before = hits;
-    const result = await Promise.race([h.handlers['prepare-online-play']({}, { vid: 'plain', requestId: 'one' }), sleep(150).then(() => ({ timedOut: true }))]);
+    const result = await Promise.race([
+      h.handlers['prepare-online-play']({}, { vid: 'plain', requestId: 'one' }),
+      sleep(150).then(() => ({ timedOut: true })),
+    ]);
     assert.equal(result.success, true, 'prepare must not wait for complete media');
     assert.equal(hits, before, 'media must be requested by video, not prepare');
     assert.ok(result.streamId);
@@ -49,7 +119,8 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     const h = hload(async () => ({ url: base + '/range' }));
     const p = await h.handlers['prepare-online-play']({}, { vid: 'range', requestId: 'range-request' });
     const response = await h.protocols['hongguo-stream'](new Request(p.url, { headers: { range: 'bytes=2-4' } }));
-    assert.equal(response.status, 206); assert.equal(await response.text(), '234');
+    assert.equal(response.status, 206);
+    assert.equal(await response.text(), '234');
     assert.equal(response.headers.get('content-range'), 'bytes 2-4/10');
     assert.ok(h.handlers['release-online-play'], 'release IPC must exist');
     await h.handlers['release-online-play']({}, { streamId: p.streamId });
@@ -57,17 +128,23 @@ function load(fetchPlayUrlSingle, overrides = {}) {
   });
   await check('release aborts active upstream body', async () => {
     const h = hload(async () => ({ url: base + '/slow' }));
-    const p = await Promise.race([h.handlers['prepare-online-play']({}, { vid: 'abort' }), sleep(150).then(() => ({}))]);
+    const p = await Promise.race([
+      h.handlers['prepare-online-play']({}, { vid: 'abort' }),
+      sleep(150).then(() => ({})),
+    ]);
     assert.ok(p.url, 'prepare must return a stream URL');
     streamClosed = false;
     const response = await h.protocols['hongguo-stream'](new Request(p.url));
-    const reader = response.body.getReader(); await reader.read();
+    const reader = response.body.getReader();
+    await reader.read();
     await h.handlers['release-online-play']({}, { streamId: p.streamId });
-    await sleep(30); assert.equal(streamClosed, true);
+    await sleep(30);
+    assert.equal(streamClosed, true);
     await reader.cancel().catch(() => {});
   });
   await check('cancel during address lookup prevents stale ready state', async () => {
-    let resolve; const h = hload(() => new Promise(r => resolve = r));
+    let resolve;
+    const h = hload(() => new Promise((r) => (resolve = r)));
     const pending = h.handlers['prepare-online-play']({}, { vid: 'pending', requestId: 'cancel-me' });
     assert.ok(h.handlers['release-online-play']);
     await h.handlers['release-online-play']({}, { requestId: 'cancel-me' });
@@ -84,57 +161,105 @@ function load(fetchPlayUrlSingle, overrides = {}) {
   });
   await check('broken upstream settles failed download and removes partial file', async () => {
     const h = hload(async () => ({ url: base + '/broken' }));
-    const task = { id: 'broken', type: 'hongguo', filename: 'broken.mp4', customDir: root, hongguoInfo: { vid: 'broken' } };
-    const settled = await Promise.race([h.context.executeHongguoDownload(task).then(() => true), sleep(250).then(() => false)]);
+    const task = {
+      id: 'broken',
+      type: 'hongguo',
+      filename: 'broken.mp4',
+      customDir: root,
+      hongguoInfo: { vid: 'broken' },
+    };
+    const settled = await Promise.race([
+      h.context.executeHongguoDownload(task).then(() => true),
+      sleep(250).then(() => false),
+    ]);
     assert.equal(settled, true, 'upstream failure must not leave queue hanging');
-    assert.equal(task.status, 'failed'); assert.equal(fs.existsSync(path.join(root, 'broken.mp4.enc.tmp')), false);
+    assert.equal(task.status, 'failed');
+    assert.equal(fs.existsSync(path.join(root, 'broken.mp4.enc.tmp')), false);
   });
   await check('stop during lookup stays stopped and retry cannot overlap old run', async () => {
-    let resolve; const h = hload(() => new Promise(r => resolve = r));
-    h.run("downloadTasks = [{id:'stop',status:'pending',type:'hongguo',filename:'stop.mp4',customDir:" + JSON.stringify(root) + ",hongguoInfo:{vid:'stop'}}]; downloadQueue = downloadTasks.slice(); pumpQueue();");
+    let resolve;
+    const h = hload(() => new Promise((r) => (resolve = r)));
+    h.run(
+      "downloadTasks = [{id:'stop',status:'pending',type:'hongguo',filename:'stop.mp4',customDir:" +
+        JSON.stringify(root) +
+        ",hongguoInfo:{vid:'stop'}}]; downloadQueue = downloadTasks.slice(); pumpQueue();",
+    );
     await h.handlers['stop-download']({}, 'stop');
-    resolve({ url: base + '/range' }); await sleep(50);
+    resolve({ url: base + '/range' });
+    await sleep(50);
     assert.equal(h.run('downloadTasks[0].status'), 'stopped');
     assert.equal(fs.existsSync(path.join(root, 'stop.mp4')), false);
   });
   await check('immediate retry waits for cancelled run and then completes once', async () => {
-    let resolve, lookups = 0;
-    const h = hload(() => { lookups++; return lookups === 1 ? new Promise(r => resolve = r) : Promise.resolve({ url: base + '/range' }); });
-    h.run("downloadTasks = [{id:'retry',status:'pending',type:'hongguo',filename:'retry.mp4',customDir:" + JSON.stringify(root) + ",hongguoInfo:{vid:'retry'}}]; downloadQueue = downloadTasks.slice(); pumpQueue();");
+    let resolve,
+      lookups = 0;
+    const h = hload(() => {
+      lookups++;
+      return lookups === 1 ? new Promise((r) => (resolve = r)) : Promise.resolve({ url: base + '/range' });
+    });
+    h.run(
+      "downloadTasks = [{id:'retry',status:'pending',type:'hongguo',filename:'retry.mp4',customDir:" +
+        JSON.stringify(root) +
+        ",hongguoInfo:{vid:'retry'}}]; downloadQueue = downloadTasks.slice(); pumpQueue();",
+    );
     await h.handlers['stop-download']({}, 'retry');
     await h.handlers['retry-task']({}, 'retry');
     assert.equal(lookups, 1, 'retry cannot start before previous run settles');
-    resolve({ url: base + '/range' }); await sleep(80);
-    assert.equal(lookups, 2); assert.equal(h.run('downloadTasks[0].status'), 'completed');
+    resolve({ url: base + '/range' });
+    await sleep(80);
+    assert.equal(lookups, 2);
+    assert.equal(h.run('downloadTasks[0].status'), 'completed');
     assert.equal(fs.readFileSync(path.join(root, 'retry.mp4'), 'utf8'), '0123456789');
   });
   await check('extra: enqueue reuses failed task instead of competing destination writers', async () => {
     const h = hload(() => new Promise(() => {}));
-    h.run("downloadTasks = [{id:'old-failed',status:'failed',type:'hongguo',filename:'again.mp4',customDir:" + JSON.stringify(root) + ",hongguoInfo:{vid:'same',series_id:'S'}}];");
+    h.run(
+      "downloadTasks = [{id:'old-failed',status:'failed',type:'hongguo',filename:'again.mp4',customDir:" +
+        JSON.stringify(root) +
+        ",hongguoInfo:{vid:'same',series_id:'S'}}];",
+    );
     h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Retry', episodes: [{ vid: 'same', vid_index: 1 }] });
     assert.equal(h.run('downloadTasks.length'), 1, 'one episode must retain one task');
     assert.equal(h.run('downloadTasks[0].id'), 'old-failed');
   });
   await check('extra: concurrent compatibility requests share one encoder and result', async () => {
     let spawned = 0;
-    const h = hload(async () => ({ url: base + '/range' }), { child_process: {
-      spawn: (_file, args) => {
-        spawned++;
-        const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-        setTimeout(() => { fs.writeFileSync(args.at(-1), Buffer.alloc(120000)); child.emit('close', 0); }, 20);
-        return child;
-      }
-    } });
+    const h = hload(async () => ({ url: base + '/range' }), {
+      child_process: {
+        spawn: (_file, args) => {
+          spawned++;
+          const child = new EventEmitter();
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          setTimeout(() => {
+            fs.writeFileSync(args.at(-1), Buffer.alloc(120000));
+            child.emit('close', 0);
+          }, 20);
+          return child;
+        },
+      },
+    });
     h.context.resolveFfmpeg = () => '/fake/ffmpeg';
     h.context.probeDuration = async () => 1;
     h.context.pickH264Encoder = async () => 'libx264';
-    const input = path.join(root, 'compat-input.mp4'); fs.writeFileSync(input, 'fixture');
+    const input = path.join(root, 'compat-input.mp4');
+    fs.writeFileSync(input, 'fixture');
     const payload = { seriesId: 'same-series', vidIndex: 1, filePath: input, force: true };
-    const results = await Promise.all([h.handlers['transcode-for-playback']({}, payload), h.handlers['transcode-for-playback']({}, payload)]);
+    const results = await Promise.all([
+      h.handlers['transcode-for-playback']({}, payload),
+      h.handlers['transcode-for-playback']({}, payload),
+    ]);
     assert.equal(spawned, 1, 'same episode cannot run two encoders against one output');
-    assert.ok(results.every(r => r.success)); assert.equal(results[0].url, results[1].url);
+    assert.ok(results.every((r) => r.success));
+    assert.equal(results[0].url, results[1].url);
   });
   for (const h of harnesses) h.context.clearOnlineCache();
-  server.closeAllConnections(); await new Promise(r => server.close(r));
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
   assert.equal(failures, 0, `${failures} streaming regressions`);
-})().catch(e => { console.error(e.message); process.exitCode = 1; }).finally(() => fs.rmSync(root, { recursive: true, force: true }));
+})()
+  .catch((e) => {
+    console.error(e.message);
+    process.exitCode = 1;
+  })
+  .finally(() => fs.rmSync(root, { recursive: true, force: true }));

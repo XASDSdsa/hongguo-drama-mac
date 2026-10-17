@@ -41,18 +41,22 @@ function firstUsable(candidates, executable = false, platform = process.platform
 }
 
 function pathEntries(envPath, delimiter = path.delimiter) {
-  return String(envPath || '').split(delimiter).map(item => item.trim()).filter(Boolean);
+  return String(envPath || '')
+    .split(delimiter)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function binaryCandidates(config = {}) {
   const platform = config.platform || process.platform;
   const arch = config.arch || process.arch;
-  const exeNames = [...new Set([
-    config.whisper_binary_name,
-    'whisper-cli',
-    'whisper',
-    'main',
-  ].filter(Boolean).map(name => executableName(name, platform)))];
+  const exeNames = [
+    ...new Set(
+      [config.whisper_binary_name, 'whisper-cli', 'whisper', 'main']
+        .filter(Boolean)
+        .map((name) => executableName(name, platform)),
+    ),
+  ];
   const roots = [
     config.whisper_binary_path,
     config.resourcesPath && path.join(config.resourcesPath, 'bin'),
@@ -64,7 +68,8 @@ function binaryCandidates(config = {}) {
   for (const root of roots) {
     const value = String(root);
     // A configured path may point directly to the executable.
-    if (path.extname(value) || /[\\/]$/.test(value) === false && fileUsable(value, true, platform)) candidates.push(value);
+    if (path.extname(value) || (/[\\/]$/.test(value) === false && fileUsable(value, true, platform)))
+      candidates.push(value);
     for (const name of exeNames) candidates.push(path.join(value, name));
   }
   for (const dir of pathEntries(config.path || process.env.PATH)) {
@@ -76,10 +81,7 @@ function binaryCandidates(config = {}) {
 function modelCandidates(config = {}) {
   const platform = config.platform || process.platform;
   const arch = config.arch || process.arch;
-  const names = [...new Set([
-    config.whisper_model_name,
-    'ggml-tiny.bin',
-  ].filter(Boolean))];
+  const names = [...new Set([config.whisper_model_name, 'ggml-tiny.bin'].filter(Boolean))];
   const roots = [
     config.whisper_model_path,
     config.resourcesPath && path.join(config.resourcesPath, 'models'),
@@ -112,8 +114,12 @@ function normalizeConfig(settings = {}) {
     whisper_binary_name: String(settings.whisper_binary_name || '').trim(),
     whisper_model_name: String(settings.whisper_model_name || 'ggml-tiny.bin').trim(),
     language: String(settings.whisper_language || settings.ai_language || DEFAULT_LANGUAGE).trim() || DEFAULT_LANGUAGE,
-    threads: Number.isInteger(Number(settings.whisper_threads)) ? Math.max(0, Math.min(32, Number(settings.whisper_threads))) : 0,
-    timeoutMs: Number.isInteger(Number(settings.whisper_timeout_ms)) ? Math.max(10_000, Math.min(60 * 60 * 1000, Number(settings.whisper_timeout_ms))) : DEFAULT_TIMEOUT_MS,
+    threads: Number.isInteger(Number(settings.whisper_threads))
+      ? Math.max(0, Math.min(32, Number(settings.whisper_threads)))
+      : 0,
+    timeoutMs: Number.isInteger(Number(settings.whisper_timeout_ms))
+      ? Math.max(10_000, Math.min(60 * 60 * 1000, Number(settings.whisper_timeout_ms)))
+      : DEFAULT_TIMEOUT_MS,
   };
 }
 
@@ -138,7 +144,9 @@ function unavailableError(result) {
     '设置中填写 whisper.cpp 可执行文件和模型路径',
     '或将它们放到应用 Resources/bin 与 Resources/models 目录',
   ];
-  const error = new Error(`本地 whisper.cpp 未就绪：缺少 ${result.missing.join('、')}。${locations.join('；')}。不会自动调用 OpenAI。`);
+  const error = new Error(
+    `本地 whisper.cpp 未就绪：缺少 ${result.missing.join('、')}。${locations.join('；')}。不会自动调用 OpenAI。`,
+  );
   error.code = 'WHISPER_NOT_READY';
   error.missing = result.missing;
   return error;
@@ -165,11 +173,15 @@ function runWhisper(binaryPath, args, signal, timeoutMs) {
     const stderr = { text: '', bytes: 0 };
     let settled = false;
     const timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch (_) {}
+      try {
+        child.kill('SIGTERM');
+      } catch (_) {}
       finish(new Error('whisper.cpp 转写超时，请降低模型或并发数'));
     }, timeoutMs);
     const abort = () => {
-      try { child.kill(process.platform === 'win32' ? 'SIGTERM' : 'SIGINT'); } catch (_) {}
+      try {
+        child.kill(process.platform === 'win32' ? 'SIGTERM' : 'SIGINT');
+      } catch (_) {}
       finish(new Error('任务已取消'));
     };
     const cleanup = () => {
@@ -183,10 +195,10 @@ function runWhisper(binaryPath, args, signal, timeoutMs) {
       if (error) reject(error);
       else resolve(result);
     };
-    child.stdout?.on('data', chunk => appendOutput(stdout, chunk));
-    child.stderr?.on('data', chunk => appendOutput(stderr, chunk));
-    child.once('error', error => finish(new Error(`无法启动 whisper.cpp：${error.message}`)));
-    child.once('close', code => {
+    child.stdout?.on('data', (chunk) => appendOutput(stdout, chunk));
+    child.stderr?.on('data', (chunk) => appendOutput(stderr, chunk));
+    child.once('error', (error) => finish(new Error(`无法启动 whisper.cpp：${error.message}`)));
+    child.once('close', (code) => {
       if (code !== 0) {
         const detail = stderr.text.trim().split(/\r?\n/).slice(-3).join(' ');
         finish(new Error(`whisper.cpp 退出码 ${code}${detail ? `：${detail}` : ''}`));
@@ -202,15 +214,25 @@ function runWhisper(binaryPath, args, signal, timeoutMs) {
 function cleanTranscript(value) {
   const ansi = /\u001b\[[0-?]*[ -/]*[@-~]/g;
   const timestamp = /^\s*\[[0-9:.]+\s*-->\s*[0-9:.]+\]\s*/;
-  const lines = String(value || '').replace(ansi, '').split(/\r?\n/);
+  const lines = String(value || '')
+    .replace(ansi, '')
+    .split(/\r?\n/);
   const output = [];
   for (const raw of lines) {
     const line = raw.replace(timestamp, '').trim();
     if (!line) continue;
-    if (/^(whisper_(print|load)|system_info|main:|ggml_|sampling strategy|output_txt:|output_json:|[0-9]+ threads)/i.test(line)) continue;
+    if (
+      /^(whisper_(print|load)|system_info|main:|ggml_|sampling strategy|output_txt:|output_json:|[0-9]+ threads)/i.test(
+        line,
+      )
+    )
+      continue;
     output.push(line);
   }
-  return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return output
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 async function transcribeAudio(audioPath, options = {}, settings = {}) {
@@ -220,12 +242,16 @@ async function transcribeAudio(audioPath, options = {}, settings = {}) {
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hongguo-whisper-'));
   const outputPrefix = path.join(tempDir, 'transcript');
   const args = [
-    '-m', result.modelPath,
-    '-f', audioPath,
-    '-l', String(options.language || result.config.language),
+    '-m',
+    result.modelPath,
+    '-f',
+    audioPath,
+    '-l',
+    String(options.language || result.config.language),
     '-nt',
     '-otxt',
-    '-of', outputPrefix,
+    '-of',
+    outputPrefix,
   ];
   if (result.config.threads > 0) args.push('-t', String(result.config.threads));
   try {

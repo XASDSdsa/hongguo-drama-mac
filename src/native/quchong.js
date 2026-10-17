@@ -16,9 +16,7 @@ const { randomUUID } = require('node:crypto');
 // uses several codec threads, so running one process per CPU core can make the
 // desktop unresponsive.  Two to four concurrent episodes is a good default;
 // users can still change it in the processing screen.
-const CPU_COUNT = typeof os.availableParallelism === 'function'
-  ? os.availableParallelism()
-  : os.cpus().length;
+const CPU_COUNT = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 const DEFAULT_JOBS = Math.max(2, Math.min(4, Math.floor(CPU_COUNT / 2) || 2));
 const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : process.platform === 'win32' ? 'auto' : 'cpu';
 let windowsAdapters = '';
@@ -51,16 +49,30 @@ const DEFAULTS = Object.freeze({
 function validateOptions(input = {}) {
   const opts = { ...DEFAULTS, ...input };
   const numeric = [
-    ['crop_ratio', 0.85, 1], ['speed_min', 1, 1.1], ['speed_max', 1, 1.1],
-    ['rotation_max', 0, 0.02], ['rgb_shift', 0, 5], ['noise_min', 0, 15],
-    ['noise_max', 0, 15], ['contrast', 0.9, 1.3], ['saturation', 0.8, 1.6],
-    ['hue_range', 0, 30], ['pitch_min', 1, 1.1], ['pitch_max', 1, 1.1],
-    ['orig_volume', 0.1, 1], ['bgm_volume', 0, 0.5], ['jobs', 1, 8],
+    ['crop_ratio', 0.85, 1],
+    ['speed_min', 1, 1.1],
+    ['speed_max', 1, 1.1],
+    ['rotation_max', 0, 0.02],
+    ['rgb_shift', 0, 5],
+    ['noise_min', 0, 15],
+    ['noise_max', 0, 15],
+    ['contrast', 0.9, 1.3],
+    ['saturation', 0.8, 1.6],
+    ['hue_range', 0, 30],
+    ['pitch_min', 1, 1.1],
+    ['pitch_max', 1, 1.1],
+    ['orig_volume', 0.1, 1],
+    ['bgm_volume', 0, 0.5],
+    ['jobs', 1, 8],
   ];
   for (const [key, min, max] of numeric) {
     const value = opts[key];
-    if (!Number.isFinite(value) || value < min || value > max ||
-        (['rgb_shift', 'noise_min', 'noise_max', 'hue_range', 'jobs'].includes(key) && !Number.isInteger(value))) {
+    if (
+      !Number.isFinite(value) ||
+      value < min ||
+      value > max ||
+      (['rgb_shift', 'noise_min', 'noise_max', 'hue_range', 'jobs'].includes(key) && !Number.isInteger(value))
+    ) {
       throw new Error(`参数无效：${key}`);
     }
   }
@@ -84,7 +96,8 @@ function rollParams(opts, random = Math.random) {
     SPEED: between(opts.speed_min, opts.speed_max),
     PITCH: between(opts.pitch_min, opts.pitch_max),
     ROT: between(0, opts.rotation_max),
-    CX: random(), CY: random(),
+    CX: random(),
+    CY: random(),
     NOISE: randint(opts.noise_min, opts.noise_max),
   };
 }
@@ -120,7 +133,16 @@ function encoderArgs(name, lean, width, height) {
   if (name === 'videotoolbox') {
     let bitrate = Math.max(1500, Math.floor(width * height * 0.00386));
     if (lean) bitrate = Math.floor(bitrate / 2);
-    return ['-c:v', 'h264_videotoolbox', '-b:v', `${bitrate}k`, '-maxrate', `${Math.floor(bitrate * 1.5)}k`, '-bufsize', `${bitrate * 2}k`];
+    return [
+      '-c:v',
+      'h264_videotoolbox',
+      '-b:v',
+      `${bitrate}k`,
+      '-maxrate',
+      `${Math.floor(bitrate * 1.5)}k`,
+      '-bufsize',
+      `${bitrate * 2}k`,
+    ];
   }
   return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', lean ? '23' : '20'];
 }
@@ -144,7 +166,9 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   if (horizontal) {
     // Keep the source's landscape composition while filling the portrait canvas.
     filters.push('[0:V:0]split=2[bgsrc][fgsrc]');
-    filters.push(`[bgsrc]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:1,setsar=1[bg]`);
+    filters.push(
+      `[bgsrc]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:1,setsar=1[bg]`,
+    );
     filters.push(`[fgsrc]${vf.join(',')},scale=${width}:-2,setsar=1[fg]`);
     filters.push('[bg][fg]overlay=(W-w)/2:(H-h)/2[vbase]');
     videoInput = '[vbase]';
@@ -154,7 +178,11 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
     if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
     vf.push(`scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`, 'setsar=1');
   } else if (r.ROT > 0) {
-    vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`, `scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`, 'setsar=1');
+    vf.push(
+      `rotate=${r.ROT.toFixed(6)}:fillcolor=black`,
+      `scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`,
+      'setsar=1',
+    );
   }
   if (opts.rgb_shift > 0) vf.push(`rgbashift=rh=${opts.rgb_shift}:rv=1:gh=0:gv=0:bh=-${opts.rgb_shift}:bv=1`);
   if (r.NOISE > 0) vf.push(`noise=alls=${r.NOISE}:allf=t`);
@@ -170,7 +198,13 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   const inputs = ['-i', src];
   const audioOutput = hasAudio || Boolean(bgm);
   if (hasAudio) {
-    const af = ['asetpts=PTS-STARTPTS', 'aresample=44100', `asetrate=44100*${r.PITCH.toFixed(6)}`, 'aresample=44100', `atempo=${(speed / r.PITCH).toFixed(6)}`];
+    const af = [
+      'asetpts=PTS-STARTPTS',
+      'aresample=44100',
+      `asetrate=44100*${r.PITCH.toFixed(6)}`,
+      'aresample=44100',
+      `atempo=${(speed / r.PITCH).toFixed(6)}`,
+    ];
     if (opts.eq_enable) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
     if (audioDelay > 0) af.push(`adelay=delays=${(audioDelay * 1000).toFixed(3)}:all=1`);
     af.push(`volume=${opts.orig_volume}`, 'apad');
@@ -181,17 +215,33 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
     filters.push(`[1:a:0]asetpts=PTS-STARTPTS,volume=${opts.bgm_volume}[ba]`);
   }
   if (audioOutput) {
-    const source = hasAudio && bgm
-      ? '[oa][ba]amix=inputs=2:duration=first:dropout_transition=0'
-      : hasAudio ? '[oa]' : '[ba]';
+    const source =
+      hasAudio && bgm ? '[oa][ba]amix=inputs=2:duration=first:dropout_transition=0' : hasAudio ? '[oa]' : '[ba]';
     const separator = source.includes('amix=') ? ',' : '';
     filters.push(`${source}${separator}aformat=channel_layouts=stereo,aresample=async=1[a]`);
   }
   // The info-level mov muxer message is the only reliable start signal for
   // faststart's second pass; media timestamp progress stops during that pass.
-  const args = ['-hide_banner', '-loglevel', 'info', '-nostdin', '-y', ...inputs, '-filter_complex', filters.join(';'), '-map', '[v]'];
+  const args = [
+    '-hide_banner',
+    '-loglevel',
+    'info',
+    '-nostdin',
+    '-y',
+    ...inputs,
+    '-filter_complex',
+    filters.join(';'),
+    '-map',
+    '[v]',
+  ];
   if (audioOutput) args.push('-map', '[a]', '-shortest');
-  args.push('-fps_mode', 'passthrough', '-pix_fmt', 'yuv420p', ...encoderArgs(encoder, opts.quality === 'lean', width, height));
+  args.push(
+    '-fps_mode',
+    'passthrough',
+    '-pix_fmt',
+    'yuv420p',
+    ...encoderArgs(encoder, opts.quality === 'lean', width, height),
+  );
   if (audioOutput) args.push('-c:a', 'aac', '-b:a', '128k');
   args.push('-map_metadata', '-1', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', dst);
   // Audio/container duration can exceed the video. -shortest finishes at the
@@ -202,10 +252,19 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
 
 function execJson(ffprobePath, args, signal) {
   return new Promise((resolve, reject) => {
-    const child = execFile(ffprobePath, args, { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) return reject(new Error((stderr || error.message).trim().slice(-3000)));
-      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`ffprobe 返回无效数据：${e.message}`)); }
-    });
+    const child = execFile(
+      ffprobePath,
+      args,
+      { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) return reject(new Error((stderr || error.message).trim().slice(-3000)));
+        try {
+          resolve(JSON.parse(stdout));
+        } catch (e) {
+          reject(new Error(`ffprobe 返回无效数据：${e.message}`));
+        }
+      },
+    );
     const abort = () => child.kill('SIGTERM');
     if (signal) {
       if (signal.aborted) abort();
@@ -216,18 +275,32 @@ function execJson(ffprobePath, args, signal) {
 }
 
 async function probeMedia(ffprobePath, file, signal) {
-  const data = await execJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration,start_time:stream=codec_type,start_time,duration,width,height:stream_disposition=attached_pic', '-of', 'json', file], signal);
+  const data = await execJson(
+    ffprobePath,
+    [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration,start_time:stream=codec_type,start_time,duration,width,height:stream_disposition=attached_pic',
+      '-of',
+      'json',
+      file,
+    ],
+    signal,
+  );
   const streams = Array.isArray(data.streams) ? data.streams : [];
   const videos = streams.filter((s) => s.codec_type === 'video' && !s.disposition?.attached_pic);
   const audios = streams.filter((s) => s.codec_type === 'audio');
-  const start = (list) => Number.isFinite(Number(list[0]?.start_time)) ? Number(list[0].start_time) : 0;
+  const start = (list) => (Number.isFinite(Number(list[0]?.start_time)) ? Number(list[0].start_time) : 0);
   const duration = Number(data.format?.duration);
   const streamDuration = Number(videos[0]?.duration);
   const formatStart = Number(data.format?.start_time) || 0;
   return {
     duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
-    video_duration: Number.isFinite(streamDuration) && streamDuration > 0
-      ? streamDuration : Math.max(0, (duration || 0) - Math.max(0, start(videos) - formatStart)),
+    video_duration:
+      Number.isFinite(streamDuration) && streamDuration > 0
+        ? streamDuration
+        : Math.max(0, (duration || 0) - Math.max(0, start(videos) - formatStart)),
     has_video: videos.length > 0,
     has_audio: audios.length > 0,
     video_width: Number(videos[0]?.width) || 0,
@@ -262,7 +335,9 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
     const abort = () => {
       if (child.exitCode != null) return;
       child.kill('SIGTERM');
-      abortKillTimer = setTimeout(() => { if (child.exitCode == null) child.kill('SIGKILL'); }, 2000);
+      abortKillTimer = setTimeout(() => {
+        if (child.exitCode == null) child.kill('SIGKILL');
+      }, 2000);
     };
     if (signal) {
       if (signal.aborted) abort();
@@ -278,12 +353,15 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
       for (const line of lines) {
         const separator = line.indexOf('=');
         if (separator < 0) continue;
-        const key = line.slice(0, separator), value = line.slice(separator + 1);
+        const key = line.slice(0, separator),
+          value = line.slice(separator + 1);
         progressBlock[key] = value;
         if (key === 'progress') {
           const now = Date.now();
           if (value === 'end' || lastProgressLog === null || now - lastProgressLog >= 10_000) {
-            onLog?.(`[${value === 'end' ? '进度结束' : '编码进度'}] frame=${progressBlock.frame || 'N/A'} fps=${progressBlock.fps || 'N/A'} out_time=${progressBlock.out_time || 'N/A'} speed=${progressBlock.speed || 'N/A'}`);
+            onLog?.(
+              `[${value === 'end' ? '进度结束' : '编码进度'}] frame=${progressBlock.frame || 'N/A'} fps=${progressBlock.fps || 'N/A'} out_time=${progressBlock.out_time || 'N/A'} speed=${progressBlock.speed || 'N/A'}`,
+            );
             lastProgressLog = now;
           }
           // FFmpeg also emits progress=end on failure. It is not a success
@@ -293,7 +371,8 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
         }
         if (key !== 'out_time_us') continue;
         const elapsed = Number(value);
-        if (Number.isFinite(elapsed) && duration > 0) onProgress?.(Math.max(0, Math.min(99, elapsed / 1e6 / duration * 100)));
+        if (Number.isFinite(elapsed) && duration > 0)
+          onProgress?.(Math.max(0, Math.min(99, (elapsed / 1e6 / duration) * 100)));
       }
     });
     child.stderr.on('data', (chunk) => {
@@ -307,7 +386,10 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
     child.once('error', (error) => finish(error));
     child.once('close', (code, sig) => {
       if (signal?.aborted) return finish(new Error('已取消'));
-      if (code !== 0) return finish(new Error(`ffmpeg 退出码 ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}\n${errors.text.slice(-6000)}`));
+      if (code !== 0)
+        return finish(
+          new Error(`ffmpeg 退出码 ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}\n${errors.text.slice(-6000)}`),
+        );
       finish();
     });
   });
@@ -318,7 +400,9 @@ async function sameFileOrPath(src, dst) {
   try {
     const [a, b] = await Promise.all([fsp.stat(src), fsp.stat(dst)]);
     return a.dev === b.dev && a.ino === b.ino;
-  } catch (_) { return false; }
+  } catch (_) {
+    return false;
+  }
 }
 
 async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, signal, onProgress, onLog, onStage }) {
@@ -347,9 +431,15 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
       await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
     } catch (error) {
       if (signal?.aborted) throw new Error('已取消');
-      const nvencApi = encoder === 'nvenc' && error.message.match(/Driver does not support the required nvenc API version\.\s*Required:\s*([\d.]+)\s+Found:\s*([\d.]+)/i);
+      const nvencApi =
+        encoder === 'nvenc' &&
+        error.message.match(
+          /Driver does not support the required nvenc API version\.\s*Required:\s*([\d.]+)\s+Found:\s*([\d.]+)/i,
+        );
       if (nvencApi) {
-        throw new Error(`NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`);
+        throw new Error(
+          `NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`,
+        );
       }
       if (encoder !== 'cpu') {
         throw new Error(`${encoder} 编码失败，未自动切换编码器，请检查对应显卡和驱动。\n${error.message}`);
@@ -363,14 +453,31 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
     if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
     if (signal?.aborted) throw new Error('已取消');
     onStage?.('saving');
-    try { await fsp.link(tmp, dst); }
-    catch (error) { if (error.code === 'EEXIST') throw new Error(`输出已存在，已拒绝覆盖：${dst}`); throw error; }
+    try {
+      await fsp.link(tmp, dst);
+    } catch (error) {
+      if (error.code === 'EEXIST') throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
+      throw error;
+    }
     onProgress?.(100);
     onLog?.(`[完成] ${path.basename(src)}`);
     return { success: true, path: dst, rolled };
   } finally {
-    try { await fsp.unlink(tmp); } catch (_) {}
+    try {
+      await fsp.unlink(tmp);
+    } catch (_) {}
   }
 }
 
-module.exports = { DEFAULTS, validateOptions, rollParams, detectEncoder, resolveEncoder, setWindowsAdapters, encoderArgs, buildCommand, probeMedia, runJob };
+module.exports = {
+  DEFAULTS,
+  validateOptions,
+  rollParams,
+  detectEncoder,
+  resolveEncoder,
+  setWindowsAdapters,
+  encoderArgs,
+  buildCommand,
+  probeMedia,
+  runJob,
+};

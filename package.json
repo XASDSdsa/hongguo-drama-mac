@@ -29,7 +29,9 @@
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
     "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
-    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --mac --arm64 --dir --publish never"
+    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
+    "format": "npx --yes prettier@3 --write \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\"",
+    "format:check": "npx --yes prettier@3 --check \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\""
   },
   "dependencies": {
     "axios": "^1.13.2"

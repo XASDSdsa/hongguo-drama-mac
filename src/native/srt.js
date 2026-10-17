@@ -9,7 +9,9 @@
  */
 
 function parseTimestamp(value) {
-  const raw = String(value || '').trim().replace('.', ',');
+  const raw = String(value || '')
+    .trim()
+    .replace('.', ',');
   const match = /^(\d{1,3}):(\d{2}):(\d{2}),(\d{1,3})$/.exec(raw);
   if (!match) return null;
   const hours = Number(match[1]);
@@ -31,18 +33,23 @@ function formatTimestamp(value) {
 }
 
 function parseSrt(content) {
-  const source = String(content || '').replace(/^\uFEFF/, '').replace(/\r/g, '');
+  const source = String(content || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r/g, '');
   const blocks = source.split(/\n\s*\n/);
   const entries = [];
   for (const block of blocks) {
     const lines = block.split('\n');
-    let timingIndex = lines.findIndex(line => /-->/.test(line));
+    let timingIndex = lines.findIndex((line) => /-->/.test(line));
     if (timingIndex < 0) continue;
     const timing = lines[timingIndex].match(/^\s*([^\s]+)\s*-->\s*([^\s]+)(?:\s+.*)?$/);
     if (!timing) continue;
     const start = parseTimestamp(timing[1]);
     const end = parseTimestamp(timing[2]);
-    const text = lines.slice(timingIndex + 1).join('\n').trim();
+    const text = lines
+      .slice(timingIndex + 1)
+      .join('\n')
+      .trim();
     if (start == null || end == null || end <= start || !text) continue;
     entries.push({ start, end, text });
   }
@@ -53,12 +60,14 @@ function normalizeEntries(entries, options = {}) {
   const duration = Number(options.duration);
   const hasDuration = Number.isFinite(duration) && duration > 0;
   const sorted = (Array.isArray(entries) ? entries : [])
-    .map(item => ({
+    .map((item) => ({
       start: Math.max(0, Number(item?.start)),
       end: Math.max(0, Number(item?.end)),
-      text: String(item?.text || '').replace(/\r/g, '').trim(),
+      text: String(item?.text || '')
+        .replace(/\r/g, '')
+        .trim(),
     }))
-    .filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start && item.text)
+    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start && item.text)
     .sort((a, b) => a.start - b.start || a.end - b.end);
   const result = [];
   for (const item of sorted) {
@@ -72,7 +81,13 @@ function normalizeEntries(entries, options = {}) {
 
 function formatSrt(entries, options = {}) {
   const normalized = normalizeEntries(entries, options);
-  return normalized.map((item, index) => `${index + 1}\n${formatTimestamp(item.start)} --> ${formatTimestamp(item.end)}\n${item.text}`).join('\n\n') + (normalized.length ? '\n\n' : '');
+  return (
+    normalized
+      .map(
+        (item, index) => `${index + 1}\n${formatTimestamp(item.start)} --> ${formatTimestamp(item.end)}\n${item.text}`,
+      )
+      .join('\n\n') + (normalized.length ? '\n\n' : '')
+  );
 }
 
 function normalizeSrt(content, options = {}) {
@@ -84,7 +99,10 @@ function normalizeSrt(content, options = {}) {
 // Unlike the display parser, completed output must not silently discard a bad
 // block, reorder dialogue, or conceal an invalid timeline.
 function validateSrt(content, options = {}) {
-  const source = String(content || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
+  const source = String(content || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r/g, '')
+    .trim();
   if (!source) throw new Error('SRT 为空');
   const duration = Number(options.duration);
   const endMillis = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) : Infinity;
@@ -95,10 +113,13 @@ function validateSrt(content, options = {}) {
     const start = timing && parseTimestamp(timing[1]);
     const end = timing && parseTimestamp(timing[2]);
     const text = lines.slice(2).join('\n').trim();
-    const invalid = message => { throw new Error(`SRT 第 ${index + 1} 条${message}`); };
+    const invalid = (message) => {
+      throw new Error(`SRT 第 ${index + 1} 条${message}`);
+    };
     if (Number(lines[0]) !== index + 1 || !/^\d+$/.test(lines[0])) invalid('编号不连续');
     if (start == null || end == null) invalid('时间格式错误');
-    const startMs = Math.round(start * 1000), endMs = Math.round(end * 1000);
+    const startMs = Math.round(start * 1000),
+      endMs = Math.round(end * 1000);
     if (endMs <= startMs) invalid('结束时间必须晚于开始时间');
     if (startMs < previousEnd) invalid('与上一条重叠或时间倒退');
     if (endMs > endMillis) invalid('超出去重视频时长');
@@ -115,7 +136,8 @@ function correctSrtBounds(content, { duration, audioOffset = 0, audioEnd = durat
   const last = Math.min(Math.round(duration * 1000), Math.floor(audioEnd * 1000)) / 1000;
   let correctedCues = 0;
   const entries = checked.entries.map((entry, index) => {
-    const start = Math.max(entry.start, first), end = Math.min(entry.end, last);
+    const start = Math.max(entry.start, first),
+      end = Math.min(entry.end, last);
     if (end <= start) throw new Error(`SRT 第 ${index + 1} 条完全位于音轨之外，无法可靠校正`);
     if (start !== entry.start || end !== entry.end) correctedCues++;
     return { ...entry, start, end };
@@ -124,7 +146,10 @@ function correctSrtBounds(content, { duration, audioOffset = 0, audioEnd = durat
 }
 
 function srtToText(content) {
-  return parseSrt(content).map(item => item.text).join('\n').trim();
+  return parseSrt(content)
+    .map((item) => item.text)
+    .join('\n')
+    .trim();
 }
 
 module.exports = {

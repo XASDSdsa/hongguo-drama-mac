@@ -5,7 +5,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
 
-
   // 红果解析与下载
   hongguoResolve: (input) => ipcRenderer.invoke('hongguo-resolve', input),
   hongguoDownloadBatch: (payload) => ipcRenderer.invoke('hongguo-download-batch', payload),
@@ -62,8 +61,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 播放器
   getSeriesEpisodes: (seriesId) => ipcRenderer.invoke('get-series-episodes', seriesId),
-  downloadSingleEpisode: (seriesId, vidIndex) =>
-    ipcRenderer.invoke('download-single-episode', seriesId, vidIndex),
+  downloadSingleEpisode: (seriesId, vidIndex) => ipcRenderer.invoke('download-single-episode', seriesId, vidIndex),
   // AI 发布素材：独立于下载/合并任务，支持封面重绘与已下载分集文案生成
   getSeriesPipelineStatus: (seriesId) => ipcRenderer.invoke('get-series-pipeline-status', seriesId),
   getFasterWhisperStatus: () => ipcRenderer.invoke('get-faster-whisper-status'),

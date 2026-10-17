@@ -5,7 +5,9 @@ module.exports = function sm3(input) {
   source.copy(data);
   data[source.length] = 0x80;
   data.writeBigUInt64BE(BigInt(source.length) * 8n, data.length - 8);
-  const state = new Uint32Array([0x7380166f, 0x4914b2b9, 0x172442d7, 0xda8a0600, 0xa96f30bc, 0x163138aa, 0xe38dee4d, 0xb0fb0e4e]);
+  const state = new Uint32Array([
+    0x7380166f, 0x4914b2b9, 0x172442d7, 0xda8a0600, 0xa96f30bc, 0x163138aa, 0xe38dee4d, 0xb0fb0e4e,
+  ]);
   const words = new Uint32Array(68);
   const rotate = (x, n) => ((x << (n & 31)) | (x >>> ((32 - n) & 31))) >>> 0;
   for (let offset = 0; offset < data.length; offset += 64) {
@@ -23,8 +25,13 @@ module.exports = function sm3(input) {
       const gg = i < 16 ? e ^ f ^ g : (e & f) | (~e & g);
       const t1 = (ff + d + s2 + (words[i] ^ words[i + 4])) >>> 0;
       const t2 = (gg + h + s1 + words[i]) >>> 0;
-      d = c; c = rotate(b, 9); b = a; a = t1;
-      h = g; g = rotate(f, 19); f = e;
+      d = c;
+      c = rotate(b, 9);
+      b = a;
+      a = t1;
+      h = g;
+      g = rotate(f, 19);
+      f = e;
       e = (t2 ^ rotate(t2, 9) ^ rotate(t2, 17)) >>> 0;
     }
     const next = [a, b, c, d, e, f, g, h];

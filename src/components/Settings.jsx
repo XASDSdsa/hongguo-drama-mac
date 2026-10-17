@@ -3,7 +3,6 @@ import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
-
 const FORMAT_PRESETS = [
   { label: '剧名_第N集', value: '剧名 集数' },
   { label: '剧名_第N集_标题', value: '剧名 集数 标题' },
@@ -61,17 +60,25 @@ function SettingsPage({ active = true }) {
     try {
       const next = await window.electronAPI.getSettings();
       setSettings(next);
+    } catch (error) {
+      setLoadError(error.message || '设置加载失败，请重试');
     }
-    catch (error) { setLoadError(error.message || '设置加载失败，请重试'); }
   };
 
   useEffect(() => {
     loadSettings();
-    return () => { testVersion.current++; clearTimeout(savedTimer.current); };
+    return () => {
+      testVersion.current++;
+      clearTimeout(savedTimer.current);
+    };
   }, []);
 
   useEffect(() => {
-    if (!active) { testVersion.current++; setTesting(false); setTestResult(null); }
+    if (!active) {
+      testVersion.current++;
+      setTesting(false);
+      setTestResult(null);
+    }
   }, [active]);
 
   const update = (key, value) => {
@@ -85,7 +92,9 @@ function SettingsPage({ active = true }) {
     try {
       const dir = await window.electronAPI.selectFolder();
       if (dir) update('root', dir);
-    } catch (error) { setSaveError(error.message || '文件夹选择失败，请重试'); }
+    } catch (error) {
+      setSaveError(error.message || '文件夹选择失败，请重试');
+    }
   };
 
   const persist = async (next, isProxy = false) => {
@@ -98,9 +107,32 @@ function SettingsPage({ active = true }) {
       // Playback options may change while this retained settings page is hidden.
       const current = await window.electronAPI.getSettings();
       const editable = [
-        'root', 'name_format', 'max_concurrent',
-        'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password',
-        'ai_base_url', 'ai_api_key', 'ai_image_model', 'ai_text_model', 'ai_transcription_model', 'ai_transcription_engine', 'whisper_binary_path', 'whisper_model_path', 'whisper_language', 'whisper_threads', 'faster_whisper_python_path', 'faster_whisper_script_path', 'faster_whisper_model', 'faster_whisper_device', 'faster_whisper_compute_type', 'faster_whisper_concurrency', 'ai_concurrency',
+        'root',
+        'name_format',
+        'max_concurrent',
+        'proxy_enabled',
+        'proxy_mode',
+        'proxy_host',
+        'proxy_port',
+        'proxy_username',
+        'proxy_password',
+        'ai_base_url',
+        'ai_api_key',
+        'ai_image_model',
+        'ai_text_model',
+        'ai_transcription_model',
+        'ai_transcription_engine',
+        'whisper_binary_path',
+        'whisper_model_path',
+        'whisper_language',
+        'whisper_threads',
+        'faster_whisper_python_path',
+        'faster_whisper_script_path',
+        'faster_whisper_model',
+        'faster_whisper_device',
+        'faster_whisper_compute_type',
+        'faster_whisper_concurrency',
+        'ai_concurrency',
       ];
       const submitted = { ...current };
       for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
@@ -167,10 +199,29 @@ function SettingsPage({ active = true }) {
 
   const applyProxy = () => persist({ ...settings, ...proxyDraft }, true);
 
-  useDialogKeyboard(active && proxyOpen, () => { if (!savingRef.current) closeProxy(); }, '.proxy-modal');
+  useDialogKeyboard(
+    active && proxyOpen,
+    () => {
+      if (!savingRef.current) closeProxy();
+    },
+    '.proxy-modal',
+  );
 
   if (!settings) {
-    return <div className="settings-container">{loadError ? <div role="alert"><p>{loadError}</p><button className="btn btn-outline" onClick={loadSettings}>重新加载</button></div> : '加载中...'}</div>;
+    return (
+      <div className="settings-container">
+        {loadError ? (
+          <div role="alert">
+            <p>{loadError}</p>
+            <button className="btn btn-outline" onClick={loadSettings}>
+              重新加载
+            </button>
+          </div>
+        ) : (
+          '加载中...'
+        )}
+      </div>
+    );
   }
 
   const proxyInfo = describeProxy(settings);
@@ -180,7 +231,10 @@ function SettingsPage({ active = true }) {
     <div className="settings-container">
       <div className="settings-header">
         <Settings size={22} />
-        <div><h2>设置</h2><p className="page-description">让下载、保存和网络连接，按你的习惯运行。</p></div>
+        <div>
+          <h2>设置</h2>
+          <p className="page-description">让下载、保存和网络连接，按你的习惯运行。</p>
+        </div>
       </div>
 
       <fieldset className="settings-card" disabled={saving}>
@@ -200,7 +254,9 @@ function SettingsPage({ active = true }) {
               选择文件夹
             </button>
           </div>
-          <p className="settings-hint">文件将保存到 <code>下载目录/红果短剧/剧名/</code> 下</p>
+          <p className="settings-hint">
+            文件将保存到 <code>下载目录/红果短剧/剧名/</code> 下
+          </p>
         </div>
 
         <div className="settings-group">
@@ -238,12 +294,14 @@ function SettingsPage({ active = true }) {
             onChange={(e) => update('max_concurrent', parseInt(e.target.value, 10))}
           >
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-              <option key={n} value={n}>{n} 个同时下载</option>
+              <option key={n} value={n}>
+                {n} 个同时下载
+              </option>
             ))}
           </select>
           <p className="settings-hint">
-            同时下载 <b>{settings.max_concurrent || 3}</b> 集（保存后立即生效）。
-            并发越高越快，但可能触发接口限流，建议 3~5。
+            同时下载 <b>{settings.max_concurrent || 3}</b> 集（保存后立即生效）。 并发越高越快，但可能触发接口限流，建议
+            3~5。
           </p>
         </div>
 
@@ -251,16 +309,33 @@ function SettingsPage({ active = true }) {
           <label className="settings-label">完整字幕识别（faster-whisper）</label>
           <p className="settings-hint">已内置字幕引擎和 tiny 模型，无需安装 Python，离线即可识别。</p>
           <div className="preset-row mt8">
-            <select className="input-field select-field" aria-label="faster-whisper 设备" value={settings.faster_whisper_device || 'auto'} onChange={(e) => update('faster_whisper_device', e.target.value)}>
+            <select
+              className="input-field select-field"
+              aria-label="faster-whisper 设备"
+              value={settings.faster_whisper_device || 'auto'}
+              onChange={(e) => update('faster_whisper_device', e.target.value)}
+            >
               <option value="auto">自动检测（批次固定）</option>
               <option value="cpu">CPU</option>
               <option value="cuda">CUDA（未检测到时直接报错）</option>
             </select>
-            <select className="input-field select-field" aria-label="字幕识别并发数" value={settings.faster_whisper_concurrency || 2} onChange={(e) => update('faster_whisper_concurrency', Number(e.target.value))}>
-              {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value} 集并发</option>)}
+            <select
+              className="input-field select-field"
+              aria-label="字幕识别并发数"
+              value={settings.faster_whisper_concurrency || 2}
+              onChange={(e) => update('faster_whisper_concurrency', Number(e.target.value))}
+            >
+              {[1, 2, 3, 4].map((value) => (
+                <option key={value} value={value}>
+                  {value} 集并发
+                </option>
+              ))}
             </select>
           </div>
-          <p className="settings-hint">只读取已去重视频，每批开始时固定处理设备。识别完成后，每集完整字幕保存在该剧目录的 <code>transcripts/</code>。</p>
+          <p className="settings-hint">
+            只读取已去重视频，每批开始时固定处理设备。识别完成后，每集完整字幕保存在该剧目录的 <code>transcripts/</code>
+            。
+          </p>
         </div>
 
         <div className="settings-group">
@@ -268,7 +343,13 @@ function SettingsPage({ active = true }) {
           <div className="proxy-status-row">
             <span className={`proxy-dot ${proxyInfo.on ? 'proxy-dot-on' : 'proxy-dot-off'}`} />
             <span className="proxy-status-text">
-              {proxyInfo.on ? <>已启用：<code>{proxyInfo.text}</code></> : proxyInfo.text}
+              {proxyInfo.on ? (
+                <>
+                  已启用：<code>{proxyInfo.text}</code>
+                </>
+              ) : (
+                proxyInfo.text
+              )}
             </span>
             <button className="btn btn-outline btn-sm" onClick={openProxyModal}>
               <Globe size={15} />
@@ -281,17 +362,40 @@ function SettingsPage({ active = true }) {
         </div>
 
         <div className="settings-footer">
-          {dirty && <span className="settings-hint" role="status">有未保存的修改</span>}
+          {dirty && (
+            <span className="settings-hint" role="status">
+              有未保存的修改
+            </span>
+          )}
           <button className="btn btn-primary" onClick={save}>
-            {saving ? '正在保存…' : saved ? <><Check size={16} /> 已保存</> : '保存设置'}
+            {saving ? (
+              '正在保存…'
+            ) : saved ? (
+              <>
+                <Check size={16} /> 已保存
+              </>
+            ) : (
+              '保存设置'
+            )}
           </button>
         </div>
-        {saveError && !proxyOpen && <p className="alert alert-error" role="alert">{saveError}</p>}
+        {saveError && !proxyOpen && (
+          <p className="alert alert-error" role="alert">
+            {saveError}
+          </p>
+        )}
       </fieldset>
 
       {proxyOpen && proxyDraft && (
         <div className="proxy-modal-mask" onClick={() => !saving && closeProxy()}>
-          <div className="proxy-modal" role="dialog" aria-modal="true" aria-label="网络代理设置" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+          <div
+            className="proxy-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="网络代理设置"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="proxy-modal-head">
               <div className="proxy-modal-title">
                 <Globe size={18} />
@@ -320,10 +424,7 @@ function SettingsPage({ active = true }) {
                   <label className="settings-label">代理模式</label>
                   <div className="proxy-mode-list">
                     {PROXY_MODES.map((m) => (
-                      <label
-                        key={m.value}
-                        className={`proxy-mode-item ${mode === m.value ? 'active' : ''}`}
-                      >
+                      <label key={m.value} className={`proxy-mode-item ${mode === m.value ? 'active' : ''}`}>
                         <input
                           type="radio"
                           name="proxy_mode"
@@ -422,7 +523,11 @@ function SettingsPage({ active = true }) {
                   </span>
                 </div>
               )}
-              {saveError && <p className="alert alert-error" role="alert">{saveError}</p>}
+              {saveError && (
+                <p className="alert alert-error" role="alert">
+                  {saveError}
+                </p>
+              )}
             </fieldset>
 
             <div className="proxy-modal-foot">
@@ -431,7 +536,9 @@ function SettingsPage({ active = true }) {
                 {testing ? '测试中...' : '测试连接'}
               </button>
               <div className="proxy-foot-right">
-                <button className="btn btn-outline" disabled={saving} onClick={closeProxy}>取消</button>
+                <button className="btn btn-outline" disabled={saving} onClick={closeProxy}>
+                  取消
+                </button>
                 <button className="btn btn-primary" disabled={saving} onClick={applyProxy}>
                   <Check size={15} />
                   {saving ? '正在保存…' : '保存并生效'}
@@ -444,6 +551,5 @@ function SettingsPage({ active = true }) {
     </div>
   );
 }
-
 
 export default SettingsPage;

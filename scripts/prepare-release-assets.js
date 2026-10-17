@@ -46,7 +46,10 @@ function main() {
 
   for (const m of MAP) {
     const src = findInDist(m.from);
-    if (!src) { missing.push(m.from); continue; }
+    if (!src) {
+      missing.push(m.from);
+      continue;
+    }
     const dst = path.join(OUT, m.to);
     fs.copyFileSync(src, dst); // 复制而不是改名，保留 dist 里的原始产物
     done.push({ ...m, size: fs.statSync(dst).size });
@@ -69,7 +72,9 @@ function main() {
   console.log('  或补传：gh release upload v' + VERSION + ' dist/release/* --clobber');
 }
 
-try { main(); } catch (e) {
+try {
+  main();
+} catch (e) {
   console.error('失败：' + e.message);
   process.exit(1);
 }

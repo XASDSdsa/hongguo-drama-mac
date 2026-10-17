@@ -36,8 +36,16 @@ function copyIfSupplied(source, target, label) {
 }
 
 try {
-  const copiedBin = copyIfSupplied(option('--binary') || process.env.WHISPER_CPP_BIN, targetBin, 'whisper.cpp 可执行文件');
-  const copiedModel = copyIfSupplied(option('--model') || process.env.WHISPER_CPP_MODEL, targetModel, 'ggml-tiny.bin 模型');
+  const copiedBin = copyIfSupplied(
+    option('--binary') || process.env.WHISPER_CPP_BIN,
+    targetBin,
+    'whisper.cpp 可执行文件',
+  );
+  const copiedModel = copyIfSupplied(
+    option('--model') || process.env.WHISPER_CPP_MODEL,
+    targetModel,
+    'ggml-tiny.bin 模型',
+  );
   const hasBin = fs.existsSync(targetBin) && fs.statSync(targetBin).isFile();
   const hasModel = fs.existsSync(targetModel) && fs.statSync(targetModel).isFile() && fs.statSync(targetModel).size > 0;
   if (!hasBin || !hasModel) {
@@ -47,7 +55,9 @@ try {
     console.error('请使用 --binary / --model，或设置 WHISPER_CPP_BIN / WHISPER_CPP_MODEL。');
     process.exitCode = 2;
   } else {
-    console.log(`whisper.cpp 已就绪（${platform}-${arch}，tiny 模型）${copiedBin || copiedModel ? '，资源已更新' : ''}`);
+    console.log(
+      `whisper.cpp 已就绪（${platform}-${arch}，tiny 模型）${copiedBin || copiedModel ? '，资源已更新' : ''}`,
+    );
   }
 } catch (error) {
   console.error(error.message);

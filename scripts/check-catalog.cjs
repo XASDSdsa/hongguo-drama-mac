@@ -4,41 +4,103 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 const file = path.join(root, 'src/native/catalog.js');
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
-const html = (category = 'real-drama', page = 1, list) => `<script>_ROUTER_DATA = ${JSON.stringify({ loaderData: { 'category_$': {
-  isSuccess: true, categoryRoute: { contentType: category }, seo: { title: '目录 } ; 测试' },
-  recommendList: list || [{ series_id: '1234567890123456789', series_name: '示例剧', series_cover: 'https://example.com/cover.jpg', episode_cnt: 77, tags: ['爱情'] }],
-  pagination: { pageNum: page, total: 800, totalPages: 34 }, selectorList: [{ items: [{ selector_item_id: 'romance', show_name: '爱情' }] }],
-} } })};function runWindowFn(){throw Error('must not execute remote scripts')}</script>`;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+const html = (category = 'real-drama', page = 1, list) =>
+  `<script>_ROUTER_DATA = ${JSON.stringify({
+    loaderData: {
+      category_$: {
+        isSuccess: true,
+        categoryRoute: { contentType: category },
+        seo: { title: '目录 } ; 测试' },
+        recommendList: list || [
+          {
+            series_id: '1234567890123456789',
+            series_name: '示例剧',
+            series_cover: 'https://example.com/cover.jpg',
+            episode_cnt: 77,
+            tags: ['爱情'],
+          },
+        ],
+        pagination: { pageNum: page, total: 800, totalPages: 34 },
+        selectorList: [{ items: [{ selector_item_id: 'romance', show_name: '爱情' }] }],
+      },
+    },
+  })};function runWindowFn(){throw Error('must not execute remote scripts')}</script>`;
 
 async function main() {
   if (!fs.existsSync(file)) {
     // Exercise the old real queue, with comic navigation stalled and real-drama ready.
     const code = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-    const context = { console: { log() {}, warn() {} }, searchWindowReady: null, SEARCH_TIMEOUT_MS: 1,
-      SEARCH_SITE: 'https://hongguoduanju.com', SEARCH_UA: '', SNIFFER_JS: 'cards', BROWSE_META_JS: 'meta', setTimeout,
-      getSearchWindow: () => ({ loadURL: url => url.endsWith('/comic') ? new Promise(() => {}) : Promise.resolve(),
-        webContents: { executeJavaScript: async script => script === 'cards' ? '[{"series_id":"1234567","series_title":"真人"}]' : '{}' } }),
+    const context = {
+      console: { log() {}, warn() {} },
+      searchWindowReady: null,
+      SEARCH_TIMEOUT_MS: 1,
+      SEARCH_SITE: 'https://hongguoduanju.com',
+      SEARCH_UA: '',
+      SNIFFER_JS: 'cards',
+      BROWSE_META_JS: 'meta',
+      setTimeout,
+      getSearchWindow: () => ({
+        loadURL: (url) => (url.endsWith('/comic') ? new Promise(() => {}) : Promise.resolve()),
+        webContents: {
+          executeJavaScript: async (script) =>
+            script === 'cards' ? '[{"series_id":"1234567","series_title":"真人"}]' : '{}',
+        },
+      }),
     };
     vm.createContext(context);
-    vm.runInContext(code.slice(code.indexOf('async function runSniffOnUrl('), code.indexOf('async function runSearchSniff(')), context);
+    vm.runInContext(
+      code.slice(code.indexOf('async function runSniffOnUrl('), code.indexOf('async function runSearchSniff(')),
+      context,
+    );
     context.runSniffOnUrl('https://hongguoduanju.com/category/comic', 'Browse');
-    const outcome = await Promise.race([context.runSniffOnUrl('https://hongguoduanju.com/category/real-drama', 'Browse'), delay(80).then(() => 'blocked')]);
+    const outcome = await Promise.race([
+      context.runSniffOnUrl('https://hongguoduanju.com/category/real-drama', 'Browse'),
+      delay(80).then(() => 'blocked'),
+    ]);
     assert.notEqual(outcome, 'blocked', '漫画导航未完成时，真人剧被共享串行队列阻塞');
     return;
   }
 
   const calls = [];
   const comic = deferred();
-  let response = (url) => url.endsWith('/comic') ? comic.promise : Promise.resolve({ data: html('real-drama', url.includes('page=2') ? 2 : 1) });
-  const context = { module: { exports: {} }, require: name => name === 'axios' ? { get: (url, options) => {
-    calls.push({ url, options }); return response(url);
-  } } : require(name), AbortController, setTimeout: (fn, ms) => setTimeout(fn, ms === 10000 ? 40 : ms), clearTimeout, URL, console };
+  let response = (url) =>
+    url.endsWith('/comic')
+      ? comic.promise
+      : Promise.resolve({ data: html('real-drama', url.includes('page=2') ? 2 : 1) });
+  const context = {
+    module: { exports: {} },
+    require: (name) =>
+      name === 'axios'
+        ? {
+            get: (url, options) => {
+              calls.push({ url, options });
+              return response(url);
+            },
+          }
+        : require(name),
+    AbortController,
+    setTimeout: (fn, ms) => setTimeout(fn, ms === 10000 ? 40 : ms),
+    clearTimeout,
+    URL,
+    console,
+  };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
   const { browseList } = context.module.exports;
   const slowComic = browseList({ category: 'comic' });
-  const [real, same] = await Promise.race([Promise.all([browseList({}), browseList({})]), delay(100).then(() => { throw Error('真人剧被漫画请求阻塞'); })]);
+  const [real, same] = await Promise.race([
+    Promise.all([browseList({}), browseList({})]),
+    delay(100).then(() => {
+      throw Error('真人剧被漫画请求阻塞');
+    }),
+  ]);
   assert.equal(real.success, true);
   assert.equal(real.results[0].series_id, '1234567890123456789');
   assert.equal(real.results[0].episode_count, 77);
@@ -74,6 +136,11 @@ async function main() {
   assert.equal(animation.results.length, 1, '漫剧是视频，不能误判为图片漫画');
   const invalid = await browseList({ category: '../../outside' });
   assert.equal(invalid.success, false);
-  console.log('PASS catalog: category isolation, SSR parsing, comic distinction, dedup/cache/refresh, filters/pagination, bounded timeout and invalid data');
+  console.log(
+    'PASS catalog: category isolation, SSR parsing, comic distinction, dedup/cache/refresh, filters/pagination, bounded timeout and invalid data',
+  );
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});

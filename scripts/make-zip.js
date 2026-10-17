@@ -61,10 +61,11 @@ function safeUnlink(p) {
 function safeRemoveDir(dir) {
   if (!fs.existsSync(dir)) return true;
   try {
-    execFileSync('powershell', [
-      '-NoProfile', '-Command',
-      `Remove-Item -LiteralPath '${dir}' -Recurse -Force -ErrorAction SilentlyContinue`,
-    ], { stdio: 'ignore' });
+    execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', `Remove-Item -LiteralPath '${dir}' -Recurse -Force -ErrorAction SilentlyContinue`],
+      { stdio: 'ignore' },
+    );
     return !fs.existsSync(dir);
   } catch (e) {
     console.warn('[zip] 删除目录失败：' + dir + ' — ' + e.message);
@@ -116,9 +117,8 @@ function main() {
       console.log('[zip] 压缩中（PowerShell Compress-Archive）…');
       execFileSync(
         'powershell',
-        ['-NoProfile', '-Command',
-         `Compress-Archive -LiteralPath '${STAGED}' -DestinationPath '${ZIP_PATH}' -Force`],
-        { stdio: 'inherit' }
+        ['-NoProfile', '-Command', `Compress-Archive -LiteralPath '${STAGED}' -DestinationPath '${ZIP_PATH}' -Force`],
+        { stdio: 'inherit' },
       );
     }
 

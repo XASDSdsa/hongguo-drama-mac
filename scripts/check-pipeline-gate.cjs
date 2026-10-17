@@ -6,7 +6,10 @@ const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
 
 const checks = [
-  ['pipeline status persists episode/group markers', /pipelineForEntry[\s\S]*pipeline\.episodes[\s\S]*pipeline\.groups/],
+  [
+    'pipeline status persists episode/group markers',
+    /pipelineForEntry[\s\S]*pipeline\.episodes[\s\S]*pipeline\.groups/,
+  ],
   ['download completion marks downloaded stage', /markPipelineDownloaded\(task, finalPath\)/],
   ['dedup completion marks deduped stage', /markPipelineDeduped\(task\.src, task\.dst\)/],
   ['merge start records segmented stage', /markPipelineSegmented\(task\)/],
@@ -15,7 +18,10 @@ const checks = [
   ['AI episode enqueue requires ready product', /aiReadyEpisodeProduct\(seriesId, episodeIndex\)/],
   ['AI cover enqueue requires ready product', /aiReadyProductForSeries\(sid\)/],
   ['AI execution revalidates product fingerprint', /最终成品已移动、删除或发生变化/],
-  ['AI batches accept one task per productId', /requestedProducts[\s\S]*enqueueCopyTask\(sid, ready\.episodeIndex[\s\S]*productId/],
+  [
+    'AI batches accept one task per productId',
+    /requestedProducts[\s\S]*enqueueCopyTask\(sid, ready\.episodeIndex[\s\S]*productId/,
+  ],
   ['pipeline status IPC is exposed', /ipcMain\.handle\('get-series-pipeline-status'/],
   ['pipeline status IPC is available to renderer', /getSeriesPipelineStatus:.*get-series-pipeline-status/],
 ];

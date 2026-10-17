@@ -30,9 +30,13 @@ export default function App() {
     });
   }, []);
 
-  useEffect(() => window.electronAPI.onStorageError?.((data) => {
-    setStorageError(data?.error || '数据保存失败，请检查磁盘空间和目录权限后重试。');
-  }), []);
+  useEffect(
+    () =>
+      window.electronAPI.onStorageError?.((data) => {
+        setStorageError(data?.error || '数据保存失败，请检查磁盘空间和目录权限后重试。');
+      }),
+    [],
+  );
 
   // 主进程发来的导航指令（例如浏览页点「立即播放」）
   useEffect(() => {
@@ -43,14 +47,14 @@ export default function App() {
         setPlayerTarget({ ...data.payload, ts: Date.now() });
         setPageTarget({ ...data.payload, ts: Date.now() });
       }
-      setVisited((pages) => pages.includes(data.page) ? pages : [...pages, data.page]);
+      setVisited((pages) => (pages.includes(data.page) ? pages : [...pages, data.page]));
       setPage(data.page);
     });
   }, []);
 
   const navigate = (nextPage, payload = null) => {
     setPageTarget(payload ? { ...payload, ts: Date.now() } : null);
-    setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
+    setVisited((pages) => (pages.includes(nextPage) ? pages : [...pages, nextPage]));
     setPage(nextPage);
   };
 
@@ -80,27 +84,44 @@ export default function App() {
       <aside className="sidebar" aria-label="主导航">
         <div className="sidebar-window-drag" aria-hidden="true" />
         <div className="sidebar-brand">
-          <div className="logo"><Play size={21} /></div>
-          <div><div className="brand-text">红果短剧</div><div className="brand-sub">每一集，都值得期待</div></div>
+          <div className="logo">
+            <Play size={21} />
+          </div>
+          <div>
+            <div className="brand-text">红果短剧</div>
+            <div className="brand-sub">每一集，都值得期待</div>
+          </div>
         </div>
         <nav className="sidebar-menu">
           <div className="sidebar-group-label">内容</div>
           {MENU.filter((item) => item.id !== 'settings').map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.id} className={`sidebar-item ${page === item.id ? 'active' : ''}`}
-                aria-current={page === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
-                <Icon size={19} /><span>{item.label}</span>
+              <button
+                key={item.id}
+                className={`sidebar-item ${page === item.id ? 'active' : ''}`}
+                aria-current={page === item.id ? 'page' : undefined}
+                onClick={() => navigate(item.id)}
+              >
+                <Icon size={19} />
+                <span>{item.label}</span>
               </button>
             );
           })}
         </nav>
         <div className="sidebar-footer">
-          <button className={`sidebar-item ${page === 'settings' ? 'active' : ''}`}
-            aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>
-            <Settings size={19} /><span>设置</span>
+          <button
+            className={`sidebar-item ${page === 'settings' ? 'active' : ''}`}
+            aria-current={page === 'settings' ? 'page' : undefined}
+            onClick={() => navigate('settings')}
+          >
+            <Settings size={19} />
+            <span>设置</span>
           </button>
-          <div className="footer-note"><span>红果短剧</span><span>{appInfo?.version ? `v${appInfo.version}` : ''}</span></div>
+          <div className="footer-note">
+            <span>红果短剧</span>
+            <span>{appInfo?.version ? `v${appInfo.version}` : ''}</span>
+          </div>
         </div>
       </aside>
       <div className="main-wrapper">
@@ -108,8 +129,19 @@ export default function App() {
           <span className="toolbar-location">{currentPage?.label}</span>
           <span className="toolbar-caption">红果短剧</span>
         </header>
-        {storageError && <div className="app-storage-error" role="alert"><span>{storageError}</span><button className="btn btn-outline btn-sm" onClick={() => setStorageError('')}>关闭提示</button></div>}
-        {visited.map((id) => <main className="main-content" data-page={id} hidden={page !== id} key={id}>{renderPage(id)}</main>)}
+        {storageError && (
+          <div className="app-storage-error" role="alert">
+            <span>{storageError}</span>
+            <button className="btn btn-outline btn-sm" onClick={() => setStorageError('')}>
+              关闭提示
+            </button>
+          </div>
+        )}
+        {visited.map((id) => (
+          <main className="main-content" data-page={id} hidden={page !== id} key={id}>
+            {renderPage(id)}
+          </main>
+        ))}
       </div>
     </div>
   );

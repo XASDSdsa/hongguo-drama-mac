@@ -9,7 +9,20 @@ const responses = [
   { data: [{ b64_json: Buffer.from('image').toString('base64') }] },
   { data: [{ b64_json: Buffer.from('edited').toString('base64') }] },
   '识别到的对白',
-  { choices: [{ message: { content: JSON.stringify({ title: '第1集', summary: '主角遇到转折。', hook: '命运开始改变', hashtags: ['短剧', '反转'] }) } }] },
+  {
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            title: '第1集',
+            summary: '主角遇到转折。',
+            hook: '命运开始改变',
+            hashtags: ['短剧', '反转'],
+          }),
+        },
+      },
+    ],
+  },
 ];
 
 global.fetch = async (url, options = {}) => {
@@ -27,7 +40,9 @@ global.fetch = async (url, options = {}) => {
         controller.close();
       },
     }),
-    async text() { return typeof payload === 'string' ? payload : JSON.stringify(payload); },
+    async text() {
+      return typeof payload === 'string' ? payload : JSON.stringify(payload);
+    },
   };
 };
 

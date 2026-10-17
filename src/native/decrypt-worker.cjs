@@ -16,12 +16,16 @@ function decryptInWorker(payload, { signal, cancelToken } = {}) {
       if (error) reject(error);
       else resolve(result?.buffer ? Buffer.from(result.buffer) : undefined);
     };
-    const cancel = () => { void finish(new Error('已取消')); };
+    const cancel = () => {
+      void finish(new Error('已取消'));
+    };
     signal?.addEventListener('abort', cancel, { once: true });
     cancelToken?.subscribe?.(cancel);
-    worker.once('message', result => void finish(result.error ? new Error(result.error) : null, result));
-    worker.once('error', error => void finish(error));
-    worker.once('exit', code => { if (!settled) void finish(new Error(`视频处理意外中断（${code}）`)); });
+    worker.once('message', (result) => void finish(result.error ? new Error(result.error) : null, result));
+    worker.once('error', (error) => void finish(error));
+    worker.once('exit', (code) => {
+      if (!settled) void finish(new Error(`视频处理意外中断（${code}）`));
+    });
     if (signal?.aborted || cancelToken?.reason) cancel();
   });
 }

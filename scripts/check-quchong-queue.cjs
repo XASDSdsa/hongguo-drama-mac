@@ -11,33 +11,73 @@ const source = fs.readFileSync(sourcePath, 'utf8');
 const req = createRequire(sourcePath);
 const native = req('./src/native/quchong');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-quchong-queue-'));
-const copy = value => JSON.parse(JSON.stringify(value));
-const tick = () => new Promise(resolve => setImmediate(resolve));
+const copy = (value) => JSON.parse(JSON.stringify(value));
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 let serial = 0;
 
 function load() {
   const dir = path.join(temp, String(++serial));
   fs.mkdirSync(dir);
-  const handlers = {}, events = [], marks = [], saved = [], jobs = new Map(), starts = [];
+  const handlers = {},
+    events = [],
+    marks = [],
+    saved = [],
+    jobs = new Map(),
+    starts = [];
   let settings = { quchong_jobs: 2 };
   const app = new EventEmitter();
-  Object.assign(app, { getVersion: () => 'test', getPath: () => dir,
-    commandLine: { appendSwitch() {} }, whenReady: () => ({ then() {} }) });
-  const electron = { app, ipcMain: { handle: (name, fn) => { handlers[name] = fn; } },
-    protocol: { registerSchemesAsPrivileged() {} } };
-  const quchong = { ...native, runJob(options) {
-    starts.push(options.src);
-    return new Promise((resolve, reject) => {
-      const job = { ...options, resolve: () => resolve({ path: options.dst }), reject };
-      jobs.set(options.src, job);
-      options.signal.addEventListener('abort', () => reject(new Error('已取消')), { once: true });
-    });
-  } };
+  Object.assign(app, {
+    getVersion: () => 'test',
+    getPath: () => dir,
+    commandLine: { appendSwitch() {} },
+    whenReady: () => ({ then() {} }),
+  });
+  const electron = {
+    app,
+    ipcMain: {
+      handle: (name, fn) => {
+        handlers[name] = fn;
+      },
+    },
+    protocol: { registerSchemesAsPrivileged() {} },
+  };
+  const quchong = {
+    ...native,
+    runJob(options) {
+      starts.push(options.src);
+      return new Promise((resolve, reject) => {
+        const job = { ...options, resolve: () => resolve({ path: options.dst }), reject };
+        jobs.set(options.src, job);
+        options.signal.addEventListener('abort', () => reject(new Error('已取消')), { once: true });
+      });
+    },
+  };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './src/native/quchong' ? quchong
-      : name === './src/store' ? { getSettings: () => settings, saveSettings: value => { settings = value; }, saveQuchongTasks: tasks => saved.push(copy(tasks)) } : req(name),
-    __dirname: path.dirname(sourcePath), process, Buffer, URL, URLSearchParams, AbortController,
-    AbortSignal, setTimeout, clearTimeout, setImmediate, clearImmediate,
+    require: (name) =>
+      name === 'electron'
+        ? electron
+        : name === './src/native/quchong'
+          ? quchong
+          : name === './src/store'
+            ? {
+                getSettings: () => settings,
+                saveSettings: (value) => {
+                  settings = value;
+                },
+                saveQuchongTasks: (tasks) => saved.push(copy(tasks)),
+              }
+            : req(name),
+    __dirname: path.dirname(sourcePath),
+    process,
+    Buffer,
+    URL,
+    URLSearchParams,
+    AbortController,
+    AbortSignal,
+    setTimeout,
+    clearTimeout,
+    setImmediate,
+    clearImmediate,
     console: { log() {}, warn() {}, error() {} },
   });
   vm.runInContext(source, context, { filename: sourcePath });
@@ -45,14 +85,28 @@ function load() {
   context.sendToRenderer = (channel, payload) => events.push({ channel, ...copy(payload) });
   context.markPipelineDeduped = (src, dst) => marks.push({ src, dst });
   const snapshots = () => copy(handlers['get-quchong-tasks']());
-  return { dir, handlers, events, jobs, marks, saved, starts, snapshots, get settings() { return settings; },
+  return {
+    dir,
+    handlers,
+    events,
+    jobs,
+    marks,
+    saved,
+    starts,
+    snapshots,
+    get settings() {
+      return settings;
+    },
     async start(names, concurrency) {
-      const sources = names.map(name => path.join(dir, name + '.mp4'));
-      sources.forEach(file => fs.writeFileSync(file, 'fixture'));
-      const result = await handlers['quchong-start']({}, { sources, outputDir: path.join(dir, 'out'), opts: concurrency === undefined ? {} : { jobs: concurrency } });
+      const sources = names.map((name) => path.join(dir, name + '.mp4'));
+      sources.forEach((file) => fs.writeFileSync(file, 'fixture'));
+      const result = await handlers['quchong-start'](
+        {},
+        { sources, outputDir: path.join(dir, 'out'), opts: concurrency === undefined ? {} : { jobs: concurrency } },
+      );
       assert.equal(result.success, true, result.error);
       await tick();
-      return { ...result, sources, snapshot: () => snapshots().find(batch => batch.id === result.batchId) };
+      return { ...result, sources, snapshot: () => snapshots().find((batch) => batch.id === result.batchId) };
     },
   };
 }
@@ -65,13 +119,20 @@ async function check(name, run) {
 (async () => {
   await check('automatic output keeps same-title series and platforms isolated', async () => {
     const h = load();
-    const roots = [path.join(h.dir, '红果短剧', '同名剧-111111111111'), path.join(h.dir, '红果短剧', '同名剧-222222222222'), path.join(h.dir, '河马短剧', '同名剧-333333333333')];
-    const sources = roots.map(root => {
+    const roots = [
+      path.join(h.dir, '红果短剧', '同名剧-111111111111'),
+      path.join(h.dir, '红果短剧', '同名剧-222222222222'),
+      path.join(h.dir, '河马短剧', '同名剧-333333333333'),
+    ];
+    const sources = roots.map((root) => {
       fs.mkdirSync(path.join(root, '原视频'), { recursive: true });
-      const source = path.join(root, '原视频', '同名剧 001.mp4'); fs.writeFileSync(source, 'original'); return source;
+      const source = path.join(root, '原视频', '同名剧 001.mp4');
+      fs.writeFileSync(source, 'original');
+      return source;
     });
     const result = await h.handlers['quchong-start']({}, { sources, opts: { jobs: 3 } });
-    assert.equal(result.success, true, result.error); await tick();
+    assert.equal(result.success, true, result.error);
+    await tick();
     assert.equal(h.starts.length, 3);
     for (let index = 0; index < sources.length; index++) {
       const job = h.jobs.get(sources[index]);
@@ -82,45 +143,61 @@ async function check(name, run) {
     await tick();
   });
   await check('manually selected files dedup beside their source and keep existing outputs', async () => {
-    const h = load(), source = path.join(h.dir, 'Short 001.mp4');
+    const h = load(),
+      source = path.join(h.dir, 'Short 001.mp4');
     fs.writeFileSync(source, 'original');
-    const out = path.join(h.dir, '去重视频'); fs.mkdirSync(out);
-    const existing = path.join(out, 'Short 001_去重.mp4'); fs.writeFileSync(existing, 'existing');
+    const out = path.join(h.dir, '去重视频');
+    fs.mkdirSync(out);
+    const existing = path.join(out, 'Short 001_去重.mp4');
+    fs.writeFileSync(existing, 'existing');
     const result = await h.handlers['quchong-start']({}, { sources: [source], outputDir: '' });
-    assert.equal(result.success, true, result.error); await tick();
+    assert.equal(result.success, true, result.error);
+    await tick();
     assert.equal(h.jobs.get(source).dst, path.join(out, 'Short 001_去重_1.mp4'));
     assert.equal(fs.readFileSync(existing, 'utf8'), 'existing');
-    h.jobs.get(source).resolve(); await tick();
+    h.jobs.get(source).resolve();
+    await tick();
   });
   await check('one batch starts the configured number of jobs and fills each freed slot', async () => {
     const h = load();
     const batch = await h.start(['episode-1', 'episode-2', 'episode-3', 'episode-4'], 2);
-    const name = source => path.basename(source, '.mp4');
+    const name = (source) => path.basename(source, '.mp4');
     assert.deepEqual(h.starts.map(name), ['episode-1', 'episode-2'], 'configured jobs must be started immediately');
-    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 2);
+    assert.equal(batch.snapshot().tasks.filter((task) => task.status === 'running').length, 2);
 
     h.jobs.get(batch.sources[0]).resolve();
     await tick();
-    assert.deepEqual(h.starts.map(name), ['episode-1', 'episode-2', 'episode-3'], 'the next queued job must start as soon as a slot is free');
-    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 2);
+    assert.deepEqual(
+      h.starts.map(name),
+      ['episode-1', 'episode-2', 'episode-3'],
+      'the next queued job must start as soon as a slot is free',
+    );
+    assert.equal(batch.snapshot().tasks.filter((task) => task.status === 'running').length, 2);
   });
 
   await check('global eight-process cap still lets independent batches overlap', async () => {
     const h = load();
     const first = await h.start(['first-1', 'first-2', 'first-3', 'first-4', 'first-5', 'first-6'], 8);
     const second = await h.start(['second-1', 'second-2', 'second-3', 'second-4'], 8);
-    const name = source => path.basename(source, '.mp4');
+    const name = (source) => path.basename(source, '.mp4');
     assert.equal(h.starts.length, 8, 'two batches should share eight global slots');
     assert.deepEqual(h.starts.map(name), [
-      'first-1', 'first-2', 'first-3', 'first-4', 'first-5', 'first-6', 'second-1', 'second-2',
+      'first-1',
+      'first-2',
+      'first-3',
+      'first-4',
+      'first-5',
+      'first-6',
+      'second-1',
+      'second-2',
     ]);
-    assert.equal(first.snapshot().tasks.filter(task => task.status === 'running').length, 6);
-    assert.equal(second.snapshot().tasks.filter(task => task.status === 'running').length, 2);
+    assert.equal(first.snapshot().tasks.filter((task) => task.status === 'running').length, 6);
+    assert.equal(second.snapshot().tasks.filter((task) => task.status === 'running').length, 2);
 
     h.jobs.get(first.sources[0]).resolve();
     await tick();
     assert.equal(name(h.starts.at(-1)), 'second-3', 'a freed global slot must be assigned to another batch');
-    assert.equal(second.snapshot().tasks.filter(task => task.status === 'running').length, 3);
+    assert.equal(second.snapshot().tasks.filter((task) => task.status === 'running').length, 3);
   });
 
   await check('dedup concurrency is persisted, validated, and applies to queued work', async () => {
@@ -138,13 +215,21 @@ async function check(name, run) {
     for (const value of [0, -1, 9, 1.5, '4', null, NaN]) {
       const invalid = await h.handlers['quchong-set-concurrency']({}, value);
       assert.equal(invalid.success, false, `invalid concurrency accepted: ${String(value)}`);
-      assert.equal((await h.handlers['quchong-defaults']()).jobs, 4, 'invalid values must not overwrite the saved setting');
+      assert.equal(
+        (await h.handlers['quchong-defaults']()).jobs,
+        4,
+        'invalid values must not overwrite the saved setting',
+      );
     }
     for (const source of batch.sources) h.jobs.get(source)?.resolve();
     await tick();
     const next = await h.start(['saved-1', 'saved-2', 'saved-3', 'saved-4', 'saved-5']);
     assert.equal(next.snapshot().concurrency, 4);
-    assert.equal(next.snapshot().tasks.filter(task => task.status === 'running').length, 4, 'submissions without jobs should use the saved concurrency');
+    assert.equal(
+      next.snapshot().tasks.filter((task) => task.status === 'running').length,
+      4,
+      'submissions without jobs should use the saved concurrency',
+    );
   });
 
   await check('lowering concurrency lets active work finish before starting the next queued job', async () => {
@@ -153,8 +238,12 @@ async function check(name, run) {
     const result = await h.handlers['quchong-set-concurrency']({}, 1);
     assert.equal(result.success, true);
     assert.equal(batch.snapshot().concurrency, 1);
-    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 4, 'lowering the limit must not cancel running work');
-    assert.ok([...h.jobs.values()].every(job => !job.signal.aborted));
+    assert.equal(
+      batch.snapshot().tasks.filter((task) => task.status === 'running').length,
+      4,
+      'lowering the limit must not cancel running work',
+    );
+    assert.ok([...h.jobs.values()].every((job) => !job.signal.aborted));
     for (const source of batch.sources.slice(0, 3)) {
       h.jobs.get(source).resolve();
       await tick();
@@ -163,33 +252,40 @@ async function check(name, run) {
     h.jobs.get(batch.sources[3]).resolve();
     await tick();
     assert.equal(h.starts.length, 5);
-    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 1);
+    assert.equal(batch.snapshot().tasks.filter((task) => task.status === 'running').length, 1);
     h.jobs.get(batch.sources[4]).resolve();
     await tick();
     assert.equal(h.starts.length, 6);
-    assert.equal(batch.snapshot().tasks.filter(task => task.status === 'running').length, 1);
+    assert.equal(batch.snapshot().tasks.filter((task) => task.status === 'running').length, 1);
   });
 
-  await check('active and queued source files cannot be submitted twice while unrelated batches keep running', async () => {
-    const h = load();
-    const first = await h.start(['reserved-active', 'reserved-queued'], 1);
-    const other = await h.start(['independent']);
-    for (const src of first.sources) {
-      const result = await h.handlers['quchong-start']({}, { sources: [src], outputDir: path.dirname(src), opts: { jobs: 2 } });
-      assert.equal(result.success, false);
-      assert.match(result.error, /已在去重队列中/);
-    }
-    await tick();
-    assert.equal(h.starts.length, 2, 'duplicate submissions must not create another FFmpeg job');
-    assert.equal(h.snapshots().length, 2, 'duplicate submissions must not create another batch');
-    assert.equal(first.snapshot().tasks[0].status, 'running');
-    assert.equal(first.snapshot().tasks[1].status, 'pending');
-    assert.equal(other.snapshot().tasks[0].status, 'running');
-    assert.ok([...h.jobs.values()].every(job => !job.signal.aborted));
-  });
+  await check(
+    'active and queued source files cannot be submitted twice while unrelated batches keep running',
+    async () => {
+      const h = load();
+      const first = await h.start(['reserved-active', 'reserved-queued'], 1);
+      const other = await h.start(['independent']);
+      for (const src of first.sources) {
+        const result = await h.handlers['quchong-start'](
+          {},
+          { sources: [src], outputDir: path.dirname(src), opts: { jobs: 2 } },
+        );
+        assert.equal(result.success, false);
+        assert.match(result.error, /已在去重队列中/);
+      }
+      await tick();
+      assert.equal(h.starts.length, 2, 'duplicate submissions must not create another FFmpeg job');
+      assert.equal(h.snapshots().length, 2, 'duplicate submissions must not create another batch');
+      assert.equal(first.snapshot().tasks[0].status, 'running');
+      assert.equal(first.snapshot().tasks[1].status, 'pending');
+      assert.equal(other.snapshot().tasks[0].status, 'running');
+      assert.ok([...h.jobs.values()].every((job) => !job.signal.aborted));
+    },
+  );
 
   await check('stages stay running and persist; only resolved output becomes deduped', async () => {
-    const h = load(), batch = await h.start(['episode']);
+    const h = load(),
+      batch = await h.start(['episode']);
     const job = h.jobs.get(batch.sources[0]);
     assert.ok(job, 'queue did not start its FFmpeg job');
     for (const stage of ['probing', 'encoding', 'finalizing', 'validating', 'saving']) {
@@ -202,62 +298,93 @@ async function check(name, run) {
       assert.equal(snapshot.tasks[0].stage, stage);
       assert.equal(snapshot.tasks[0].path, undefined);
       assert.equal(h.marks.length, 0, stage + ' prematurely marked pipeline deduped');
-      const event = h.events.filter(item => item.channel === 'quchong-task').at(-1);
+      const event = h.events.filter((item) => item.channel === 'quchong-task').at(-1);
       assert.equal(event.batchId, batch.batchId);
       assert.equal(event.task.stage, stage);
       assert.equal(event.task.status, 'running');
-      assert.equal(h.saved.at(-1).find(item => item.id === batch.batchId).tasks[0].stage, stage);
-      assert.ok(!h.events.some(item => item.channel === 'quchong-complete'));
+      assert.equal(h.saved.at(-1).find((item) => item.id === batch.batchId).tasks[0].stage, stage);
+      assert.ok(!h.events.some((item) => item.channel === 'quchong-complete'));
     }
-    job.resolve(); await tick();
+    job.resolve();
+    await tick();
     assert.equal(batch.snapshot().status, 'completed');
     assert.equal(batch.snapshot().tasks[0].progress, 100);
     assert.equal(batch.snapshot().tasks[0].stage, 'completed');
     assert.deepEqual(h.marks, [{ src: job.src, dst: job.dst }]);
-    assert.equal(h.events.filter(item => item.channel === 'quchong-complete').at(-1).success, true);
+    assert.equal(h.events.filter((item) => item.channel === 'quchong-complete').at(-1).success, true);
   });
 
   await check('a rejected job fails its batch without completing or stopping another batch', async () => {
-    const h = load(), failed = await h.start(['bad']), healthy = await h.start(['healthy']);
-    const bad = h.jobs.get(failed.sources[0]), good = h.jobs.get(healthy.sources[0]);
+    const h = load(),
+      failed = await h.start(['bad']),
+      healthy = await h.start(['healthy']);
+    const bad = h.jobs.get(failed.sources[0]),
+      good = h.jobs.get(healthy.sources[0]);
     assert.ok(bad && good, 'independent batches must run concurrently');
-    bad.onStage('validating'); bad.onProgress(98);
+    bad.onStage('validating');
+    bad.onProgress(98);
     const diagnostic = 'fixture invalid output\n[h264_nvenc] OpenEncodeSessionEx failed: unsupported device';
-    bad.reject(new Error(diagnostic)); await tick();
+    bad.reject(new Error(diagnostic));
+    await tick();
     assert.equal(failed.snapshot().status, 'failed');
     assert.equal(failed.snapshot().tasks[0].stage, 'failed');
     assert.match(failed.snapshot().tasks[0].error, /fixture invalid output/);
     assert.equal(failed.snapshot().tasks[0].progress, 0, 'failed output cannot count as batch completion progress');
-    const failureEvent = h.events.filter(item => item.channel === 'quchong-task' && item.task.id === failed.snapshot().tasks[0].id).at(-1);
+    const failureEvent = h.events
+      .filter((item) => item.channel === 'quchong-task' && item.task.id === failed.snapshot().tasks[0].id)
+      .at(-1);
     assert.equal(failureEvent.task.error, diagnostic, 'renderer must receive the complete diagnostic');
-    assert.ok(h.events.some(item => item.channel === 'quchong-log' && item.batchId === failed.batchId && item.line.includes('[失败] ' + diagnostic)), 'terminal failure must flush stderr to the task log');
-    assert.equal(h.saved.at(-1).find(item => item.id === failed.batchId).tasks[0].error, diagnostic, 'failed snapshot must retain stderr after restarting the app');
+    assert.ok(
+      h.events.some(
+        (item) =>
+          item.channel === 'quchong-log' &&
+          item.batchId === failed.batchId &&
+          item.line.includes('[失败] ' + diagnostic),
+      ),
+      'terminal failure must flush stderr to the task log',
+    );
+    assert.equal(
+      h.saved.at(-1).find((item) => item.id === failed.batchId).tasks[0].error,
+      diagnostic,
+      'failed snapshot must retain stderr after restarting the app',
+    );
     assert.equal(h.marks.length, 0);
     assert.equal(healthy.snapshot().tasks[0].status, 'running');
     assert.equal(good.signal.aborted, false);
-    good.onStage('saving'); good.resolve(); await tick();
+    good.onStage('saving');
+    good.resolve();
+    await tick();
     assert.equal(healthy.snapshot().status, 'completed');
     assert.deepEqual(h.marks, [{ src: good.src, dst: good.dst }]);
   });
 
   await check('cancel stops active and queued jobs only in the requested batch', async () => {
-    const h = load(), cancelled = await h.start(['active', 'queued'], 1), other = await h.start(['other']);
-    const active = h.jobs.get(cancelled.sources[0]), good = h.jobs.get(other.sources[0]);
+    const h = load(),
+      cancelled = await h.start(['active', 'queued'], 1),
+      other = await h.start(['other']);
+    const active = h.jobs.get(cancelled.sources[0]),
+      good = h.jobs.get(other.sources[0]);
     active.onStage('finalizing');
     assert.equal((await h.handlers['quchong-cancel']({}, cancelled.batchId)).success, true);
     await tick();
     assert.equal(cancelled.snapshot().status, 'stopped');
-    assert.ok(cancelled.snapshot().tasks.every(task => task.status === 'stopped' && task.stage === 'stopped'));
+    assert.ok(cancelled.snapshot().tasks.every((task) => task.status === 'stopped' && task.stage === 'stopped'));
     assert.equal(h.jobs.has(cancelled.sources[1]), false, 'cancelled queued work started');
     assert.equal(active.signal.aborted, true);
     assert.equal(good.signal.aborted, false);
     assert.equal(other.snapshot().tasks[0].status, 'running');
     assert.equal(h.marks.length, 0);
-    const event = h.events.find(item => item.channel === 'quchong-complete' && item.batchId === cancelled.batchId);
-    assert.equal(event.cancelled, true); assert.equal(event.success, false);
-    good.resolve(); await tick();
+    const event = h.events.find((item) => item.channel === 'quchong-complete' && item.batchId === cancelled.batchId);
+    assert.equal(event.cancelled, true);
+    assert.equal(event.success, false);
+    good.resolve();
+    await tick();
     assert.equal(other.snapshot().status, 'completed');
     assert.deepEqual(h.marks, [{ src: good.src, dst: good.dst }]);
   });
-})().catch(error => { console.error(error); process.exitCode = 1; })
+})()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
   .finally(() => fs.rmSync(temp, { recursive: true, force: true }));
