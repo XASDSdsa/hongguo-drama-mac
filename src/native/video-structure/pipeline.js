@@ -44,9 +44,9 @@ const UPSTREAM_IMPLEMENTATION_TRANSITIONS = {
     modules: ['separation'],
   },
   'alignment.js': {
-    // Subtitle export and acoustic pause metadata changed; old alignment
-    // results are migrated only from the reviewed hashes below.
-    current: 'b2da11c798105420a5e8ab1ef833e6e3dde264f097ec26e3cf6929834c43e66d',
+    // Breath-on-cut changes the output segments. Do not migrate the previous
+    // keep-every-visual-cut hash; older reviewed hashes stay listed below.
+    current: '4212277f16a99a3dc530b8ba9ce27134a6ec5102335745819cb66ce69d96181e',
     previous: ['2370a8eeb695d54e42ca12b7722bb528183d9d5a71936c5bae1b707e545178aa', 'a6177c48a9f72f1779409832e079f90c6ce148763389d2341fa229d4212ffbd1', 'c34a07d380372038bba35d27ff474125d9d4448bf99aa90c4836810856758bc9', '6003f27126f4492bbff5fd9a26e18b9544d84361b063b49a4ba8badb34ee4c34'],
     modules: ['alignment'],
   },
@@ -180,7 +180,7 @@ function createVideoStructurePipeline({ getSettings, getFfmpegPath, getFfprobePa
       job.state.modules[key] = { ...current, status: current?.run_id ? 'stale' : 'idle', message: current?.run_id ? reason : '', error: null, reused: false, progress: null, output_dir: null, result_path: null, legacy_result_path: preserveOldResults ? current?.result_path || current?.legacy_result_path || null : null, summary: null, needs_review: false, review_status: null, review_items: [], output_files: [], result_fingerprint: null };
     }
   }
-  const alignmentUpgradeMessage = '旧结果仍使用合并分镜规则，请点击“继续完整流程”；保留视觉切点，连续说话可跨镜头，重新导出分镜和草稿。';
+  const alignmentUpgradeMessage = '旧结果仍按画面切点直接切断，请点击“继续完整流程”；只有气口落在切镜上才切，话没说完的切镜并进同一段。';
   const transcriptUpgradeMessage = '旧人声尚未按音频真实停顿分段，请点击“继续完整流程”重新识别和声学对齐；不再依据识别标点切断人声，视频信息、音频、视觉分镜与人声分离结果会先校验再复用。';
   const exportUpgradeMessage = '旧字幕尚未按人声片段同步，请单步运行“导出字幕与文件清单”，再生成剪映草稿；无需重新识别音频或重切视频。';
   async function checkTranscriptPolicy(job) {

@@ -37,9 +37,10 @@ TOLERANCE = 0.002
 EFFECTS_FILTER = "highpass=f=900,acompressor=threshold=0.1:ratio=3:attack=5:release=50,alimiter=limit=0.95"
 DEFAULT_WATERMARK = "XX传媒"
 DEFAULT_DISCLAIMER = "剧情纯属虚构 请勿代入现实"
-BOUNDARY_POLICY = "preserve_visual_cuts_dialogue_index"
-ALIGNMENT_ALGORITHM = "visual-shots-with-dialogue-index-v2"
+BOUNDARY_POLICY = "shot_cut_requires_acoustic_pause"
+ALIGNMENT_ALGORITHM = "visual-shot-on-acoustic-pause-v1"
 SUBTITLE_POLICY = "voice-segments-v1"
+PAUSE_SECONDS = 0.2
 
 
 def progress(value: float, message: str) -> None:
@@ -83,35 +84,90 @@ def subtitle_text(value: str) -> str:
     return re.sub(r"[\r\n]+", " ", str(value)).strip()
 
 
+def speech_ranges(transcript: dict) -> list[tuple[float, float]]:
+    voices = (transcript.get("voice_timeline") or {}).get("segments") or []
+    source = voices if voices else transcript.get("utterances") or []
+    ranges = []
+    for item in source:
+        start, end = float(item["start"]), float(item["end"])
+        if end > start:
+            ranges.append((start, end))
+    ranges.sort()
+    merged: list[tuple[float, float]] = []
+    for start, end in ranges:
+        if merged and start <= merged[-1][1] + 1e-9:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def acoustic_pauses(transcript: dict) -> list[tuple[float, float]]:
+    speech = speech_ranges(transcript)
+    return [(speech[index][1], speech[index + 1][0]) for index in range(len(speech) - 1) if speech[index + 1][0] - speech[index][1] >= PAUSE_SECONDS - 1e-4]
+
+
+def breath_on_cut(time: float, transcript: dict) -> bool:
+    if any(start < time < end for start, end in speech_ranges(transcript)):
+        return False
+    return any(start - 1e-6 <= time <= end + 1e-6 for start, end in acoustic_pauses(transcript))
+
+
+def output_groups(raw_shots: list[dict], transcript: dict) -> list[list[dict]]:
+    original = sorted(raw_shots, key=lambda item: int(item["order"]))
+    if not original:
+        return []
+    groups = [[original[0]]]
+    for raw in original[1:]:
+        if breath_on_cut(float(raw["start"]), transcript):
+            groups.append([raw])
+        else:
+            groups[-1].append(raw)
+    return groups
+
+
 def validate_dialogue_timeline(aligned: dict, clips: dict, transcript: dict, export: dict, srt_path: Path, raw_shots: dict) -> tuple[list[dict], list[dict], list[dict]]:
-    """Keep visual cuts unchanged and index complete dialogue across them."""
+    """Cut only where a visual boundary and an acoustic pause coincide."""
     if aligned.get("algorithm_id") != ALIGNMENT_ALGORITHM or aligned.get("boundary_policy") != BOUNDARY_POLICY or clips.get("boundary_policy") != BOUNDARY_POLICY:
-        raise RuntimeError("当前项目未按原始视觉分镜建立台词索引，请点击「继续完整流程」更新分镜与台词关联后，再生成剪映草稿。")
+        raise RuntimeError("当前项目仍按画面切点直接切断，请点击「继续完整流程」，按气口落在切镜上才切之后再生成剪映草稿。")
     final_shots = sorted(aligned.get("shots", []), key=lambda item: int(item["order"]))
     ordered_clips = sorted(clips.get("clips", []), key=lambda item: int(item["order"]))
     if not final_shots or len(final_shots) != len(ordered_clips):
         raise RuntimeError("最终分镜与视频切片数量不一致，请继续完整流程重新导出。")
     original_shots = sorted(raw_shots.get("shots", []), key=lambda item: int(item["order"]))
-    if len(original_shots) != len(final_shots):
-        raise RuntimeError("视觉分镜数量已被修改，不允许因台词合并或拆分镜头。")
+    groups = output_groups(original_shots, transcript)
+    expected_merged = sum(len(group) - 1 for group in groups)
+    if len(final_shots) != len(groups) or aligned.get("merged_boundary_count") != expected_merged or aligned.get("raw_shot_count") != len(original_shots):
+        raise RuntimeError("最终分段没有遵守「只有气口落在切镜上才切」，请继续完整流程重新关联。")
     by_id = {}
     previous_frame = 0
     previous_end_us = 0
     source_ids = []
-    for shot, clip, raw in zip(final_shots, ordered_clips, original_shots):
+    for shot, clip, group in zip(final_shots, ordered_clips, groups):
         shot_id = shot["shot_id"]
+        ids = [item["shot_id"] for item in group]
+        first, last = group[0], group[-1]
         if shot_id in by_id or any(shot.get(key) != clip.get(key) for key in ("shot_id", "order", "start_frame", "end_frame_exclusive", "source_shot_ids")) or any(us(shot[key]) != us(clip[key]) for key in ("start", "end")):
-            raise RuntimeError(f"视频切片不匹配已索引的视觉分镜：{shot_id}，请继续完整流程重新导出。")
-        if shot.get("source_shot_ids") != [raw.get("shot_id")] or any(shot.get(key) != raw.get(key) for key in ("order", "start_frame", "end_frame_exclusive")) or any(us(shot[key]) != us(raw[key]) for key in ("start", "end")):
-            raise RuntimeError(f"原始视觉切点被修改：{shot_id}，不允许因台词合并或拆分镜头。")
+            raise RuntimeError(f"视频切片不匹配已索引的分镜：{shot_id}，请继续完整流程重新导出。")
+        if shot.get("source_shot_ids") != ids or shot.get("start_frame") != first.get("start_frame") or shot.get("end_frame_exclusive") != last.get("end_frame_exclusive") or us(shot.get("start")) != us(first.get("start")) or us(shot.get("end")) != us(last.get("end")):
+            raise RuntimeError(f"最终分段没有覆盖对应的画面切镜：{shot_id}")
+        internals = shot.get("internal_boundaries") or []
+        if len(internals) != len(group) - 1:
+            raise RuntimeError(f"被并掉的切镜没有记在段内：{shot_id}")
+        for boundary, raw in zip(internals, group[1:]):
+            if boundary.get("frame") != raw.get("start_frame") or us(boundary.get("time")) != us(raw.get("start")) or breath_on_cut(float(raw["start"]), transcript):
+                raise RuntimeError(f"气口落在切镜上却被并进同一段，或段内切镜记录不对：{raw.get('shot_id')}")
+        for earlier, later in zip(group, group[1:]):
+            if earlier.get("end_frame_exclusive") != later.get("start_frame") or us(earlier.get("end")) != us(later.get("start")):
+                raise RuntimeError(f"原始画面切镜不连续：{later.get('shot_id')}")
         if not isinstance(shot.get("start_frame"), int) or not isinstance(shot.get("end_frame_exclusive"), int) or shot["start_frame"] != previous_frame or shot["end_frame_exclusive"] <= previous_frame or us(shot["start"]) != previous_end_us or us(shot["end"]) <= previous_end_us:
             raise RuntimeError(f"最终分镜帧区间或时间线不连续：{shot_id}")
         previous_frame = shot["end_frame_exclusive"]
         previous_end_us = us(shot["end"])
-        source_ids.extend(shot["source_shot_ids"])
+        source_ids.extend(ids)
         by_id[shot_id] = shot
-    if len(source_ids) != len(set(source_ids)):
-        raise RuntimeError("最终分镜重复引用视觉分镜，请重新建立台词索引。")
+    if source_ids != [item["shot_id"] for item in original_shots] or len(source_ids) != len(set(source_ids)):
+        raise RuntimeError("最终分镜重复、遗漏或打乱了画面切镜，请重新建立台词索引。")
 
     def coverage(start: float, end: float, label: str) -> list[dict]:
         begin, finish = us(start), us(end)

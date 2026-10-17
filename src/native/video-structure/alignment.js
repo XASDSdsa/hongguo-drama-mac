@@ -3,12 +3,38 @@ const path = require('node:path');
 const fs = require('node:fs').promises;
 const { atomicJson } = require('./io');
 const { envelope, requireThat, validateIntervals } = require('./contracts');
-// Speech indexes visual shots but never changes their cuts or splits a sentence.
-const ALGORITHM = 'visual-shots-with-dialogue-index-v2';
-const POLICY = 'preserve_visual_cuts_dialogue_index';
+// A visual cut becomes an output boundary only when a real voice gap lands on it.
+// Punctuation, subtitle cues, and topic changes are not breaths.
+const ALGORITHM = 'visual-shot-on-acoustic-pause-v1';
+const POLICY = 'shot_cut_requires_acoustic_pause';
+const ACOUSTIC_PAUSE_SECONDS = 0.2;
 const SUBTITLE_POLICY = 'voice-segments-v1';
 const overlaps = (range, shot) => range.start < shot.end && range.end > shot.start;
 const sameList = (actual, expected) => Array.isArray(actual) && actual.length === expected.length && actual.every((value, i) => value === expected[i]);
+function speechRanges(transcript) {
+  const voices = transcript?.voice_timeline?.segments;
+  const source = Array.isArray(voices) && voices.length ? voices : (transcript?.utterances || []);
+  const ranges = source.map(item => ({ start: Number(item.start), end: Number(item.end) })).filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start).sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end + 1e-9) last.end = Math.max(last.end, range.end);
+    else merged.push({ start: range.start, end: range.end });
+  }
+  return merged;
+}
+function acousticPauses(ranges) {
+  const pauses = [];
+  for (let index = 0; index < ranges.length - 1; index += 1) {
+    const start = ranges[index].end, end = ranges[index + 1].start;
+    if (end - start >= ACOUSTIC_PAUSE_SECONDS - 1e-4) pauses.push({ start, end });
+  }
+  return pauses;
+}
+function breathOnCut(time, ranges, pauses) {
+  if (ranges.some(range => range.start < time && time < range.end)) return false;
+  return pauses.some(pause => pause.start - 1e-6 <= time && time <= pause.end + 1e-6);
+}
 function dialogueIndex(range, shots) {
   const owners = shots.filter(shot => overlaps(range, shot));
   return {
@@ -57,17 +83,32 @@ function align(shots, transcript, taskId) {
     ...voices.map(v => ({ ...v, kind: 'voice', id: v.segment_id })),
   ].sort((a, b) => a.start - b.start);
   requireThat(ranges.every(r => r.start >= shots[0].start && r.end <= shots.at(-1).end), '台词或人声超出视频画面覆盖范围，不能通过裁字或截断人声对齐');
-  const decisions = shots.slice(1).map(shot => ({
-    time: shot.start, frame: shot.start_frame, status: 'kept',
-    reason: 'visual_boundary_authoritative',
-    utterance_ids: transcript.utterances.filter(u => u.start < shot.start && u.end > shot.start).map(u => u.utterance_id),
-    voice_segment_ids: voices.filter(v => v.start < shot.start && v.end > shot.start).map(v => v.segment_id),
-  }));
-  const finalShots = shots.map((source, index) => ({
-    shot_id: `${taskId}:final-shot:${source.start_frame}-${source.end_frame_exclusive}`, order: index + 1,
-    start_frame: source.start_frame, end_frame_exclusive: source.end_frame_exclusive,
-    start: source.start, end: source.end, source_shot_ids: [source.shot_id],
-    internal_boundaries: [], adjustment: 'visual_boundary_preserved',
+  const spoken = speechRanges(transcript);
+  const pauses = acousticPauses(spoken);
+  const decisions = shots.slice(1).map(shot => {
+    const time = shot.start;
+    const ongoing = spoken.some(range => range.start < time && time < range.end);
+    const pause = pauses.find(item => item.start - 1e-6 <= time && time <= item.end + 1e-6);
+    const kept = breathOnCut(time, spoken, pauses);
+    return {
+      time, frame: shot.start_frame, status: kept ? 'kept' : 'merged',
+      reason: kept ? 'acoustic_pause_on_visual_cut' : (ongoing ? 'speech_not_finished' : 'no_acoustic_pause_on_visual_cut'),
+      ...(pause ? { pause_start: pause.start, pause_end: pause.end } : {}),
+      utterance_ids: transcript.utterances.filter(u => u.start < time && u.end > time).map(u => u.utterance_id),
+      voice_segment_ids: voices.filter(v => v.start < time && v.end > time).map(v => v.segment_id),
+    };
+  });
+  const groups = [[shots[0]]];
+  shots.slice(1).forEach((shot, index) => {
+    if (decisions[index].status === 'kept') groups.push([shot]);
+    else groups.at(-1).push(shot);
+  });
+  const finalShots = groups.map((group, index) => ({
+    shot_id: `${taskId}:final-shot:${group[0].start_frame}-${group.at(-1).end_frame_exclusive}`, order: index + 1,
+    start_frame: group[0].start_frame, end_frame_exclusive: group.at(-1).end_frame_exclusive,
+    start: group[0].start, end: group.at(-1).end, source_shot_ids: group.map(shot => shot.shot_id),
+    internal_boundaries: group.slice(1).map(shot => ({ time: shot.start, frame: shot.start_frame, status: 'merged' })),
+    adjustment: group.length === 1 ? 'visual_cut_on_acoustic_pause' : 'merged_until_breath',
     utterance_ids: [], voice_segment_ids: [],
   }));
   const matches = [];
@@ -83,19 +124,20 @@ function align(shots, transcript, taskId) {
       });
     } else owners.forEach(owner => owner.voice_segment_ids.push(range.id));
   }
-  const result = envelope(taskId, { algorithm_id: ALGORITHM, boundary_policy: POLICY, timing_method: transcript.timing_method || 'vad_segment', duration: transcript.duration, frame_count: shots.at(-1).end_frame_exclusive, raw_shot_count: shots.length, merged_boundary_count: 0, boundary_decisions: decisions, shots: finalShots, associations: matches, unmatched_utterance_ids: [] });
+  const mergedBoundaryCount = decisions.filter(decision => decision.status === 'merged').length;
+  const result = envelope(taskId, { algorithm_id: ALGORITHM, boundary_policy: POLICY, timing_method: transcript.timing_method || 'vad_segment', duration: transcript.duration, frame_count: shots.at(-1).end_frame_exclusive, raw_shot_count: shots.length, merged_boundary_count: mergedBoundaryCount, boundary_decisions: decisions, shots: finalShots, associations: matches, unmatched_utterance_ids: [] });
   validateDialogueIndex(result, transcript);
   return result;
 }
 async function alignment(ctx, shots, transcript) {
-  ctx.onProgress?.({ progress: 0, message: '保留视觉切点，建立完整台词与分镜的关联' });
+  ctx.onProgress?.({ progress: 0, message: '只在气口落在画面切镜上时切断，并建立台词关联' });
   const result = align(shots.shots, transcript, ctx.taskId);
   result.source_algorithm_id = shots.algorithm_id;
   result.review_items = shots.review_items || [];
   result.warnings = [...(shots.warnings || []), ...(transcript.warnings || [])];
   result.needs_review = shots.needs_review === true || result.review_items.length > 0 || result.warnings.length > 0;
   await atomicJson(path.join(ctx.dir, 'aligned.json'), result);
-  ctx.onProgress?.({ progress: 100, message: `保留 ${result.shots.length} 个视觉分镜，已关联 ${result.associations.length} 条完整台词；跨镜头台词连续保留` });
+  ctx.onProgress?.({ progress: 100, message: `输出 ${result.shots.length} 段，并掉 ${result.merged_boundary_count} 个没落在气口上的切镜；已关联 ${result.associations.length} 条台词` });
   return result;
 }
 function srtTime(t) {
@@ -209,7 +251,7 @@ function voiceSubtitleCues(transcript, shots, raw, recognition) {
 async function exportsModule(ctx, aligned, clips, transcript, clipsDir, transcriptDir) {
   requireThat(aligned.algorithm_id === ALGORITHM && aligned.boundary_policy === POLICY, '请先完成台词与视觉分镜关联，再导出字幕');
   validateDialogueIndex(aligned, transcript);
-  requireThat(clips.boundary_policy === POLICY && clips.alignment_algorithm_id === ALGORITHM && clips.clips.length === aligned.shots.length, '切片尚未使用保留视觉切点的分镜，请重新导出分镜');
+  requireThat(clips.boundary_policy === POLICY && clips.alignment_algorithm_id === ALGORITHM && clips.clips.length === aligned.shots.length, '切片尚未按气口切镜导出，请重新导出分镜');
   const mediaFiles = [];
   for (const [index, clip] of clips.clips.entries()) {
     const shot = aligned.shots[index];
@@ -234,4 +276,4 @@ async function exportsModule(ctx, aligned, clips, transcript, clipsDir, transcri
   await atomicJson(path.join(ctx.dir, 'files.json'), result);
   return result;
 }
-module.exports = { align, alignment, srt, exportsModule, voiceSubtitleCues, ALGORITHM, POLICY, SUBTITLE_POLICY };
+module.exports = { align, alignment, srt, exportsModule, voiceSubtitleCues, speechRanges, acousticPauses, breathOnCut, ALGORITHM, POLICY, SUBTITLE_POLICY, ACOUSTIC_PAUSE_SECONDS };

@@ -26,18 +26,55 @@ def write_srt(srt, cues):
     srt.write_text("\n\n".join(f"{i}\n{timestamp(row['start'])} --> {timestamp(row['end'])}\n{row['text']}" for i, row in enumerate(cues, 1)) + "\n", encoding="utf-8")
 
 
-def fixture(srt: Path, first_end: float = 2.2):
-    raw = {"shots": [{"shot_id": f"raw{i}", "order": i, "start": i - 1, "end": i, "start_frame": (i - 1) * 25, "end_frame_exclusive": i * 25} for i in range(1, 4)]}
-    utterances = [{"utterance_id": "u1", "text": "这是一句连续跨镜头的完整台词", "start": 0.2, "end": first_end}, {"utterance_id": "u2", "text": "同一镜头第二句", "start": 2.3, "end": 2.5}, {"utterance_id": "u3", "text": "同一镜头第三句", "start": 2.6, "end": 2.8}]
-    shots = [{**row, "shot_id": f"s{row['order']}", "source_shot_ids": [row["shot_id"]], "utterance_ids": [u["utterance_id"] for u in utterances if u["start"] < row["end"] and u["end"] > row["start"]]} for row in raw["shots"]]
-    transcript = {"utterances": utterances, "voice_timeline": {"segments": [{**row, "segment_id": f"v{i}"} for i, row in enumerate(utterances)]}}
+def assemble(adapter, raw, transcript, cues):
+    groups = adapter.output_groups(raw["shots"], transcript)
+    shots = []
+    for group in groups:
+        first, last = group[0], group[-1]
+        shot_id = f"s{first['start_frame']}-{last['end_frame_exclusive']}"
+        shot = {
+            "shot_id": shot_id,
+            "order": len(shots) + 1,
+            "start": first["start"],
+            "end": last["end"],
+            "start_frame": first["start_frame"],
+            "end_frame_exclusive": last["end_frame_exclusive"],
+            "source_shot_ids": [row["shot_id"] for row in group],
+            "internal_boundaries": [{"time": row["start"], "frame": row["start_frame"], "status": "merged"} for row in group[1:]],
+            "utterance_ids": [row["utterance_id"] for row in transcript["utterances"] if row["start"] < last["end"] and row["end"] > first["start"]],
+        }
+        shots.append(shot)
     associations = []
-    for row in utterances:
+    for row in transcript["utterances"]:
         owners = [shot for shot in shots if row["start"] < shot["end"] and row["end"] > shot["start"]]
         associations.append({"utterance_id": row["utterance_id"], "start": row["start"], "end": row["end"], "shot_ids": [shot["shot_id"] for shot in owners], "segments": [{"shot_id": shot["shot_id"], "start": max(row["start"], shot["start"]), "end": min(row["end"], shot["end"])} for shot in owners]})
-    aligned = {"algorithm_id": "visual-shots-with-dialogue-index-v2", "boundary_policy": "preserve_visual_cuts_dialogue_index", "shots": shots, "associations": associations}
-    clips = {"boundary_policy": aligned["boundary_policy"], "clips": [{**row, "path": f"shot-{row['order']}.mp4"} for row in shots]}
-    export = {"subtitle_policy": "voice-segments-v1", "subtitle_cues": [{**row, "cue_id": f"v{i}", "voice_segment_id": f"v{i}", "shot_ids": association["shot_ids"]} for i, (row, association) in enumerate(zip(utterances, associations))]}
+        if len(owners) == 1:
+            associations[-1]["shot_id"] = owners[0]["shot_id"]
+    for cue in cues:
+        owners = [shot["shot_id"] for shot in shots if cue["start"] < shot["end"] and cue["end"] > shot["start"]]
+        cue["shot_ids"] = owners
+        if len(owners) == 1:
+            cue["shot_id"] = owners[0]
+        else:
+            cue.pop("shot_id", None)
+    aligned = {
+        "algorithm_id": adapter.ALIGNMENT_ALGORITHM,
+        "boundary_policy": adapter.BOUNDARY_POLICY,
+        "raw_shot_count": len(raw["shots"]),
+        "merged_boundary_count": sum(len(group) - 1 for group in groups),
+        "shots": shots,
+        "associations": associations,
+    }
+    clips = {"boundary_policy": aligned["boundary_policy"], "alignment_algorithm_id": aligned["algorithm_id"], "clips": [{**row, "path": f"shot-{row['order']}.mp4"} for row in shots]}
+    return aligned, clips
+
+
+def fixture(adapter, srt: Path, first_end: float = 2.2):
+    raw = {"shots": [{"shot_id": f"raw{i}", "order": i, "start": i - 1, "end": i, "start_frame": (i - 1) * 25, "end_frame_exclusive": i * 25} for i in range(1, 4)]}
+    utterances = [{"utterance_id": "u1", "text": "这是一句连续跨镜头的完整台词", "start": 0.2, "end": first_end}, {"utterance_id": "u2", "text": "同一镜头第二句", "start": 2.3, "end": 2.5}, {"utterance_id": "u3", "text": "同一镜头第三句", "start": 2.6, "end": 2.8}]
+    transcript = {"utterances": utterances, "voice_timeline": {"segments": [{**row, "segment_id": f"v{i}"} for i, row in enumerate(utterances)]}}
+    export = {"subtitle_policy": "voice-segments-v1", "subtitle_cues": [{**row, "cue_id": f"v{i}", "voice_segment_id": f"v{i}", "text": row["text"]} for i, row in enumerate(transcript["voice_timeline"]["segments"])]}
+    aligned, clips = assemble(adapter, raw, transcript, export["subtitle_cues"])
     write_srt(srt, export["subtitle_cues"])
     return aligned, clips, transcript, export, srt, raw
 
@@ -47,16 +84,17 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="hongguo-dialogue-draft-") as directory:
         root = Path(directory)
         srt = root / "字幕.srt"
-        for first_end, expected_ids in ((1.2, ["s1", "s2"]), (2.2, ["s1", "s2", "s3"])):
-            values = fixture(srt, first_end)
+        for first_end, clip_count in ((1.2, 2), (2.2, 1)):
+            values = fixture(adapter, srt, first_end)
             clip_rows, voice_rows, subtitles = adapter.validate_dialogue_timeline(*values)
-            # A continuous sentence may cross visual cuts; both dialogue
-            # tracks retain the same segment and only index those cuts.
-            assert len(clip_rows) == len(subtitles) == len(voice_rows) == 3
+            # 1.2s 结束的话在 2 秒气口上切开；2.2s 的话盖住两刀，整集并成一段。
+            assert len(clip_rows) == clip_count
+            assert len(subtitles) == len(voice_rows) == 3
             assert voice_rows[0]["segment_id"] == subtitles[0]["voice_segment_id"] == "v0"
-            assert voice_rows[0]["shot_ids"] == expected_ids
-            assert subtitles[0]["shot_ids"] == expected_ids
-            assert subtitles[1]["shot_ids"] == subtitles[2]["shot_ids"] == ["s3"]
+            assert voice_rows[0]["shot_ids"] == [clip_rows[0]["shot_id"]]
+            assert subtitles[0]["shot_ids"] == [clip_rows[0]["shot_id"]]
+            later = clip_rows[-1]["shot_id"]
+            assert subtitles[1]["shot_ids"] == subtitles[2]["shot_ids"] == [later]
             assert subtitles[0]["duration_us"] == round((first_end - 0.2) * 1000000)
             for voice, subtitle in zip(voice_rows, subtitles):
                 assert voice["segment_id"] == subtitle["voice_segment_id"]
@@ -64,9 +102,9 @@ def main() -> int:
                 assert adapter.us(voice["end"]) == subtitle["start_us"] + subtitle["duration_us"]
         aligned, clips, transcript, export, _, raw = values
         cases = [
-            ("legacy alignment", lambda a, c, t, e, s, r: a.update(algorithm_id="dialogue-contained-shots-v1")),
+            ("legacy alignment", lambda a, c, t, e, s, r: a.update(algorithm_id="visual-shots-with-dialogue-index-v2")),
             ("outdated clips", lambda a, c, t, e, s, r: c["clips"][0].update(end=0.9)),
-            ("merged visual shots", lambda a, c, t, e, s, r: r["shots"].pop()),
+            ("dropped visual shot", lambda a, c, t, e, s, r: r["shots"].pop()),
             ("changed raw boundary", lambda a, c, t, e, s, r: r["shots"][0].update(end=0.9)),
             ("utterance past video", lambda a, c, t, e, s, r: t["utterances"][0].update(end=3.2)),
             ("voice truncated", lambda a, c, t, e, s, r: t["voice_timeline"]["segments"][0].update(end=1.2)),
@@ -105,11 +143,13 @@ def main() -> int:
         voices = transcript["voice_timeline"]["segments"]
         transcript["voice_timeline"]["segments"] = [{**voices[0], **span, "segment_id": f"v0-span{i}"} for i, span in enumerate(first["speech_spans"])] + voices[1:]
         pieces = ["这是一句连续", "跨镜头的完整台词"]
-        export["subtitle_cues"] = [{**span, "cue_id": f"v0-span{i}", "voice_segment_id": f"v0-span{i}", "utterance_id": "u1", "text": pieces[i], "shot_ids": [shot["shot_id"] for shot in aligned["shots"] if span["start"] < shot["end"] and span["end"] > shot["start"]]} for i, span in enumerate(first["speech_spans"])] + export["subtitle_cues"][1:]
+        export["subtitle_cues"] = [{**span, "cue_id": f"v0-span{i}", "voice_segment_id": f"v0-span{i}", "utterance_id": "u1", "text": pieces[i]} for i, span in enumerate(first["speech_spans"])] + export["subtitle_cues"][1:]
+        aligned, clips = assemble(adapter, raw, transcript, export["subtitle_cues"])
+        values = (aligned, clips, transcript, export, srt, raw)
         write_srt(srt, export["subtitle_cues"])
         _, gaps, subtitles = adapter.validate_dialogue_timeline(*values)
-        # A silence gap splits both tracks; the second span remains intact
-        # across s2/s3 because the visual cut is not a speech boundary.
+        # The breath at 1s is a real pause on a visual cut, so that cut stays.
+        # The later visual cut sits inside the second span and is merged.
         assert len(subtitles) == len(gaps) == 4
         source_gap_rows = [row for row in gaps if row["segment_id"] in {"v0-span0", "v0-span1"}]
         assert [(row["start"], row["end"]) for row in source_gap_rows] == [(.2, .800333), (1.200123, 2.2)]
@@ -246,7 +286,7 @@ def main() -> int:
             assert result.returncode != 0, f"accepted corrupt manifest: {label}"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         run(sys.executable, checker, draft_dir)
-    print("PASS voice-paired subtitles: exact microseconds, real silence gaps, no text loss or repetition, unchanged visual/voice/background/effects logic")
+    print("PASS voice-paired subtitles: exact microseconds, real silence gaps, no text loss or repetition, cuts only where a breath lands on a visual cut")
     return 0
 
 
