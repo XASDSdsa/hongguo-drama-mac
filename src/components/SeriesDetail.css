@@ -362,3 +362,27 @@
   font-style: normal;
   color: var(--text-tertiary);
 }
+
+.lib-toolbar-btns {
+  align-items: center;
+}
+.lib-range-hint {
+  margin: -4px 0 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.lib-estimate {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.lib-preview-list {
+  color: var(--text);
+}
+.lib-preview-list li {
+  margin: 4px 0;
+  color: var(--text);
+}
+.lib-preview-list li::marker {
+  color: var(--text-tertiary);
+}

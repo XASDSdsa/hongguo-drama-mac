@@ -73,6 +73,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
   const [decision, setDecision] = useState(null);
+  const [preview, setPreview] = useState(false); // 开始处理前的预览确认
+  const [estimate, setEstimate] = useState({ loading: false, data: null, error: '' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(
     EPISODE_PAGE_SIZES.includes(view.episodePageSize) ? view.episodePageSize : 60,
@@ -212,6 +214,54 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       return next;
     });
 
+  // 重新拆分按时间线处理：整部，或从第一集起的前 N 集，不能跳着选。
+  const isPrefix = selectedCount > 0 && episodes.slice(0, selectedCount).every((item) => selected.has(item.path));
+  const setPrefix = (count) => {
+    const size = Math.max(0, Math.min(episodes.length, Math.floor(Number(count)) || 0));
+    setSelected(new Set(episodes.slice(0, size).map((item) => item.path)));
+  };
+  const clickEpisode = (episode, position) => {
+    if (mode !== 'resplit') return toggle(episode.path);
+    // 点第 N 集 = 处理到这一集为止；再点最后选中的那一集 = 往回缩一集。
+    setPrefix(selected.has(episode.path) && position === selectedCount - 1 ? position : position + 1);
+  };
+  useEffect(() => {
+    // 切到「重新拆分」时，如果现在的选择不是从第一集起的连续前缀，就改成整部。
+    if (mode === 'resplit' && episodes.length && selectedCount > 0 && !isPrefix) setPrefix(episodes.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, episodes.length, selectedCount, isPrefix]);
+
+  // 预览：按选中的集和当前参数估算会得到多少集（改参数、改范围后稍等一下自动更新）。
+  const selectedKey = episodes
+    .filter((item) => selected.has(item.path))
+    .map((item) => item.path)
+    .join('|');
+  const estimateKey = JSON.stringify([selectedKey, mode, split, opts?.speed_min, opts?.speed_max, opts?.black_intro]);
+  useEffect(() => {
+    if (mode !== 'resplit' || !detail?.dir || !selectedKey || !opts || !isPrefix) {
+      setEstimate({ loading: false, data: null, error: '' });
+      return undefined;
+    }
+    let alive = true;
+    setEstimate((previous) => ({ ...previous, loading: true, error: '' }));
+    const timer = setTimeout(async () => {
+      const result = await window.electronAPI.libraryEstimate?.({
+        dir: detail.dir,
+        files: selectedKey.split('|'),
+        opts,
+        split,
+      });
+      if (!alive) return;
+      if (result?.success) setEstimate({ loading: false, data: result, error: '' });
+      else setEstimate({ loading: false, data: null, error: result?.error || '估算失败' });
+    }, 350);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estimateKey, detail?.dir]);
+
   // 磁盘上的集和缺集占位按集号排在一起；缺集的占位不能选。
   const cards = useMemo(() => {
     const list = episodes.map((episode) => ({ kind: 'episode', key: episode.path, index: episode.index, episode }));
@@ -258,6 +308,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     setSubmitting(true);
     setNotice('');
     setDecision(null);
+    setPreview(false);
     const result = await window.electronAPI.libraryDedup({
       dir: detail.dir,
       mode,
@@ -275,7 +326,14 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   };
 
   // 强提示窗打开时，键盘焦点和 Esc 都归它。
-  useDialogKeyboard(active && !!decision, () => setDecision(null), '.lib-confirm');
+  useDialogKeyboard(
+    active && (!!decision || preview),
+    () => {
+      setDecision(null);
+      setPreview(false);
+    },
+    '.lib-confirm',
+  );
 
   const activeBatches = (activity?.batches || []).filter(isActiveBatch);
   const busyText = activity?.planning
@@ -291,6 +349,18 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     .map((item) => item.index);
   const unretryable =
     decision?.kind === 'download' && decision.blocking.length > 0 && hopeless.length === decision.blocking.length;
+
+  const est = estimate.data;
+  const estimateText =
+    mode === 'resplit'
+      ? estimate.loading && !est
+        ? '正在估算会得到多少集…'
+        : est && est.count > 0
+          ? `预计生成约 ${est.count} 集（大致 ${est.minCount}–${est.maxCount} 集），每集 ${est.finalMin}–${est.finalMax} 秒`
+          : ''
+      : selectedCount
+        ? `将按原集去重 ${selectedCount} 集，一集出一集`
+        : '';
 
   const title = detail?.name || folder.name;
   const shownIssues = showAllIssues ? issueRows : issueRows.slice(0, ISSUE_PREVIEW);
@@ -356,30 +426,68 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
           <section className="lib-section" aria-label="剧集">
             <div className="lib-toolbar">
-              <span>
-                已选 {selectedCount} / {episodes.length} 集
-              </span>
-              <span className="lib-toolbar-btns">
-                <button
-                  className="btn btn-sm"
-                  onClick={() =>
-                    setSelected((previous) => {
-                      const next = new Set(previous);
-                      for (const card of visible) if (card.kind === 'episode') next.add(card.episode.path);
-                      return next;
-                    })
-                  }
-                >
-                  选本页
-                </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => setSelected(allSelected ? new Set() : new Set(episodes.map((e) => e.path)))}
-                >
-                  {allSelected ? '全不选' : '全选'}
-                </button>
-              </span>
+              {mode === 'resplit' ? (
+                <>
+                  <span>
+                    {selectedCount === episodes.length
+                      ? `处理范围：整部（${episodes.length} 集）`
+                      : `处理范围：第 1 集起的前 ${selectedCount} 集（共 ${episodes.length} 集）`}
+                  </span>
+                  <span className="lib-toolbar-btns">
+                    <label className="lib-number">
+                      只处理前
+                      <input
+                        className="input-field"
+                        type="number"
+                        min="1"
+                        max={episodes.length || 1}
+                        value={selectedCount || ''}
+                        onChange={(e) => setPrefix(e.target.value)}
+                        disabled={submitting || !episodes.length}
+                        aria-label="只处理前几集"
+                      />
+                      集
+                    </label>
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => setPrefix(episodes.length)}
+                      disabled={selectedCount === episodes.length}
+                    >
+                      整部
+                    </button>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span>
+                    已选 {selectedCount} / {episodes.length} 集
+                  </span>
+                  <span className="lib-toolbar-btns">
+                    <button
+                      className="btn btn-sm"
+                      onClick={() =>
+                        setSelected((previous) => {
+                          const next = new Set(previous);
+                          for (const card of visible) if (card.kind === 'episode') next.add(card.episode.path);
+                          return next;
+                        })
+                      }
+                    >
+                      选本页
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => setSelected(allSelected ? new Set() : new Set(episodes.map((e) => e.path)))}
+                    >
+                      {allSelected ? '全不选' : '全选'}
+                    </button>
+                  </span>
+                </>
+              )}
             </div>
+            {mode === 'resplit' && episodes.length > 0 && (
+              <p className="lib-range-hint">按时间线从第一集开始连续处理，点某一集就是处理到这一集为止，不能跳着选。</p>
+            )}
             {remoteNote && <div className="lib-remote-note">{remoteNote}</div>}
             {!episodes.length && !loading && <div className="lib-empty">这个文件夹里没有视频。</div>}
 
@@ -406,7 +514,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     key={episode.path}
                     className={`lib-ep ${on ? 'is-selected' : ''}`}
                     aria-pressed={on}
-                    onClick={() => toggle(episode.path)}
+                    onClick={() => clickEpisode(episode, episodes.indexOf(episode))}
                     title={`${episode.name}（${formatSize(episode.size)}）`}
                   >
                     <span className="lib-ep-no">
@@ -575,6 +683,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                 )}
               </div>
               {busyText && <div className="lib-status">{busyText}</div>}
+              {estimateText && <div className="lib-estimate">{estimateText}</div>}
               {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
             </div>
             <div className="lib-foot-actions">
@@ -591,7 +700,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               )}
               <button
                 className="btn btn-primary"
-                onClick={() => submit(undefined)}
+                onClick={() => (mode === 'resplit' ? setPreview(true) : submit(undefined))}
                 disabled={submitting || !!activity?.planning || !selectedCount || !opts}
               >
                 开始处理（{selectedCount} 集）
@@ -599,6 +708,57 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             </div>
           </div>
         </>
+      )}
+
+      {preview && (
+        <div className="lib-mask lib-mask-top" onClick={() => setPreview(false)}>
+          <div
+            className="lib-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="处理预览"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>开始处理前，先看一下</h3>
+            <ul className="lib-confirm-list lib-preview-list">
+              <li>
+                处理范围：
+                <b>{selectedCount === episodes.length ? `整部，共 ${selectedCount} 集` : `前 ${selectedCount} 集`}</b>
+                {est?.firstEpisode != null &&
+                  est?.lastEpisode != null &&
+                  `（第 ${est.firstEpisode}–${est.lastEpisode} 集）`}
+                ，按时间线连续接起来
+              </li>
+              {est && est.count > 0 ? (
+                <>
+                  <li>
+                    预计生成：<b>约 {est.count} 集</b>（大致 {est.minCount}–{est.maxCount} 集），新集编号从第{' '}
+                    {est.startNumber} 集起
+                  </li>
+                  <li>
+                    每集成品 {est.finalMin}–{est.finalMax} 秒，参与处理的素材共约 {Math.round(est.totalSeconds / 60)}{' '}
+                    分钟
+                  </li>
+                  <li>
+                    结尾如果只剩不到 {Math.max(1, Math.round(est.tailSlack))} 秒的零头，会直接并进最后一集，不单独成集
+                  </li>
+                </>
+              ) : (
+                <li>{estimate.loading ? '正在估算…' : estimate.error || '暂时没有算出预计集数'}</li>
+              )}
+              {est?.unreadable > 0 && <li>有 {est.unreadable} 个视频读不出时长，没有计入估算</li>}
+            </ul>
+            <p>这只是按时长的估算，真正的切法要先分析镜头切换和说话停顿才定，最终集数可能有几集出入。</p>
+            <div className="lib-confirm-actions">
+              <button className="btn btn-primary" onClick={() => submit(undefined)}>
+                开始处理
+              </button>
+              <button className="btn" onClick={() => setPreview(false)}>
+                再调整一下
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {decision && (

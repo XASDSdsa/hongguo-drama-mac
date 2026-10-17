@@ -128,6 +128,59 @@ const plan = (sources, split = {}, overrides = {}) =>
     assert.equal(plan([mk('a', 2)]).pieces.length, 0);
   });
 
+  await check('a small leftover at the end is merged into the last episode instead of being forced into range', () => {
+    const slack = (30 - 0.3) * 1.03 * resplit.TAIL_ABSORB_RATIO;
+    let absorbed = 0;
+    for (let total = 40; total <= 700; total += 7) {
+      const { pieces, tailAbsorbed } = plan([mk('a', total + 2.3, { candidates: [] })]);
+      const length = pieces.reduce((sum, piece) => sum + piece.length, 0);
+      assert.ok(Math.abs(length - total) < 0.05, `${total}: every second is used, got ${length}`);
+      assert.ok(tailAbsorbed >= 0 && tailAbsorbed <= slack + 0.01, `${total}: leftover ${tailAbsorbed}`);
+      pieces.slice(0, -1).forEach((piece) => {
+        assert.ok(piece.finalDuration >= 30 && piece.finalDuration <= 65, `${total}: middle ${piece.finalDuration}`);
+      });
+      const last = pieces[pieces.length - 1];
+      assert.ok(last.finalDuration >= 30 || pieces.length === 1, `${total}: last ${last.finalDuration}`);
+      // 最后一集最多比最长时长多出那一点零头（按最快变速折算）。
+      assert.ok(last.finalDuration <= 65 + tailAbsorbed / 1.03 + 0.5, `${total}: last ${last.finalDuration}`);
+      if (tailAbsorbed > 0) absorbed += 1;
+    }
+    assert.ok(absorbed > 0, 'the leftover rule is actually used');
+  });
+
+  await check('estimate: how many episodes the selected content makes before any analysis', () => {
+    const sources = Array.from({ length: 80 }, (_, i) => ({ file: `/x/${i}.mp4`, duration: 92 }));
+    const estimate = resplit.estimatePlan({ sources, split: {}, speedMin: 1.03, speedMax: 1.21, intro: 0.3 });
+    assert.equal(estimate.usedSources, 80);
+    assert.ok(Math.abs(estimate.totalSeconds - 80 * (92 - 1.1 - 1.2)) < 0.2);
+    assert.ok(estimate.minCount <= estimate.count && estimate.count <= estimate.maxCount);
+    // 和真正的规划（有切点）比，差距在两成以内。
+    const real = plan(
+      sources.map((source) => ({
+        ...source,
+        candidates: Array.from({ length: 12 }, (_, k) => ({ t: 5 + k * 7, score: k % 3 ? 0.55 : 1 })),
+      })),
+    );
+    assert.ok(
+      Math.abs(real.pieces.length - estimate.count) / real.pieces.length < 0.2,
+      `${real.pieces.length} vs ${estimate.count}`,
+    );
+    // 内容越少集数越少；不够一集也至少是 1 集。
+    const fewer = resplit.estimatePlan({
+      sources: sources.slice(0, 10),
+      split: {},
+      speedMin: 1.03,
+      speedMax: 1.21,
+      intro: 0.3,
+    });
+    assert.ok(fewer.count < estimate.count);
+    assert.equal(
+      resplit.estimatePlan({ sources: [{ file: 'a', duration: 20 }], split: {}, speedMin: 1, speedMax: 1.2 }).count,
+      1,
+    );
+    assert.equal(resplit.estimatePlan({ sources: [], split: {}, speedMin: 1, speedMax: 1.2 }).count, 0);
+  });
+
   await check('numbering starts where asked', () => {
     const { pieces } = plan([mk('a', 200, { candidates: [] })], { start_number: 21 });
     assert.equal(pieces[0].number, 21);

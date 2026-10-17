@@ -15,6 +15,9 @@ const SCENE_SCORE = 0.55;
 const JUNCTION_SCORE = 1;
 const GAP_JUNCTION_SCORE = 1.3; // 缺集造成的剧情跳跃，尽量落在两集之间。
 
+// 末尾剩下一点点（不到最短时长的四分之一）的内容，直接并进最后一集，不再要求它落在时长范围内。
+const TAIL_ABSORB_RATIO = 0.25;
+
 const DEFAULT_SPLIT = Object.freeze({ min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2, start_number: 1 });
 
 function validateSplit(input = {}) {
@@ -235,6 +238,8 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
   if (!(lengthMin > 0)) throw new Error('成品时长太短');
   const preferred = (midFinal - intro) * ((speedMin + speedMax) / 2);
 
+  const tailSlack = lengthMin * TAIL_ABSORB_RATIO;
+  let tailAbsorbed = 0;
   const solve = (lastMin) => {
     const n = times.length;
     const best = new Array(n).fill(Infinity);
@@ -255,14 +260,31 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
         }
       }
     }
-    if (!Number.isFinite(best[n - 1])) return null;
+    // 结尾：要么最后一集正好切到末尾；要么在离末尾不到 tailSlack 的地方收住，
+    // 把剩下一点点内容直接并进最后一集（它可以比最长时长稍长）。
+    let end = n - 1;
+    let endCost = best[n - 1];
+    for (let e = n - 2; e >= 1 && times[n - 1] - times[e] <= tailSlack; e--) {
+      if (!Number.isFinite(best[e])) continue;
+      const cost = best[e] - (1 - scores[e]); // 这里并不真的切，不计切点好坏
+      if (cost < endCost) {
+        endCost = cost;
+        end = e;
+      }
+    }
+    if (!Number.isFinite(endCost)) return null;
     const chain = [];
-    for (let j = n - 1; j > 0; j = from[j]) chain.unshift(j);
+    for (let j = end; j > 0; j = from[j]) chain.unshift(j);
+    if (end !== n - 1) {
+      tailAbsorbed = times[n - 1] - times[end];
+      chain[chain.length - 1] = n - 1;
+    }
     return chain;
   };
 
   let route = solve(lengthMin);
   if (!route) {
+    tailAbsorbed = 0;
     route = solve(Math.max(1, lengthMin * 0.5));
     if (route) warnings.push('最后一集比设定的最短时长短一些');
   }
@@ -304,7 +326,54 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
       finalDuration: Number((length / speed + intro).toFixed(2)),
     });
   });
-  return { pieces, warnings };
+  return { pieces, warnings, tailAbsorbed: Number(tailAbsorbed.toFixed(2)), totalSeconds: Number(total.toFixed(2)) };
+}
+
+/**
+ * 不分析切点，只按每集时长估一下会得到多少集（开始处理前的预览用）。
+ * sources: [{ file, duration }]，按播放顺序。真正的切法要等分析完切点才定，所以给「大约多少集」和一个范围：
+ * 每集大致切在成品时长范围的中间偏长一点，再给 ±10% 的范围。
+ */
+function estimatePlan({ sources, split, speedMin, speedMax, intro = 0 }) {
+  const options = validateSplit(split);
+  let total = 0;
+  let used = 0;
+  for (const source of sources) {
+    const usable = source.duration - options.head_trim - options.tail_trim;
+    if (usable >= 1) {
+      total += usable;
+      used += 1;
+    }
+  }
+  const lengthMin = (options.min_len - intro) * speedMin;
+  const lengthMax = (options.max_len - intro) * speedMax;
+  const preferred = ((options.min_len + options.max_len) / 2 - intro) * ((speedMin + speedMax) / 2);
+  if (!(total > 0) || !(lengthMin > 0)) {
+    return {
+      count: 0,
+      minCount: 0,
+      maxCount: 0,
+      totalSeconds: 0,
+      usedSources: 0,
+      tailSlack: 0,
+      finalMin: 0,
+      finalMax: 0,
+    };
+  }
+  const bound = (value) => Math.max(1, Math.floor(value));
+  // 实际切点会让每集比「预定时长」平均略长一点点（模拟 10～80 集的整部剧，平均长约 1.1 倍），按这个估。
+  const count = bound(Math.round(total / (preferred * 1.1)));
+  return {
+    count,
+    minCount: bound(Math.round(count * 0.9)),
+    maxCount: Math.max(count, Math.ceil(count * 1.1)),
+    totalSeconds: Number(total.toFixed(1)),
+    usedSources: used,
+    // 结尾剩下不到这么多秒的零头，会直接并进最后一集。
+    tailSlack: Number((lengthMin * TAIL_ABSORB_RATIO).toFixed(1)),
+    finalMin: options.min_len,
+    finalMax: options.max_len,
+  };
 }
 
 module.exports = {
@@ -315,4 +384,6 @@ module.exports = {
   analyzeSources,
   cutCandidates,
   planPieces,
+  estimatePlan,
+  TAIL_ABSORB_RATIO,
 };

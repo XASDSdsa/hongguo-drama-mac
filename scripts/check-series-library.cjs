@@ -370,6 +370,24 @@ async function check(name, fn) {
       assert.equal(split.success, true, split.error);
       assert.ok(split.summary.count >= 2);
       assert.ok(split.summary.minSeconds >= 5 && split.summary.maxSeconds <= 12, JSON.stringify(split.summary));
+      // 开始处理前的预览：按时长和当前参数估一下会得到几集。
+      const estimate = await handlers['library-estimate'](
+        {},
+        {
+          dir: real,
+          files: [path.join(real, '真剧_第001集.mp4'), path.join(real, '真剧_第002集.mp4')],
+          split: { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5, start_number: 3 },
+          opts: { speed_min: 1.03, speed_max: 1.2, black_intro: false },
+        },
+      );
+      assert.equal(estimate.success, true, estimate.error);
+      assert.equal(estimate.selectedCount, 2);
+      assert.equal(estimate.firstEpisode, 1);
+      assert.equal(estimate.lastEpisode, 2);
+      assert.equal(estimate.startNumber, 3);
+      assert.ok(estimate.totalSeconds > 0 && estimate.count >= 1 && estimate.minCount <= estimate.count);
+      assert.ok(estimate.maxCount >= estimate.count);
+      assert.equal((await handlers['library-estimate']({}, { dir: real, files: [] })).success, false);
       const tasks = vm
         .runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context)
         .filter((item) => item.segments);
@@ -450,7 +468,7 @@ async function check(name, fn) {
     touch(path.join(dir, '失败剧_第005集.mp4'));
     const asked = await handlers['library-dedup'](
       {},
-      { dir, files: [2, 4].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+      { dir, files: [1, 2, 4].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
     );
     assert.equal(asked.needsDecision, true);
     assert.equal(asked.kind, 'download');
@@ -462,7 +480,14 @@ async function check(name, fn) {
       {},
       { dir, files: [4, 5].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
     );
-    assert.ok(!askedNetwork.needsDecision, 'episodes 4 and 5 are contiguous');
+    assert.equal(askedNetwork.success, false);
+    assert.ok(!askedNetwork.needsDecision);
+    assert.match(askedNetwork.error, /从第一集开始连续处理/, '重新拆分不能跳着选：只能整部或前 N 集');
+    const skipFirst = await handlers['library-dedup'](
+      {},
+      { dir, files: [2, 4].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+    );
+    assert.match(skipFirst.error, /从第一集开始连续处理/, 'a selection that skips the first episode is rejected');
   });
 
   if (ffmpegOk) {
@@ -499,7 +524,7 @@ async function check(name, fn) {
         ],
       );
 
-      const asked = await handlers['library-dedup']({}, { dir, files: pick(2, 5), split, opts });
+      const asked = await handlers['library-dedup']({}, { dir, files: pick(1, 2, 5), split, opts });
       assert.equal(asked.success, false);
       assert.equal(asked.needsDecision, true);
       assert.equal(asked.kind, 'download');
@@ -519,7 +544,7 @@ async function check(name, fn) {
 
       const platformOnly = await handlers['library-dedup'](
         {},
-        { dir, files: pick(2, 5), split, opts, gapPolicy: 'force' },
+        { dir, files: pick(1, 2, 5), split, opts, gapPolicy: 'force' },
       );
       assert.equal(platformOnly.success, true, platformOnly.error);
       deq(
@@ -546,7 +571,7 @@ async function check(name, fn) {
       context.hasCompleteTaskFile = (task) => task.status === 'completed';
       const waiting = await handlers['library-dedup'](
         {},
-        { dir, files: pick(2, 5), split, opts, gapPolicy: 'download' },
+        { dir, files: pick(1, 2, 5), split, opts, gapPolicy: 'download' },
       );
       assert.equal(waiting.success, true, waiting.error);
       assert.equal(waiting.waitingForDownload, true);

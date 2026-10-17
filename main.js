@@ -3671,6 +3671,76 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
   }
 });
 
+/** 选中的文件是不是这部剧时间线上从第一集起的连续前缀。 */
+function resplitSelectionIsPrefix(dir, files) {
+  const ordered = seriesLibrary.scanEpisodes(dir).map((episode) => path.resolve(episode.path));
+  const chosen = new Set(files.map((file) => path.resolve(file)));
+  if (!chosen.size || chosen.size > ordered.length) return false;
+  return ordered.slice(0, chosen.size).every((file) => chosen.has(file));
+}
+
+const episodeDurationCache = new Map();
+async function cachedEpisodeDuration(ffprobePath, file) {
+  const stat = await fsp.stat(file).catch(() => null);
+  if (!stat?.isFile()) return 0;
+  const key = `${file}|${stat.size}|${stat.mtimeMs}`;
+  if (episodeDurationCache.has(key)) return episodeDurationCache.get(key);
+  const media = await quchong.probeMedia(ffprobePath, file).catch(() => null);
+  const duration = media?.has_video ? (media.video_duration > 0 ? media.video_duration : media.duration) : 0;
+  if (duration > 0) episodeDurationCache.set(key, duration);
+  return duration;
+}
+
+/** 开始处理前的预览：按这些集的时长和当前参数，估一下会得到多少集。 */
+ipcMain.handle('library-estimate', async (_event, payload = {}) => {
+  try {
+    const dir = path.resolve(String(payload.dir || ''));
+    if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    const wanted = new Set(
+      (Array.isArray(payload.files) ? payload.files : []).map((file) => path.resolve(String(file))),
+    );
+    const episodes = seriesLibrary.scanEpisodes(dir).filter((episode) => wanted.has(path.resolve(episode.path)));
+    if (!episodes.length) return { success: false, error: '请先选择要处理的集' };
+    const ffprobePath = resolveFfmpeg('ffprobe');
+    if (!ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
+    const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...payload.opts });
+    const split = resplit.validateSplit(payload.split);
+    const sources = [];
+    let unreadable = 0;
+    // 4 路并行读时长，读过的缓存起来，改参数后重新估算是即时的。
+    for (let from = 0; from < episodes.length; from += 4) {
+      const part = episodes.slice(from, from + 4);
+      const durations = await Promise.all(part.map((episode) => cachedEpisodeDuration(ffprobePath, episode.path)));
+      part.forEach((episode, i) => {
+        if (durations[i] > 0) sources.push({ file: episode.path, duration: durations[i], index: episode.index });
+        else unreadable += 1;
+      });
+    }
+    const estimate = resplit.estimatePlan({
+      sources,
+      split,
+      speedMin: options.speed_min,
+      speedMax: options.speed_max,
+      intro: options.black_intro ? 0.3 : 0,
+    });
+    const first = episodes[0].index;
+    const last = episodes[episodes.length - 1].index;
+    return {
+      success: true,
+      ...estimate,
+      selectedCount: episodes.length,
+      unreadable,
+      firstEpisode: first,
+      lastEpisode: last,
+      startNumber: split.start_number,
+    };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
 /**
  * 选中的集交给去重队列处理，成品放在 剧文件夹/去重/ 里。
  * 重新拆分会先看选中的集之间有没有缺集：平台没有的直接拼；没下载的要用户决定
@@ -3692,6 +3762,10 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     const outputDir = path.join(dir, '去重');
     if (payload.mode === 'episode') {
       return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts, libraryDir: dir });
+    }
+    // 重新拆分按时间线处理：整部，或者从第一集起的前面若干集，不能跳着选。
+    if (!resplitSelectionIsPrefix(dir, files)) {
+      return { success: false, error: '重新拆分要按时间线从第一集开始连续处理：选「整部」或「前 N 集」，不能跳着选。' };
     }
 
     const detail = libraryEpisodeDetail(dir);
