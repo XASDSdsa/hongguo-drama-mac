@@ -37,6 +37,18 @@ def archive(url, target):
     with tarfile.open(file) as tar:
         tar.extractall(target, filter='data')
 
+def tf_converter_python():
+    venv = CACHE / 'tf-convert-venv'
+    python = venv / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+    if not python.exists():
+        subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
+    torch = [str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', 'torch==2.5.1']
+    if sys.platform == 'win32':
+        torch += ['--index-url', 'https://download.pytorch.org/whl/cpu']
+    subprocess.run(torch, check=True)
+    subprocess.run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', 'tensorflow==2.20.0'], check=True)
+    return python
+
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
     models = DEST / 'models'
@@ -58,8 +70,11 @@ def main():
         convert = CACHE / 'convert_weights.py'
         fetch(f'https://raw.githubusercontent.com/soCzech/TransNetV2/{REVISION}/inference-pytorch/convert_weights.py', convert)
         shutil.copyfile(ROOT / 'src/native/video-structure/vendor/transnetv2_pytorch.py', CACHE / 'transnetv2_pytorch.py')
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '--only-binary=:all:', 'tensorflow==2.20.0'], check=True)
-        subprocess.run([sys.executable, str(convert), '--tf_weights', str(tf_dir)], cwd=CACHE, check=True)
+        # TensorFlow is only used to convert the pinned weights. Installing it in
+        # the freeze environment upgrades numpy to a macOS 14 wheel and fails the
+        # macOS 13 packaging check.
+        convert_python = tf_converter_python()
+        subprocess.run([str(convert_python), str(convert), '--tf_weights', str(tf_dir)], cwd=CACHE, check=True)
         shutil.copyfile(CACHE / 'transnetv2-pytorch-weights.pth', weights)
     binary = 'sherpa-onnx-offline-source-separation' + ('.exe' if sys.platform == 'win32' else '')
     if not (DEST / 'bin' / binary).exists():
