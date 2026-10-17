@@ -308,3 +308,38 @@
     flex-direction: column;
   }
 }
+.lib-modes {
+  display: grid;
+  gap: 6px;
+}
+.lib-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.lib-mode span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.lib-mode.is-active {
+  font-weight: 600;
+}
+.lib-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.lib-number input {
+  width: 72px;
+}
+.lib-notice-lines {
+  white-space: pre-line;
+}
+.lib-dialog-foot {
+  max-height: 50vh;
+  overflow: auto;
+}

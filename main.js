@@ -23,6 +23,7 @@ const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
 const seriesInfo = require('./src/native/series-info');
 const seriesLibrary = require('./src/native/series-library');
+const resplit = require('./src/native/resplit');
 const whisper = require('./src/native/whisper');
 const fasterWhisper = require('./src/native/faster-whisper');
 const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
@@ -2429,6 +2430,11 @@ function unmarkQuchongInput(file) {
   else quchongInputRuns.delete(key);
 }
 
+/** 一个任务用到的所有源文件（重新拆分的一集可能由几个原集拼成）。 */
+function quchongTaskInputs(task) {
+  return task.segments ? [...new Set(task.segments.map((segment) => segment.src))] : [task.src];
+}
+
 function quchongOutputIsValid(file) {
   try {
     return !!file && fs.statSync(file).isFile() && fs.statSync(file).size > 0;
@@ -2437,11 +2443,11 @@ function quchongOutputIsValid(file) {
   }
 }
 
-function allocateQuchongDestinations(sources, outputDirs) {
+function allocateQuchongDestinations(sources, outputDirs, names = null) {
   const reserved = new Set(sources.map(quchongPathKey));
   return sources.map((source, sourceIndex) => {
     const parsed = path.parse(source);
-    const base = `${parsed.name}_去重`;
+    const base = names?.[sourceIndex] || `${parsed.name}_去重`;
     let index = 0;
     let candidate;
     do {
@@ -2470,7 +2476,7 @@ function quchongTaskPayload(task) {
     id: task.id,
     src: task.src,
     dst: task.dst,
-    name: path.basename(task.src),
+    name: task.label || path.basename(task.src),
     status: task.status,
     // 阶段与时间戳用于区分排队、处理和收尾，避免只看百分比误判任务状态。
     stage: task.stage || (task.status === 'completed' ? 'completed' : task.status),
@@ -2639,7 +2645,7 @@ function pumpQuchongBatch(batch) {
     batch.status = 'running';
     batch.startedAt = batch.startedAt || Date.now();
     persistQuchongBatch(batch);
-    markQuchongInput(task.src);
+    for (const file of quchongTaskInputs(task)) markQuchongInput(file);
     const controller = new AbortController();
     batch.controllers.set(task.id, controller);
     emitQuchongTask(batch, task);
@@ -2649,6 +2655,8 @@ function pumpQuchongBatch(batch) {
         ffprobePath: batch.ffprobePath,
         src: task.src,
         dst: task.dst,
+        segments: task.segments || null,
+        speed: task.speed ?? null,
         bgm: batch.bgm,
         opts: batch.opts,
         signal: controller.signal,
@@ -2683,7 +2691,7 @@ function pumpQuchongBatch(batch) {
         task.stage = 'completed';
         task.progress = 100;
         task.path = result.path;
-        markPipelineDeduped(task.src, task.dst);
+        if (!task.segments) markPipelineDeduped(task.src, task.dst);
       })
       .catch((error) => {
         task.status = batch.cancelled || controller.signal.aborted ? 'stopped' : 'failed';
@@ -2700,7 +2708,7 @@ function pumpQuchongBatch(batch) {
         batch.controllers.delete(task.id);
         batch.active -= 1;
         quchongActive = Math.max(0, quchongActive - 1);
-        unmarkQuchongInput(task.src);
+        for (const file of quchongTaskInputs(task)) unmarkQuchongInput(file);
         emitQuchongTask(batch, task);
         persistQuchongBatch(batch);
         pumpAllQuchongBatches();
@@ -2807,6 +2815,144 @@ ipcMain.handle('oneclick-select-image', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+/** 建一个去重批次并放进队列。tasks 里每项至少有 src、dst，重新拆分的还有 segments、speed、label。 */
+function registerQuchongBatch({ opts, bgm = null, outputDir, ffmpegPath, ffprobePath, tasks }) {
+  const id = randomUUID();
+  const batch = {
+    id,
+    opts,
+    bgm,
+    outputDir,
+    ffmpegPath,
+    ffprobePath,
+    concurrency: Math.min(opts.jobs, QUCHONG_MAX_ACTIVE),
+    createdAt: Date.now(),
+    startedAt: null,
+    endTime: null,
+    status: 'queued',
+    queue: [],
+    active: 0,
+    controllers: new Map(),
+    cancelled: false,
+    finished: false,
+    tasks: tasks.map((task) => ({
+      id: randomUUID(),
+      status: 'pending',
+      stage: 'queued',
+      progress: 0,
+      error: '',
+      startedAt: null,
+      endTime: null,
+      updatedAt: Date.now(),
+      ...task,
+    })),
+  };
+  batch.queue = [...batch.tasks];
+  quchongBatches.set(id, batch);
+  persistQuchongBatch(batch);
+  batch.tasks.forEach((task) => emitQuchongTask(batch, task));
+  // 先把 batchId 返回给渲染进程，再开始跑第一条任务，避免极短视频的完成事件抢在响应之前。
+  setImmediate(() => pumpAllQuchongBatches());
+  return {
+    success: true,
+    batchId: id,
+    status: quchongActive >= QUCHONG_MAX_ACTIVE ? 'queued' : 'running',
+    tasks: batch.tasks.map(quchongTaskPayload),
+  };
+}
+
+/**
+ * 重新拆分：把选中的集接成连续时间线，按成品时长范围切成新的集，每一集交给去重队列处理。
+ * 规划阶段会先分析切点（镜头切换、说话停顿），分析结果缓存在应用私有目录。
+ */
+async function startResplitBatch({ dir, files, split, opts, outputDir }) {
+  const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...opts });
+  const splitOptions = resplit.validateSplit(split);
+  const ffmpegPath = resolveFfmpeg('ffmpeg');
+  const ffprobePath = resolveFfmpeg('ffprobe');
+  if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
+  if (files.length > 400) return { success: false, error: '单次最多处理 400 集' };
+
+  // 按集号顺序接起来；认不出集号的排在最后。
+  const ordered = files
+    .map((file) => ({ file, index: seriesLibrary.parseEpisodeIndex(path.basename(file)) }))
+    .sort((a, b) => {
+      if ((a.index === null) !== (b.index === null)) return a.index === null ? 1 : -1;
+      return a.index !== b.index ? a.index - b.index : a.file.localeCompare(b.file, 'zh-CN', { numeric: true });
+    });
+
+  const progress = (done, total) => sendToRenderer('library-plan-progress', { stage: 'analyze', done, total });
+  progress(0, ordered.length);
+  const durations = new Map();
+  for (const item of ordered) {
+    const media = await quchong.probeMedia(ffprobePath, item.file);
+    if (!media.has_video) return { success: false, error: `这个文件没有视频轨：${path.basename(item.file)}` };
+    durations.set(item.file, media.video_duration > 0 ? media.video_duration : media.duration);
+  }
+  const analysis = await resplit.analyzeSources({
+    ffmpegPath,
+    files: ordered.map((item) => item.file),
+    cacheDir: path.join(app.getPath('userData'), 'resplit-cache'),
+    onProgress: progress,
+  });
+
+  const sources = ordered.map((item, position) => {
+    const duration = durations.get(item.file);
+    const previous = ordered[position - 1];
+    return {
+      file: item.file,
+      duration,
+      candidates: resplit.cutCandidates(
+        analysis.get(item.file) || {},
+        splitOptions.head_trim,
+        duration - splitOptions.tail_trim,
+      ),
+      // 集号不连续的地方（缺集）标出来，切点会优先落在这里。
+      gapBefore: !!previous && item.index !== null && previous.index !== null && item.index !== previous.index + 1,
+    };
+  });
+  const plan = resplit.planPieces({
+    sources,
+    split: splitOptions,
+    speedMin: options.speed_min,
+    speedMax: options.speed_max,
+    intro: options.black_intro ? 0.3 : 0,
+  });
+  if (!plan.pieces.length) return { success: false, error: plan.warnings.join('；') || '没有可处理的内容' };
+
+  await fsp.mkdir(outputDir, { recursive: true });
+  const seriesName = sanitizeFolderName(path.basename(dir)) || '短剧';
+  const names = plan.pieces.map((piece) => `${seriesName}_第${String(piece.number).padStart(3, '0')}集`);
+  const destinations = allocateQuchongDestinations(
+    plan.pieces.map((piece) => piece.segments[0].file),
+    plan.pieces.map(() => outputDir),
+    names,
+  );
+  const result = registerQuchongBatch({
+    opts: options,
+    outputDir,
+    ffmpegPath,
+    ffprobePath,
+    tasks: plan.pieces.map((piece, index) => ({
+      src: piece.segments[0].file,
+      segments: piece.segments.map((segment) => ({
+        src: segment.file,
+        start: segment.start,
+        duration: segment.duration,
+      })),
+      speed: piece.speed,
+      label: path.basename(destinations[index], '.mp4'),
+      dst: destinations[index],
+    })),
+  });
+  const finals = plan.pieces.map((piece) => piece.finalDuration);
+  return {
+    ...result,
+    warnings: plan.warnings,
+    summary: { count: plan.pieces.length, minSeconds: Math.min(...finals), maxSeconds: Math.max(...finals) },
+  };
+}
+
 async function startQuchongBatch(payload = {}) {
   try {
     const sources = [...new Set(Array.isArray(payload.sources) ? payload.sources : [])].map((file) =>
@@ -2844,50 +2990,15 @@ async function startQuchongBatch(payload = {}) {
     const duplicate = sources.find((file) => pendingSources.has(quchongPathKey(file)));
     if (duplicate) return { success: false, error: `视频已在去重队列中：${path.basename(duplicate)}` };
 
-    const id = randomUUID();
     const destinations = allocateQuchongDestinations(sources, outputDirs);
-    const batch = {
-      id,
+    return registerQuchongBatch({
       opts,
       bgm,
       outputDir,
       ffmpegPath,
       ffprobePath,
-      concurrency: Math.min(opts.jobs, QUCHONG_MAX_ACTIVE),
-      createdAt: Date.now(),
-      startedAt: null,
-      endTime: null,
-      status: 'queued',
-      queue: [],
-      active: 0,
-      controllers: new Map(),
-      cancelled: false,
-      finished: false,
-      tasks: sources.map((src, index) => ({
-        id: randomUUID(),
-        src,
-        dst: destinations[index],
-        status: 'pending',
-        stage: 'queued',
-        progress: 0,
-        error: '',
-        startedAt: null,
-        endTime: null,
-        updatedAt: Date.now(),
-      })),
-    };
-    batch.queue = [...batch.tasks];
-    quchongBatches.set(id, batch);
-    persistQuchongBatch(batch);
-    batch.tasks.forEach((task) => emitQuchongTask(batch, task));
-    // 先把 batchId 返回给渲染进程，再开始跑第一条任务，避免极短视频的完成事件抢在响应之前。
-    setImmediate(() => pumpAllQuchongBatches());
-    return {
-      success: true,
-      batchId: id,
-      status: quchongActive >= QUCHONG_MAX_ACTIVE ? 'queued' : 'running',
-      tasks: batch.tasks.map(quchongTaskPayload),
-    };
+      tasks: sources.map((src, index) => ({ src, dst: destinations[index] })),
+    });
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -3000,7 +3111,9 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     if (files.some((file) => path.dirname(file) !== dir || !seriesLibrary.VIDEO_EXT.test(file))) {
       return { success: false, error: '选中的文件不在这部剧的文件夹里' };
     }
-    return await startQuchongBatch({ sources: files, outputDir: path.join(dir, '去重'), opts: payload.opts });
+    const outputDir = path.join(dir, '去重');
+    if (payload.mode === 'episode') return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts });
+    return await startResplitBatch({ dir, files, split: payload.split, opts: payload.opts, outputDir });
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

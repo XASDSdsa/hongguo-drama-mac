@@ -213,13 +213,78 @@ async function check(name, fn) {
       {},
       {
         dir: series.path,
+        mode: 'episode',
         files: [path.join(series.path, '同名剧_第002集.mp4')],
       },
     );
     assert.equal(started.success, true, started.error);
     const [task] = vm.runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context);
     assert.equal(task.dst, path.join(series.path, '去重', '同名剧_第002集_去重.mp4'));
-    assert.ok(fs.existsSync(path.join(series.path, '去重')) || true);
+
+    // 默认模式是重新拆分：用真实的小视频走完 探测 -> 切点分析 -> 规划 -> 入队。
+    let haveFfmpeg = true;
+    try {
+      require('node:child_process').execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    } catch (_) {
+      haveFfmpeg = false;
+    }
+    if (haveFfmpeg) {
+      const real = path.join(root, '真剧');
+      fs.mkdirSync(real, { recursive: true });
+      for (const n of [1, 2]) {
+        require('node:child_process').execFileSync('ffmpeg', [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc2=size=160x284:rate=25:duration=12',
+          '-f',
+          'lavfi',
+          '-i',
+          'sine=frequency=440:duration=12',
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-shortest',
+          path.join(real, `真剧_第00${n}集.mp4`),
+        ]);
+      }
+      context.resolveFfmpeg = (name) => name;
+      const split = await handlers['library-dedup'](
+        {},
+        {
+          dir: real,
+          files: [path.join(real, '真剧_第002集.mp4'), path.join(real, '真剧_第001集.mp4')],
+          split: { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5, start_number: 3 },
+          opts: { speed_min: 1.03, speed_max: 1.2, black_intro: false },
+        },
+      );
+      assert.equal(split.success, true, split.error);
+      assert.ok(split.summary.count >= 2);
+      assert.ok(split.summary.minSeconds >= 5 && split.summary.maxSeconds <= 12, JSON.stringify(split.summary));
+      const tasks = vm
+        .runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context)
+        .filter((item) => item.segments);
+      assert.equal(tasks.length, split.summary.count);
+      assert.deepEqual(
+        tasks.map((item) => path.basename(item.dst)),
+        tasks.map((_, i) => `真剧_第${String(i + 3).padStart(3, '0')}集.mp4`),
+      );
+      assert.ok(tasks.every((item) => path.dirname(item.dst) === path.join(real, '去重')));
+      assert.ok(tasks.every((item) => item.speed >= 1.03 && item.speed <= 1.2));
+      const used = tasks.flatMap((item) => item.segments);
+      assert.equal(path.basename(used[0].src), '真剧_第001集.mp4', 'episodes are joined in episode order');
+      const kept = used.reduce((sum, segment) => sum + segment.duration, 0);
+      assert.ok(Math.abs(kept - 22) < 0.1, `kept ${kept}`);
+    }
 
     await handlers['library-remove-import']({}, path.join(tmp, 'imported', '外来剧'));
     assert.equal(

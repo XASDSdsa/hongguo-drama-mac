@@ -50,8 +50,8 @@ function validateOptions(input = {}) {
   const opts = { ...DEFAULTS, ...input };
   const numeric = [
     ['crop_ratio', 0.85, 1],
-    ['speed_min', 1, 1.1],
-    ['speed_max', 1, 1.1],
+    ['speed_min', 1, 1.3],
+    ['speed_max', 1, 1.3],
     ['rotation_max', 0, 0.02],
     ['rgb_shift', 0, 5],
     ['noise_min', 0, 15],
@@ -147,7 +147,7 @@ function encoderArgs(name, lean, width, height) {
   return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', lean ? '23' : '20'];
 }
 
-function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) {
+function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, segments }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
   const [width, height] = opts.resolution.split('x').map(Number);
@@ -158,14 +158,37 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   const videoDelay = Math.max(0, (media.video_start - origin) / speed + intro);
   const audioDelay = Math.max(0, (media.audio_start - origin) / speed + intro);
   const horizontal = media.video_width > media.video_height;
+  const sourceDuration = media.video_duration > 0 ? media.video_duration : media.duration;
+  const outputDuration = sourceDuration / speed + videoDelay;
   const vf = [
     `crop=iw*${opts.crop_ratio}:ih*${opts.crop_ratio}:x=(iw-ow)*${r.CX.toFixed(6)}:y=(ih-oh)*${r.CY.toFixed(6)}`,
   ];
   const filters = [];
-  let videoInput = '[0:V:0]';
+  // 多个片段时，先在滤镜图里把它们按顺序接成一条，后面的处理和单个文件完全一致。
+  const pieces = Array.isArray(segments) && segments.length ? segments : null;
+  const joined = !!pieces && pieces.length > 1;
+  if (joined) {
+    const width0 = media.video_width,
+      height0 = media.video_height;
+    const labels = [];
+    pieces.forEach((_, index) => {
+      filters.push(`[${index}:V:0]setsar=1,scale=${width0}:${height0}[sv${index}]`);
+      labels.push(`[sv${index}]`);
+      if (hasAudio) {
+        filters.push(
+          `[${index}:a:0]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[sa${index}]`,
+        );
+        labels.push(`[sa${index}]`);
+      }
+    });
+    filters.push(`${labels.join('')}concat=n=${pieces.length}:v=1:a=${hasAudio ? 1 : 0}[cv]${hasAudio ? '[ca]' : ''}`);
+  }
+  const sourceVideo = joined ? '[cv]' : '[0:V:0]';
+  const sourceAudio = joined ? '[ca]' : '[0:a:0]';
+  let videoInput = sourceVideo;
   if (horizontal) {
     // Keep the source's landscape composition while filling the portrait canvas.
-    filters.push('[0:V:0]split=2[bgsrc][fgsrc]');
+    filters.push(`${sourceVideo}split=2[bgsrc][fgsrc]`);
     filters.push(
       `[bgsrc]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:1,setsar=1[bg]`,
     );
@@ -195,7 +218,17 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   if (opts.black_intro) vf.push(`fade=t=in:st=${videoDelay.toFixed(6)}:d=0.3`);
 
   filters.push(`${videoInput}${vf.join(',')}[v]`);
-  const inputs = ['-i', src];
+  const inputs = pieces
+    ? pieces.flatMap((piece) => [
+        '-ss',
+        Number(piece.start).toFixed(3),
+        '-t',
+        Number(piece.duration).toFixed(3),
+        '-i',
+        piece.src,
+      ])
+    : ['-i', src];
+  const bgmIndex = pieces ? pieces.length : 1;
   const audioOutput = hasAudio || Boolean(bgm);
   if (hasAudio) {
     const af = [
@@ -207,12 +240,13 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
     ];
     if (opts.eq_enable) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
     if (audioDelay > 0) af.push(`adelay=delays=${(audioDelay * 1000).toFixed(3)}:all=1`);
-    af.push(`volume=${opts.orig_volume}`, 'apad');
-    filters.push(`[0:a:0]${af.join(',')}[oa]`);
+    // 补静音只补到成片结束稍后一点，不用无限长的 apad：配合 -shortest 时，较老的 FFmpeg 会在收尾时报错。
+    af.push(`volume=${opts.orig_volume}`, `apad=whole_dur=${(outputDuration + 1).toFixed(3)}`);
+    filters.push(`${sourceAudio}${af.join(',')}[oa]`);
   }
   if (bgm) {
     inputs.push('-stream_loop', '-1', '-i', bgm);
-    filters.push(`[1:a:0]asetpts=PTS-STARTPTS,volume=${opts.bgm_volume}[ba]`);
+    filters.push(`[${bgmIndex}:a:0]asetpts=PTS-STARTPTS,volume=${opts.bgm_volume}[ba]`);
   }
   if (audioOutput) {
     const source =
@@ -246,8 +280,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder }) 
   args.push('-map_metadata', '-1', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', dst);
   // Audio/container duration can exceed the video. -shortest finishes at the
   // transformed video end, so the progress denominator must use that stream.
-  const videoDuration = media.video_duration > 0 ? media.video_duration : media.duration;
-  return { args, rolled: r, duration: videoDuration / speed + videoDelay };
+  return { args, rolled: r, duration: outputDuration };
 }
 
 function execJson(ffprobePath, args, signal) {
@@ -405,14 +438,62 @@ async function sameFileOrPath(src, dst) {
   }
 }
 
-async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, signal, onProgress, onLog, onStage }) {
+async function runJob({
+  ffmpegPath,
+  ffprobePath,
+  src,
+  dst,
+  segments = null,
+  speed = null,
+  bgm = null,
+  opts,
+  signal,
+  onProgress,
+  onLog,
+  onStage,
+}) {
   const options = validateOptions(opts);
-  if (!path.isAbsolute(src) || !path.isAbsolute(dst)) throw new Error('输入和输出路径必须是绝对路径');
-  if (await sameFileOrPath(src, dst)) throw new Error('输入与输出指向同一文件，已拒绝覆盖');
+  // segments：[{ src, start, duration }]，按顺序接成一条再处理；只传 src 就是整个文件。
+  const pieces = Array.isArray(segments) && segments.length ? segments : null;
+  const inputs = pieces ? pieces.map((piece) => piece.src) : [src];
+  if (pieces) {
+    for (const piece of pieces) {
+      if (!Number.isFinite(piece.start) || piece.start < 0 || !Number.isFinite(piece.duration) || piece.duration <= 0)
+        throw new Error('片段时间无效');
+    }
+  }
+  if (inputs.some((file) => !path.isAbsolute(file)) || !path.isAbsolute(dst))
+    throw new Error('输入和输出路径必须是绝对路径');
+  for (const file of inputs) {
+    if (await sameFileOrPath(file, dst)) throw new Error('输入与输出指向同一文件，已拒绝覆盖');
+  }
   if (fs.existsSync(dst)) throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
+  if (speed != null && !(Number.isFinite(speed) && speed >= 0.5 && speed <= 2)) throw new Error('变速倍数无效');
   onStage?.('probing');
-  const media = await probeMedia(ffprobePath, src, signal);
-  if (!media.has_video) throw new Error(`输入没有可用视频轨：${src}`);
+  let media;
+  if (pieces) {
+    const probed = new Map();
+    for (const file of new Set(inputs)) probed.set(file, await probeMedia(ffprobePath, file, signal));
+    const first = probed.get(inputs[0]);
+    for (const [file, info] of probed) if (!info.has_video) throw new Error(`输入没有可用视频轨：${file}`);
+    const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
+    if (withAudio !== 0 && withAudio !== probed.size) throw new Error('各集的音轨不一致，无法拼接');
+    const total = pieces.reduce((sum, piece) => sum + piece.duration, 0);
+    // 拼接后的时间轴从 0 开始，音画起点都是 0。
+    media = {
+      duration: total,
+      video_duration: total,
+      has_video: true,
+      has_audio: withAudio > 0,
+      video_width: first.video_width,
+      video_height: first.video_height,
+      video_start: 0,
+      audio_start: 0,
+    };
+  } else {
+    media = await probeMedia(ffprobePath, src, signal);
+    if (!media.has_video) throw new Error(`输入没有可用视频轨：${src}`);
+  }
   if (bgm) {
     const music = await probeMedia(ffprobePath, bgm, signal);
     if (!music.has_audio) throw new Error(`BGM 没有可用音频轨：${bgm}`);
@@ -422,10 +503,23 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
   let rolled;
   try {
     rolled = rollParams(options);
+    // 重新拆分时变速倍数由规划阶段按成品时长算好，这里不再随机。
+    if (speed != null) rolled.SPEED = speed;
     if (signal?.aborted) throw new Error('已取消');
     const encoder = await resolveEncoder(options.encoder, process.platform);
-    const command = buildCommand({ src, dst: tmp, bgm, opts: options, rolled, media, encoder });
-    onLog?.(`[开始] ${path.basename(src)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
+    const command = buildCommand({
+      src: inputs[0],
+      dst: tmp,
+      bgm,
+      opts: options,
+      rolled,
+      media,
+      encoder,
+      segments: pieces,
+    });
+    onLog?.(
+      `[开始] ${path.basename(inputs[0])}${pieces ? ` 等 ${pieces.length} 段` : ''} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`,
+    );
     onStage?.('encoding');
     try {
       await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
@@ -460,7 +554,7 @@ async function runJob({ ffmpegPath, ffprobePath, src, dst, bgm = null, opts, sig
       throw error;
     }
     onProgress?.(100);
-    onLog?.(`[完成] ${path.basename(src)}`);
+    onLog?.(`[完成] ${path.basename(dst)}`);
     return { success: true, path: dst, rolled };
   } finally {
     try {

@@ -4,6 +4,25 @@ import { Check, Film, FolderPlus, RefreshCw, X } from './icons';
 import DedupParams from './DedupParams';
 import useDialogKeyboard from './useDialogKeyboard';
 
+const STORAGE_KEY = 'library-params';
+const DEFAULT_SPLIT = { min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2, start_number: 1 };
+const DEFAULT_SPEED = { speed_min: 1.03, speed_max: 1.21 };
+
+function readSaved() {
+  try {
+    return JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}') || {};
+  } catch (_) {
+    return {};
+  }
+}
+function writeSaved(value) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+  } catch (_) {
+    /* 存储不可用时，只是不记住上次的参数。 */
+  }
+}
+
 const formatSize = (bytes) => {
   const mb = Number(bytes) / 1024 / 1024;
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.max(1, Math.round(mb))} MB`;
@@ -17,7 +36,11 @@ export default function SeriesLibrary({ active = true, onNavigate }) {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const saved = useRef(readSaved()).current;
   const [opts, setOpts] = useState(null);
+  const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
+  const [mode, setMode] = useState(saved.mode === 'episode' ? 'episode' : 'resplit');
+  const [progress, setProgress] = useState(null);
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
@@ -43,12 +66,24 @@ export default function SeriesLibrary({ active = true, onNavigate }) {
   useEffect(() => {
     let alive = true;
     window.electronAPI.quchongDefaults?.().then((defaults) => {
-      if (alive && defaults) setOpts(defaults);
+      if (alive && defaults) setOpts({ ...defaults, ...DEFAULT_SPEED, ...(saved.opts || {}) });
     });
+    const off = window.electronAPI.onLibraryPlanProgress?.((data) => alive && setProgress(data));
     return () => {
       alive = false;
+      off?.();
     };
-  }, []);
+  }, [saved]);
+
+  useEffect(() => {
+    if (opts) writeSaved({ opts, split, mode });
+  }, [opts, split, mode]);
+
+  const resetParams = async () => {
+    const defaults = await window.electronAPI.quchongDefaults?.();
+    if (defaults) setOpts({ ...defaults, ...DEFAULT_SPEED });
+    setSplit({ ...DEFAULT_SPLIT });
+  };
 
   const closeDetail = () => {
     requestId.current++;
@@ -102,15 +137,26 @@ export default function SeriesLibrary({ active = true, onNavigate }) {
     setSubmitting(true);
     setNotice('');
     setQueued(false);
+    setProgress(null);
     const result = await window.electronAPI.libraryDedup({
       dir: detail.dir,
+      mode,
       files: episodes.filter((item) => selected.has(item.path)).map((item) => item.path),
       opts,
+      split,
     });
     setSubmitting(false);
+    setProgress(null);
     if (result?.success) {
       setQueued(true);
-      setNotice(`已加入去重队列（${result.tasks?.length ?? selectedCount} 集），成品会放进「去重」文件夹。`);
+      const summary = result.summary;
+      const lines = [
+        mode === 'resplit' && summary
+          ? `已加入去重队列：将生成 ${summary.count} 集，成品约 ${Math.round(summary.minSeconds)}–${Math.round(summary.maxSeconds)} 秒，放进「去重」文件夹。`
+          : `已加入去重队列（${result.tasks?.length ?? selectedCount} 集），成品会放进「去重」文件夹。`,
+        ...(result.warnings || []),
+      ];
+      setNotice(lines.join('\n'));
     } else setNotice(result?.error || '提交失败');
   };
 
@@ -265,14 +311,62 @@ export default function SeriesLibrary({ active = true, onNavigate }) {
 
                 <div className="lib-dialog-foot">
                   <div className="lib-foot-info">
-                    <div>处理：去重（按原集，一集出一集）</div>
+                    <div className="lib-modes" role="radiogroup" aria-label="处理方式">
+                      {[
+                        ['resplit', '重新拆分', '选中的集接起来，按成品时长重新切成新的集，再去重'],
+                        ['episode', '按原集去重', '一集出一集，不改变集数'],
+                      ].map(([id, label, hint]) => (
+                        <label key={id} className={`lib-mode ${mode === id ? 'is-active' : ''}`} title={hint}>
+                          <input
+                            type="radio"
+                            name="lib-mode"
+                            checked={mode === id}
+                            onChange={() => setMode(id)}
+                            disabled={submitting}
+                          />
+                          {label}
+                          <span>{hint}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {mode === 'resplit' && (
+                      <label className="lib-number">
+                        新集从第
+                        <input
+                          className="input-field"
+                          type="number"
+                          min="1"
+                          max="9999"
+                          value={split.start_number}
+                          onChange={(e) =>
+                            setSplit({ ...split, start_number: Math.max(1, Math.floor(Number(e.target.value)) || 1) })
+                          }
+                          disabled={submitting}
+                        />
+                        集开始编号
+                      </label>
+                    )}
                     <div className="lib-path" title={detail.outputDir}>
                       输入：{detail.dir}　→　输出：{detail.outputDir}
                     </div>
                     {showParams && opts && (
-                      <DedupParams opts={opts} onChange={(k, v) => setOpts({ ...opts, [k]: v })} />
+                      <DedupParams
+                        opts={opts}
+                        onChange={(k, v) => setOpts({ ...opts, [k]: v })}
+                        split={mode === 'resplit' ? split : null}
+                        onSplitChange={(k, v) => setSplit({ ...split, [k]: v })}
+                        onReset={resetParams}
+                        disabled={submitting}
+                      />
                     )}
-                    {notice && <div className="lib-notice">{notice}</div>}
+                    {submitting && (
+                      <div className="lib-notice">
+                        {progress?.stage === 'analyze'
+                          ? `正在分析切点：${progress.done}/${progress.total}`
+                          : '正在准备…'}
+                      </div>
+                    )}
+                    {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
                   </div>
                   <div className="lib-foot-actions">
                     <button className="btn btn-sm" onClick={() => setShowParams((value) => !value)}>
@@ -288,7 +382,7 @@ export default function SeriesLibrary({ active = true, onNavigate }) {
                       onClick={startDedup}
                       disabled={submitting || !selectedCount || !opts}
                     >
-                      开始去重（{selectedCount} 集）
+                      开始处理（{selectedCount} 集）
                     </button>
                   </div>
                 </div>

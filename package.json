@@ -35,6 +35,7 @@
     "check:synopsis": "node scripts/check-synopsis.cjs",
     "check:series-info": "node scripts/check-series-info.cjs",
     "check:series-library": "node scripts/check-series-library.cjs",
+    "check:resplit": "node scripts/check-resplit.cjs",
     "setup:structure": "node scripts/setup-video-structure.cjs",
     "check:structure": "node scripts/check-video-structure.cjs",
     "check:shots": "python3 scripts/check-shot-boundary-convention.py && python3 scripts/check-shot-algorithm.py",
