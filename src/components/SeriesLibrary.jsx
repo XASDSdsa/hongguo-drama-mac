@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './SeriesLibrary.css';
 import { Check, Film, FolderPlus, RefreshCw, X } from './icons';
 import DedupParams from './DedupParams';
+import PublishPanel from './PublishPanel';
 import useDialogKeyboard from './useDialogKeyboard';
 
 const STORAGE_KEY = 'library-params';
@@ -374,6 +375,7 @@ export default function SeriesLibrary({ active = true, onNavigate }) {
               <>
                 <div className="lib-dialog-body">
                   {detail.synopsis && <p className="lib-synopsis">{detail.synopsis}</p>}
+                  <PublishPanel dir={detail.dir} />
                   <div className="lib-toolbar">
                     <span>
                       已选 {selectedCount} / {episodes.length} 集

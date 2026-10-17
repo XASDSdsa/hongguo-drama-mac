@@ -75,3 +75,6 @@ dist-signed/
 .planning/
 *.bak
 *.backup
+
+# 海报标题字体（由 setup:title-fonts 从 @fontsource 拷出）
+build/title-fonts/

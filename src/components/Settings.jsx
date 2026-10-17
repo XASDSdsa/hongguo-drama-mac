@@ -62,6 +62,8 @@ function SettingsPage({ active = true }) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [aiTest, setAiTest] = useState(null);
+  const [aiTesting, setAiTesting] = useState(false);
   const testVersion = useRef(0);
   const savingRef = useRef(false);
   const savedTimer = useRef(null);
@@ -108,6 +110,25 @@ function SettingsPage({ active = true }) {
     }
   };
 
+  // 用表单里当前填的值测一次文本接口（不需要先保存）。
+  const testAi = async () => {
+    setAiTesting(true);
+    setAiTest(null);
+    try {
+      setAiTest(
+        await window.electronAPI.testAiText({
+          ai_base_url: settings.ai_base_url,
+          ai_api_key: settings.ai_api_key,
+          ai_text_model: settings.ai_text_model,
+        }),
+      );
+    } catch (error) {
+      setAiTest({ success: false, error: error.message || '测试失败' });
+    } finally {
+      setAiTesting(false);
+    }
+  };
+
   const persist = async (next, isProxy = false) => {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -133,6 +154,8 @@ function SettingsPage({ active = true }) {
         'proxy_password',
         'ai_base_url',
         'ai_api_key',
+        'ai_image_base_url',
+        'ai_image_api_key',
         'ai_image_model',
         'ai_text_model',
         'ai_transcription_model',
@@ -443,6 +466,97 @@ function SettingsPage({ active = true }) {
           <p className="settings-hint">
             设备在运行前固定，不自动切换。安装包使用内置工具。修改参数后，重跑会使受影响的下游结果失效。
           </p>
+        </div>
+
+        <div className="settings-group ai-settings-group">
+          <label className="settings-label">AI 发布素材（简介 / 剧名 / 海报）</label>
+          <p className="settings-hint">
+            填写 OpenAI 兼容接口的中转地址（通常以 <code>/v1</code> 结尾）和
+            Key。文本和作图可以走不同的中转站：作图那组留空就和文本共用。
+          </p>
+          <div className="ai-settings-grid">
+            <label className="ai-field ai-field-wide">
+              <span>文本中转地址</span>
+              <input
+                className="input-field"
+                aria-label="AI 文本中转地址"
+                value={settings.ai_base_url || ''}
+                onChange={(e) => update('ai_base_url', e.target.value)}
+                placeholder="https://api.openai.com/v1"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>文本 API Key</span>
+              <input
+                className="input-field"
+                type="password"
+                autoComplete="off"
+                aria-label="AI 文本 API Key"
+                value={settings.ai_api_key || ''}
+                onChange={(e) => update('ai_api_key', e.target.value)}
+                placeholder="sk-…"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field">
+              <span>文本模型（改写简介、剧名，检查画面）</span>
+              <input
+                className="input-field"
+                aria-label="AI 文本模型"
+                value={settings.ai_text_model || ''}
+                onChange={(e) => update('ai_text_model', e.target.value)}
+                placeholder="gpt-6.1-sol"
+                spellCheck={false}
+              />
+              <em>要能看图（检查海报底图有没有文字、人脸在哪）；不支持看图时会跳过检查。</em>
+            </label>
+            <label className="ai-field">
+              <span>图片模型（重绘海报底图）</span>
+              <input
+                className="input-field"
+                aria-label="AI 图片模型"
+                value={settings.ai_image_model || ''}
+                onChange={(e) => update('ai_image_model', e.target.value)}
+                placeholder="gpt-image-2.5"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>作图中转地址（可选）</span>
+              <input
+                className="input-field"
+                aria-label="AI 作图中转地址"
+                value={settings.ai_image_base_url || ''}
+                onChange={(e) => update('ai_image_base_url', e.target.value)}
+                placeholder="留空 = 和文本共用"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>作图 API Key（可选）</span>
+              <input
+                className="input-field"
+                type="password"
+                autoComplete="off"
+                aria-label="AI 作图 API Key"
+                value={settings.ai_image_api_key || ''}
+                onChange={(e) => update('ai_image_api_key', e.target.value)}
+                placeholder="留空 = 和文本共用"
+                spellCheck={false}
+              />
+            </label>
+          </div>
+          <div className="preset-row mt8">
+            <button className="btn btn-outline btn-sm" onClick={testAi} disabled={aiTesting}>
+              {aiTesting ? '正在测试…' : '测试文本连接'}
+            </button>
+            {aiTest && (
+              <span className={`settings-hint ${aiTest.success ? '' : 'alert-error'}`} role="status">
+                {aiTest.success ? `连通正常（${aiTest.model}，${aiTest.elapsed} ms）` : aiTest.error}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="settings-group">

@@ -189,6 +189,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryJobs: () => ipcRenderer.invoke('library-jobs'),
   libraryJobCancel: (id) => ipcRenderer.invoke('library-job-cancel', id),
   libraryJobDismiss: (id) => ipcRenderer.invoke('library-job-dismiss', id),
+  testAiText: (draft) => ipcRenderer.invoke('test-ai-text', draft),
+  publishState: (dir) => ipcRenderer.invoke('publish-state', dir),
+  publishGenerate: (payload) => ipcRenderer.invoke('publish-generate', payload),
+  publishCancel: (dir) => ipcRenderer.invoke('publish-cancel', dir),
+  publishRetitle: (payload) => ipcRenderer.invoke('publish-retitle', payload),
+  onPublishUpdate: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('publish-update', listener);
+    return () => ipcRenderer.removeListener('publish-update', listener);
+  },
   onLibraryJobUpdate: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('library-job-update', listener);

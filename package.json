@@ -9,11 +9,11 @@
     "dev": "node scripts/dev.js",
     "dev:react": "vite",
     "build:react": "vite build",
-    "build": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win",
-    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
-    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win --dir",
-    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win portable",
-    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run build:react && electron-builder --win nsis",
+    "build": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win",
+    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
+    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win --dir",
+    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win portable",
+    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
     "check:openai": "node scripts/check-openai-adapter.cjs",
     "check:pipeline": "node scripts/check-pipeline-gate.cjs",
@@ -24,12 +24,12 @@
     "setup:whisper": "node scripts/setup-whisper.js",
     "setup:transcription": "node scripts/setup-faster-whisper.cjs",
     "check:transcription-bundle": "node scripts/check-faster-whisper-bundle.cjs",
-    "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-ai-materials-panel.cjs",
-    "pack": "npm run setup:transcription && npm run setup:structure && electron-builder --dir",
+    "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-ai-materials-panel.cjs && node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs",
+    "pack": "npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
-    "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
-    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:jianying && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
+    "build:mac": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
+    "build:mac:dir": "npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
     "check:workflow": "node scripts/check-workflow-wiring.cjs",
     "check:oneclick": "node scripts/check-oneclick.cjs",
     "check:synopsis": "node scripts/check-synopsis.cjs",
@@ -45,12 +45,20 @@
     "setup:jianying": "node scripts/setup-jianying-runtime.cjs",
     "check:dialogue": "node scripts/check-dialogue-boundaries.cjs",
     "format": "npx --yes prettier@3 --write \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\"",
-    "format:check": "npx --yes prettier@3 --check \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\""
+    "format:check": "npx --yes prettier@3 --check \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\"",
+    "setup:title-fonts": "node scripts/setup-title-fonts.cjs",
+    "check:poster-title": "node scripts/check-poster-title.cjs",
+    "check:publish": "node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs && node scripts/check-poster-title.cjs && node scripts/check-title-fonts.cjs"
   },
   "dependencies": {
     "axios": "^1.13.2"
   },
   "devDependencies": {
+    "@fontsource/ma-shan-zheng": "5.3.1",
+    "@fontsource/noto-sans-sc": "5.3.1",
+    "@fontsource/noto-serif-sc": "5.3.1",
+    "@fontsource/zcool-kuaile": "5.3.0",
+    "@fontsource/zcool-qingke-huangyou": "5.3.0",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^8.2.2",
     "electron": "44.6.0",
@@ -128,6 +136,10 @@
         {
           "from": "build/video-structure/win32-x64",
           "to": "video-structure"
+        },
+        {
+          "from": "build/title-fonts",
+          "to": "title-fonts"
         }
       ],
       "extraFiles": [
@@ -234,6 +246,10 @@
         {
           "from": "build/jianying/darwin-arm64",
           "to": "jianying"
+        },
+        {
+          "from": "build/title-fonts",
+          "to": "title-fonts"
         }
       ],
       "binaries": [

@@ -111,3 +111,16 @@ cuBLAS、cuDNN 9 及 CUDA runtime 的可再分发动态库和 Microsoft Visual C
 - Paraformer 和 Silero VAD 采用 sherpa-onnx 官方 asr-models 发布文件，构建脚本固定 SHA256。模型来源和版本随 runtime.json 保存；模型使用条件独立于推理程序许可证。
 - 中文标点恢复采用 sherpa-onnx 官方发布的 CT-Transformer 2024-04-12 int8 转换模型；上游 [ModelScope iic 模型卡](https://modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch/) 标注 Apache-2.0。安装包仅在本机运行该模型，构建脚本校验模型 SHA256；标点只是句界候选，不能保证语义准确。
 - PyTorch 2.5.1、NumPy 1.26.4 许可证随内置运行时收集；用户端不会执行 pip 或在线安装模型。
+
+## 海报标题字体
+
+AI 发布素材生成海报时，标题由程序用下列字体渲染（均为 SIL Open Font License 1.1，允许商用与随软件分发；不单独出售字体本身）。
+字体文件取自 [Fontsource](https://fontsource.org/) 的 npm 包（构建时由 `npm run setup:title-fonts` 拷贝），各字体的许可证文本随安装包放在 `title-fonts/<字体名>/LICENSE.txt`。
+
+| 字体 | 来源 |
+| --- | --- |
+| Noto Sans SC（思源黑体） | Google / Adobe，@fontsource/noto-sans-sc |
+| Noto Serif SC（思源宋体） | Google / Adobe，@fontsource/noto-serif-sc |
+| ZCOOL QingKe HuangYou（站酷庆科黄油体） | 站酷，@fontsource/zcool-qingke-huangyou |
+| ZCOOL KuaiLe（站酷快乐体） | 站酷，@fontsource/zcool-kuaile |
+| Ma Shan Zheng（马善政毛笔楷书） | Ma Shan Zheng Project Authors，@fontsource/ma-shan-zheng |

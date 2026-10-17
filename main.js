@@ -25,6 +25,9 @@ const seriesInfo = require('./src/native/series-info');
 const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
 const seriesGaps = require('./src/native/series-gaps');
+const publishMaterials = require('./src/native/publish-materials');
+const posterTitle = require('./src/native/poster-title');
+const posterStyles = require('./src/native/poster-styles');
 const whisper = require('./src/native/whisper');
 const fasterWhisper = require('./src/native/faster-whisper');
 const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
@@ -168,8 +171,11 @@ function getDefaultSettings() {
     // ===== AI 素材处理（可填写 OpenAI 兼容中转） =====
     ai_base_url: 'https://api.openai.com/v1',
     ai_api_key: '',
-    ai_image_model: 'gpt-image-2.5',
-    ai_text_model: 'gpt-5.6',
+    // 作图可以单独走另一个中转地址 / Key；留空就和文本共用上面的。
+    ai_image_base_url: '',
+    ai_image_api_key: '',
+    ai_image_model: openai.DEFAULT_IMAGE_MODEL,
+    ai_text_model: openai.DEFAULT_TEXT_MODEL,
     // 本地 whisper.cpp 是默认转写引擎。OpenAI 只有在用户明确选择
     // openai 或 whisper.cpp+openai-fallback 时才会调用。
     ai_transcription_engine: 'whisper.cpp',
@@ -315,6 +321,8 @@ function getCurrentSettings() {
   const mc = parseInt(merged.max_concurrent, 10);
   MAX_CONCURRENT_DOWNLOADS = Number.isInteger(mc) && mc >= 1 && mc <= 10 ? mc : 3;
   const jobs = merged.quchong_jobs;
+  // 旧版本把文本模型默认存成了 gpt-5.6；没有改过的统一升到现在的默认值。
+  if (merged.ai_text_model === 'gpt-5.6') merged.ai_text_model = openai.DEFAULT_TEXT_MODEL;
   return {
     ...merged,
     max_concurrent: MAX_CONCURRENT_DOWNLOADS,
@@ -3256,6 +3264,177 @@ ipcMain.handle('library-job-dismiss', (_event, id) => {
   return { success: true };
 });
 
+// ===== AI 发布素材：改写简介 / 改写剧名 / 重新生成海报 =====
+// 结果直接放在剧文件夹里（发布剧名.txt / 发布简介.txt / 发布海报.jpg），无字底图和状态放在应用私有目录。
+const publishJobs = new Map();
+
+function publishWorkDir(dir) {
+  const id = createHash('sha256')
+    .update(path.resolve(String(dir)))
+    .digest('hex')
+    .slice(0, 12);
+  return path.join(app.getPath('userData'), 'publish-data', id);
+}
+
+function publishContext(dir) {
+  const detail = libraryEpisodeDetail(dir);
+  if (!detail.success) throw new Error(detail.error || '这不是剧文件夹');
+  const entry = detail.seriesId ? seriesRegistry.find((item) => String(item.series_id) === detail.seriesId) : null;
+  return {
+    dir: detail.dir,
+    title: String(entry?.series_title || detail.name),
+    synopsis: detail.synopsis || '',
+    source: detail.seriesId ? seriesInfo.sourceLabel(detail.seriesId) : '',
+    coverPath: seriesInfo.findCover(detail.dir),
+    workDir: publishWorkDir(detail.dir),
+  };
+}
+
+async function withTitleRenderer(run) {
+  const renderer = posterTitle.createTitleRenderer({
+    fontsDir: posterTitle.titleFontsDir({ resourcesPath: process.resourcesPath, projectRoot: __dirname }),
+    driver: posterTitle.electronDriver(BrowserWindow),
+  });
+  try {
+    return await run(renderer);
+  } finally {
+    await renderer.close().catch(() => {});
+  }
+}
+
+function publishResultView(context) {
+  const result = publishMaterials.readResult({ outputDir: context.dir, workDir: context.workDir });
+  if (!result) return null;
+  let posterUrl = '';
+  if (result.hasPoster) {
+    try {
+      posterUrl = `${localAssetUrl(result.paths.poster)}?v=${Math.round(fs.statSync(result.paths.poster).mtimeMs)}`;
+    } catch (_) {}
+  }
+  const { paths, ...rest } = result;
+  return { ...rest, posterUrl, folder: context.dir };
+}
+
+function publishSnapshot(dir) {
+  const job = publishJobs.get(dir);
+  if (!job) return null;
+  return { dir, status: job.status, stage: job.stage, message: job.message, error: job.error || '' };
+}
+
+function publishNotify(dir) {
+  sendToRenderer('publish-update', publishSnapshot(dir));
+}
+
+/** 用表单里当前填的值试一次文本接口（没保存也能测），错误里不会带出 Key。 */
+ipcMain.handle('test-ai-text', async (_event, draft = {}) => {
+  const settings = { ...getCurrentSettings(), ...draft };
+  const started = Date.now();
+  try {
+    const config = openai.requireApiConfig(settings);
+    await openai.chat([{ role: 'user', content: '只回复 OK' }], { timeout: 30000 }, settings);
+    return { success: true, model: config.textModel, elapsed: Date.now() - started };
+  } catch (error) {
+    return {
+      success: false,
+      error: openai.redactError(error, settings.ai_api_key),
+    };
+  }
+});
+
+ipcMain.handle('publish-state', (_event, dir) => {
+  try {
+    const context = publishContext(dir);
+    return {
+      success: true,
+      job: publishSnapshot(context.dir),
+      result: publishResultView(context),
+      hasCover: !!context.coverPath,
+      styles: posterStyles.STYLES.map((style) => ({ id: style.id, name: style.name })),
+    };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('publish-generate', (_event, payload = {}) => {
+  try {
+    const context = publishContext(payload.dir);
+    if (publishJobs.get(context.dir)?.status === 'running') return { success: false, error: '这部剧正在生成中' };
+    const controller = new AbortController();
+    const job = { status: 'running', stage: 'copy', message: '准备中', controller };
+    publishJobs.set(context.dir, job);
+    publishNotify(context.dir);
+    const settings = getCurrentSettings();
+    (async () => {
+      try {
+        await withTitleRenderer((renderer) =>
+          publishMaterials.generate({
+            title: context.title,
+            synopsis: context.synopsis,
+            source: context.source,
+            coverPath: context.coverPath,
+            outputDir: context.dir,
+            workDir: context.workDir,
+            config: settings,
+            openai,
+            renderer,
+            signal: controller.signal,
+            keepCopy: payload.keepCopy === true,
+            onProgress: ({ stage, message }) => {
+              job.stage = stage;
+              job.message = message;
+              publishNotify(context.dir);
+            },
+          }),
+        );
+        job.status = 'done';
+        job.message = '已完成';
+      } catch (error) {
+        job.status = controller.signal.aborted ? 'cancelled' : 'failed';
+        job.error = controller.signal.aborted ? '' : aiRedact(error);
+        job.message = controller.signal.aborted ? '已取消' : '生成失败';
+      } finally {
+        publishNotify(context.dir);
+      }
+    })();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: aiRedact(error) };
+  }
+});
+
+ipcMain.handle('publish-cancel', (_event, dir) => {
+  try {
+    const job = publishJobs.get(publishContext(dir).dir);
+    if (job?.status === 'running') job.controller.abort();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 换标题 / 样式 / 版式 / 角标：只重新排版，不再调用模型，几乎是即时的。 */
+ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
+  try {
+    const context = publishContext(payload.dir);
+    if (publishJobs.get(context.dir)?.status === 'running') return { success: false, error: '这部剧正在生成中' };
+    await withTitleRenderer((renderer) =>
+      publishMaterials.retitle({
+        outputDir: context.dir,
+        workDir: context.workDir,
+        renderer,
+        title: payload.title,
+        styleId: payload.styleId,
+        tagline: payload.tagline,
+        layout: payload.layout,
+      }),
+    );
+    return { success: true, result: publishResultView(context) };
+  } catch (error) {
+    return { success: false, error: aiRedact(error) };
+  }
+});
+
 /**
  * 选中的集交给去重队列处理，成品放在 剧文件夹/去重/ 里。
  * 重新拆分会先看选中的集之间有没有缺集：平台没有的直接拼；没下载的要用户决定
@@ -5270,7 +5449,9 @@ function aiConcurrency() {
 }
 
 function aiRedact(error) {
-  return openai.redactError(error, getCurrentSettings().ai_api_key);
+  const settings = getCurrentSettings();
+  // 文本和作图可能是两把不同的 Key，错误信息里两把都要抹掉。
+  return openai.redactError(openai.redactError(error, settings.ai_api_key), settings.ai_image_api_key);
 }
 
 function aiInputFingerprint(filePath) {

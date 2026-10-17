@@ -85,12 +85,21 @@ function normalizeBaseUrl(value) {
   return parsed.toString().replace(/\/+$/, '');
 }
 
+const DEFAULT_TEXT_MODEL = 'gpt-6.1-sol';
+const DEFAULT_IMAGE_MODEL = 'gpt-image-2.5';
+
 function normalizeConfig(config = {}) {
+  const baseUrl = normalizeBaseUrl(config.baseUrl || config.ai_base_url);
+  const apiKey = String(config.apiKey || config.ai_api_key || '').trim();
+  const imageBase = String(config.imageBaseUrl || config.ai_image_base_url || '').trim();
   return {
-    baseUrl: normalizeBaseUrl(config.baseUrl || config.ai_base_url),
-    apiKey: String(config.apiKey || config.ai_api_key || '').trim(),
-    imageModel: String(config.imageModel || config.ai_image_model || 'gpt-image-2.5').trim(),
-    textModel: String(config.textModel || config.ai_text_model || 'gpt-5.6').trim(),
+    baseUrl,
+    apiKey,
+    // 作图可以单独走另一个中转地址 / Key；留空就和文本共用。
+    imageBaseUrl: imageBase ? normalizeBaseUrl(imageBase) : baseUrl,
+    imageApiKey: String(config.imageApiKey || config.ai_image_api_key || '').trim() || apiKey,
+    imageModel: String(config.imageModel || config.ai_image_model || DEFAULT_IMAGE_MODEL).trim(),
+    textModel: String(config.textModel || config.ai_text_model || DEFAULT_TEXT_MODEL).trim(),
     transcriptionModel: String(
       config.transcriptionModel || config.ai_transcription_model || 'gpt-4o-mini-transcribe',
     ).trim(),
@@ -99,8 +108,13 @@ function normalizeConfig(config = {}) {
   };
 }
 
-function requireApiConfig(config) {
+function requireApiConfig(config, kind = 'text') {
   const normalized = normalizeConfig(config);
+  if (kind === 'image') {
+    if (!normalized.imageApiKey) throw new Error('请先在设置中填写作图 API Key（或文本 API Key）');
+    if (!normalized.imageModel) throw new Error('请先在设置中填写图片模型');
+    return normalized;
+  }
   if (!normalized.apiKey) throw new Error('请先在设置中填写 AI API Key');
   if (!normalized.imageModel) throw new Error('请先在设置中填写图片模型');
   if (!normalized.textModel) throw new Error('请先在设置中填写文案模型');
@@ -133,9 +147,11 @@ function errorMessage(payload, fallback) {
 }
 
 async function request(baseConfig, suffix, options = {}) {
-  const config = requireApiConfig(baseConfig);
-  const headers = { ...(options.headers || {}), Authorization: `Bearer ${config.apiKey}` };
-  const response = await fetch(endpoint(config.baseUrl, suffix), {
+  const config = requireApiConfig(baseConfig, options.kind);
+  const image = options.kind === 'image';
+  const apiKey = image ? config.imageApiKey : config.apiKey;
+  const headers = { ...(options.headers || {}), Authorization: `Bearer ${apiKey}` };
+  const response = await fetch(endpoint(image ? config.imageBaseUrl : config.baseUrl, suffix), {
     method: options.method || 'POST',
     headers,
     body: options.body,
@@ -143,7 +159,7 @@ async function request(baseConfig, suffix, options = {}) {
   });
   const payload = await readResponse(response, response.ok ? options.maxBytes || MAX_TEXT : 32 * 1024);
   if (!response.ok) {
-    const detail = redactError(errorMessage(payload, response.statusText || '未知错误'), config.apiKey);
+    const detail = redactError(errorMessage(payload, response.statusText || '未知错误'), apiKey);
     throw new Error(`AI 接口请求失败（HTTP ${response.status}）：${detail}`);
   }
   return { payload, response };
@@ -155,11 +171,23 @@ function dataUrlBuffer(value) {
   return { buffer: Buffer.from(match[2], 'base64'), contentType: match[1] || 'image/png' };
 }
 
+/** 按文件头判断图片类型：中转站和官方接口都会校验上传文件的 MIME，不能把 JPEG 标成 PNG。 */
+function sniffImage(buffer) {
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return { type: 'image/jpeg', ext: '.jpg' };
+  if (buffer.subarray(1, 4).toString('latin1') === 'PNG') return { type: 'image/png', ext: '.png' };
+  if (buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP')
+    return { type: 'image/webp', ext: '.webp' };
+  return { type: 'image/png', ext: '.png' };
+}
+
 async function readImage(image, signal) {
   if (image?.byteLength > MAX_IMAGE || (typeof image === 'string' && image.length > MAX_IMAGE * 1.4))
     throw new Error('封面图片过大');
-  if (Buffer.isBuffer(image)) return { buffer: image, contentType: 'image/png', name: 'cover.png' };
-  if (image instanceof Uint8Array) return { buffer: Buffer.from(image), contentType: 'image/png', name: 'cover.png' };
+  if (Buffer.isBuffer(image) || image instanceof Uint8Array) {
+    const buffer = Buffer.from(image);
+    const kind = sniffImage(buffer);
+    return { buffer, contentType: kind.type, name: `cover${kind.ext}` };
+  }
   const value = String(image || '').trim();
   if (!value) throw new Error('缺少原封面图片');
   const data = dataUrlBuffer(value);
@@ -174,7 +202,9 @@ async function readImage(image, signal) {
     };
   }
   const buffer = await boundedFile(value, MAX_IMAGE);
-  return { buffer, contentType: 'image/png', name: path.basename(value) || 'cover.png' };
+  const kind = sniffImage(buffer);
+  const base = path.basename(value, path.extname(value)) || 'cover';
+  return { buffer, contentType: kind.type, name: `${base}${kind.ext}` };
 }
 
 function parseImageData(payload) {
@@ -200,10 +230,11 @@ async function fetchImageResult(result, signal) {
 }
 
 async function generateImage(options = {}, baseConfig = {}) {
-  const config = requireApiConfig(baseConfig);
+  const config = requireApiConfig(baseConfig, 'image');
   const prompt = String(options.prompt || '').trim();
   if (!prompt) throw new Error('缺少图片生成提示词');
   const { payload } = await request(config, '/images/generations', {
+    kind: 'image',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: options.model || config.imageModel,
@@ -220,7 +251,7 @@ async function generateImage(options = {}, baseConfig = {}) {
 }
 
 async function editImage(options = {}, baseConfig = {}) {
-  const config = requireApiConfig(baseConfig);
+  const config = requireApiConfig(baseConfig, 'image');
   const prompt = String(options.prompt || '').trim();
   if (!prompt) throw new Error('缺少封面重绘提示词');
   const source = await readImage(options.image || options.imagePath || options.imageUrl, options.signal);
@@ -232,6 +263,7 @@ async function editImage(options = {}, baseConfig = {}) {
   form.append('n', '1');
   form.append('image', new Blob([source.buffer], { type: source.contentType }), source.name);
   const { payload } = await request(config, '/images/edits', {
+    kind: 'image',
     body: form,
     signal: options.signal,
     timeout: 600000,
@@ -272,6 +304,59 @@ function parseJsonContent(content) {
     } catch (_) {}
   }
   return { summary: cleaned };
+}
+
+function messageText(payload) {
+  const value = payload?.choices?.[0]?.message?.content;
+  const text = Array.isArray(value)
+    ? value.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
+    : value;
+  return String(text || '').trim();
+}
+
+/**
+ * 通用对话请求（OpenAI 兼容 /chat/completions）。默认不带 temperature / response_format：
+ * 不同模型和中转站对这两个参数的支持不一，JSON 靠提示词约束再宽松解析。
+ * 返回纯文本；messages 的 content 可以是数组，用来带图片（视觉检查）。
+ */
+async function chat(messages, options = {}, baseConfig = {}) {
+  const config = requireApiConfig(baseConfig);
+  const body = { model: options.model || config.textModel, messages };
+  if (Number.isFinite(options.temperature)) body.temperature = options.temperature;
+  const { payload } = await request(config, '/chat/completions', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: options.signal,
+    timeout: options.timeout || 180000,
+  });
+  const text = messageText(payload);
+  if (!text) throw new Error('文本接口没有返回内容');
+  return text;
+}
+
+function parseJsonStrict(content) {
+  const cleaned = String(content || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  const attempts = [cleaned];
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) attempts.push(cleaned.slice(start, end + 1));
+  for (const text of attempts) {
+    try {
+      const value = JSON.parse(text);
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function chatJson(messages, options = {}, baseConfig = {}) {
+  const parsed = parseJsonStrict(await chat(messages, options, baseConfig));
+  if (!parsed) throw new Error('文本接口返回的不是有效 JSON');
+  return parsed;
 }
 
 async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
@@ -410,4 +495,10 @@ module.exports = {
   summarizeEpisode,
   analyzeEpisode,
   normalizeEpisodeAnalysis,
+  chat,
+  chatJson,
+  parseJsonContent,
+  parseJsonStrict,
+  DEFAULT_TEXT_MODEL,
+  DEFAULT_IMAGE_MODEL,
 };
