@@ -79,7 +79,6 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
   );
   const [showAllIssues, setShowAllIssues] = useState(false);
   const [actionError, setActionError] = useState('');
-  const [synopsisOpen, setSynopsisOpen] = useState(false);
   const [publish, setPublish] = useState(null); // AI 发布素材的最新结果（新海报、新剧名）
   const requestId = useRef(0);
   const paramsRef = useRef(null);
@@ -312,14 +311,7 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
               {folder.path}
             </span>
           </div>
-          {detail?.synopsis && (
-            <p className={`lib-synopsis ${synopsisOpen ? 'is-open' : ''}`}>
-              {detail.synopsis}
-              <button className="lib-link" onClick={() => setSynopsisOpen((value) => !value)}>
-                {synopsisOpen ? '收起' : '展开'}
-              </button>
-            </p>
-          )}
+          {detail?.synopsis && <p className="lib-synopsis">{detail.synopsis}</p>}
         </div>
         <div className="lib-heads">
           <figure className="lib-head-pic">
