@@ -318,9 +318,6 @@
   margin: 10px 0 0 26px;
 }
 .proc-item.is-reserved {
-  display: flex;
-  align-items: center;
-  gap: 28px;
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -329,9 +326,6 @@
 }
 .proc-item.is-reserved .proc-check b {
   font-weight: 500;
-}
-.proc-item.is-reserved .proc-summary {
-  flex: none;
 }
 .proc-foot {
   display: flex;

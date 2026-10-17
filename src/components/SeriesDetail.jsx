@@ -604,17 +604,17 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               )}
             </div>
 
-            <div className="proc-item is-reserved" title="功能预留，暂未开放">
-              <label className="proc-check">
-                <input type="checkbox" disabled />
-                <b>AI 分镜工程图</b>
-              </label>
-              <label className="proc-check">
-                <input type="checkbox" disabled />
-                <b>成本配置报告</b>
-              </label>
-              <span className="proc-summary">预留</span>
-            </div>
+            {['AI 分镜工程图', '成本配置报告'].map((label) => (
+              <div key={label} className="proc-item is-reserved" title="功能预留，暂未开放">
+                <div className="proc-line">
+                  <label className="proc-check">
+                    <input type="checkbox" disabled />
+                    <b>{label}</b>
+                  </label>
+                  <span className="proc-summary">预留，暂未开放</span>
+                </div>
+              </div>
+            ))}
 
             <div className="proc-foot">
               <div className="proc-foot-info">
