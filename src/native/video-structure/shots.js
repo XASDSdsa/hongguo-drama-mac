@@ -3,7 +3,10 @@ const path = require('node:path');
 const fs = require('node:fs').promises;
 const { run, json, atomicJson } = require('./io');
 const { envelope, requireThat, validateIntervals } = require('./contracts');
-const ALGORITHM = 'transnetv2-temporal-min2s-v1';
+const ALGORITHM = 'transnetv2-temporal-min2s-v2';
+// Every frame in `cuts` is the FIRST frame of the next shot. TransNet V2 itself flags the last frame of the
+// outgoing shot, so the worker already moved each cut one frame forward (see runner.py verify_shots).
+const BOUNDARY_CONVENTION = 'first_frame_of_next_shot';
 function reviewItems(verification, transitions) {
   const items = [];
   const seen = new Set();
@@ -38,11 +41,11 @@ function buildShots(media, predictions, taskId, verification) {
   const { single, all } = predictions;
   requireThat(single?.length === media.frame_count && all?.length === media.frame_count, '检测帧数与视频时间轴不一致');
   requireThat([...single, ...all].every(v => Number.isFinite(v) && v >= 0 && v <= 1), 'TransNet V2 分数无效');
-  requireThat(verification?.algorithm_id === ALGORITHM && verification.frame_count === media.frame_count && verification.minimum_duration === 2, '缺少已确认的分镜复核结果');
+  requireThat(verification?.algorithm_id === ALGORITHM && verification.frame_count === media.frame_count && verification.minimum_duration === 2 && verification.boundary_convention === BOUNDARY_CONVENTION, '缺少已确认的分镜复核结果');
   const { cuts: boundaries, threshold, decisions } = verification;
   requireThat(Number.isFinite(threshold) && threshold === 0.5 && Array.isArray(boundaries) && Array.isArray(decisions), '分镜复核数据无效');
   requireThat(boundaries.every((f, i) => Number.isInteger(f) && f > 0 && f < media.frame_count && (!i || f > boundaries[i - 1]) && decisions.some(d => d.frame === f && ['kept', 'warn'].includes(d.status))), '复核边界无效或未经验证');
-  const transitions = boundaries.map(f => ({ boundary_frame: f, time: media.frames[f].start, score: single[f], kind: 'verified_cut', verification: decisions.find(d => d.frame === f) }));
+  const transitions = boundaries.map(f => ({ boundary_frame: f, time: media.frames[f].start, score: single[f - 1], kind: 'verified_cut', verification: decisions.find(d => d.frame === f) }));
   const cuts = [0, ...boundaries, media.frame_count];
   const shots = cuts.slice(0, -1).map((start, i) => {
     const end = cuts[i + 1];

@@ -26,7 +26,7 @@ def main():
     env.pop('PYTHONHOME',None);env.pop('PYTHONPATH',None)
     minimum_macos = runpy.run_path(str(ROOT/'scripts/build-faster-whisper.py'))['check_macos_compatibility'](out) if sys.platform == 'darwin' else None
     versions=json.loads(subprocess.check_output([str(executable),'status'],env=env))
-    algorithm_id='transnetv2-temporal-min2s-v1'
+    algorithm_id='transnetv2-temporal-min2s-v2'
     if versions.get('opencv')!='4.11.0' or versions.get('shot_algorithm')!=algorithm_id:raise RuntimeError('Frozen shot verifier version mismatch')
     models=out/'models';sample=models/'sherpa-onnx-paraformer-zh-small-2024-03-09/test_wavs/0.wav';test=cache/'frozen-transcript.json'
     subprocess.run([str(executable),'transcript','--input',str(sample),'--output',str(test),'--model',str(models/'sherpa-onnx-paraformer-zh-small-2024-03-09/model.int8.onnx'),'--tokens',str(models/'sherpa-onnx-paraformer-zh-small-2024-03-09/tokens.txt'),'--vad',str(models/'silero_vad.onnx')],env=env,check=True)

@@ -35,12 +35,15 @@ const UPSTREAM_IMPLEMENTATION_TRANSITIONS = {
     previous: ['c299cb54e833473622be91598c1199ce1a6a537c3eec4d3631b6bbb7b45a0542', 'ad34a66d6a01dd26aec0887016342d61c70eccc33e4717dc1d5fc708e473878c'],
   },
   'runtime.js': {
-    current: 'c98d19953084796b65eb00bd853d41ad113ba9a30b46bcb7b69810695999d14e',
-    previous: ['15ba327977a3fbfb52544f25319384c3972be354ca1c1d1fc2aad489b466810d', '07e176ea15568db22803f7738a955ab2bf0aa23a08bce0e1b9b33f20cdd4e106', '74e2041213866bc07f3ccc86119902749805d8c47ea4bb4f1b3bb136451add5b', 'f3b81266da74af2c02214a13c2c6047719bd7a1e25d977c31a563a40bf431ed2'],
+    // Only the shot algorithm id changed (cut = first frame of the next shot). The shots stage re-runs
+    // because its params changed; media, audio and separation outputs are unaffected.
+    current: '40de6d43e7929b6322edeca7f1186936ab850f61d56dda017329440932acd400',
+    previous: ['c98d19953084796b65eb00bd853d41ad113ba9a30b46bcb7b69810695999d14e', '15ba327977a3fbfb52544f25319384c3972be354ca1c1d1fc2aad489b466810d', '07e176ea15568db22803f7738a955ab2bf0aa23a08bce0e1b9b33f20cdd4e106', '74e2041213866bc07f3ccc86119902749805d8c47ea4bb4f1b3bb136451add5b', 'f3b81266da74af2c02214a13c2c6047719bd7a1e25d977c31a563a40bf431ed2'],
   },
   'speech.js': {
-    current: 'a83a1e3e081f06ccf79f19847ebfa2743c730a618c9b1ce442b7ea5e83e5ddc8',
-    previous: ['dcad3d15dd5970df9d7e4c2ad2ddf6c54b5dd1887a192fab25267cdbfc541bae', '9cdceb7d59b36f297a1e5ba21340c64b8f2b429c5a3d772b6e93ebb273089f0a', '47ff03c880ce466ed6e4a37f32d591e9717685bb1a68ec9bd66ea545a1b53e2b', '1dd39b16f777c24e6ea9256ff1d17cbb9a0dd89bba670f836763b62d9c5df57f', '9ad6c6835ce37ae569472d33b46049de70da507b24a6ac472059cc53b766d5bd', '35d4033831e20ccc16678ea8a68670b5011c6af5632b9d5bb615a2571320d076'],
+    // The voice-mask frame size change only affects the transcript timeline; separation output is unchanged.
+    current: '9f842f4384822ddd362bf6912baf91c5648b293ebde3876ddeedb0c6572f50f6',
+    previous: ['a83a1e3e081f06ccf79f19847ebfa2743c730a618c9b1ce442b7ea5e83e5ddc8', 'dcad3d15dd5970df9d7e4c2ad2ddf6c54b5dd1887a192fab25267cdbfc541bae', '9cdceb7d59b36f297a1e5ba21340c64b8f2b429c5a3d772b6e93ebb273089f0a', '47ff03c880ce466ed6e4a37f32d591e9717685bb1a68ec9bd66ea545a1b53e2b', '1dd39b16f777c24e6ea9256ff1d17cbb9a0dd89bba670f836763b62d9c5df57f', '9ad6c6835ce37ae569472d33b46049de70da507b24a6ac472059cc53b766d5bd', '35d4033831e20ccc16678ea8a68670b5011c6af5632b9d5bb615a2571320d076'],
     modules: ['separation'],
   },
   'alignment.js': {

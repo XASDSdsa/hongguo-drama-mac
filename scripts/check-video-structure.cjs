@@ -17,7 +17,7 @@ async function main(){
  const migrationCurrent={implementation:currentImplementation,identity};
  assert(canMigrateLegacyInput('media',previousStage,migrationCurrent));
  assert.equal(canMigrateLegacyInput('transcript',previousStage,migrationCurrent),false);
- const runtimeCurrent='c98d19953084796b65eb00bd853d41ad113ba9a30b46bcb7b69810695999d14e';
+ const runtimeCurrent='40de6d43e7929b6322edeca7f1186936ab850f61d56dda017329440932acd400';
  const sentenceRuntimePrevious='f3b81266da74af2c02214a13c2c6047719bd7a1e25d977c31a563a40bf431ed2';
  assert.equal(await sha256(path.resolve(__dirname,'../src/native/video-structure/runtime.js')),runtimeCurrent);
  for(const id of ['media','audio','shots','separation']){
@@ -57,7 +57,7 @@ async function main(){
  const workerPrevious='bc484eb50b225b9b578312c607238a8038e5cfd7cabad9d346481266cdb659c4';
  const runtimeManifestCurrent='2a27406c7013ef528990e34ed015176c2938870abcc9eef1a2797b07397431e4';
  const runtimeManifestPrevious='386405ae3c52bc1142870ac62d5706180c870287fbb997d231634b3828bca91b';
- const speechCurrent='a83a1e3e081f06ccf79f19847ebfa2743c730a618c9b1ce442b7ea5e83e5ddc8';
+ const speechCurrent='9f842f4384822ddd362bf6912baf91c5648b293ebde3876ddeedb0c6572f50f6';
  const speechPrevious='47ff03c880ce466ed6e4a37f32d591e9717685bb1a68ec9bd66ea545a1b53e2b';
  const separationImplementation={...currentImplementation,'runtime.js':runtimeCurrent,'speech.js':speechCurrent};
  const oldSeparationImplementation={...separationImplementation,'runtime.js':runtimePrevious,'speech.js':speechPrevious};
@@ -89,7 +89,7 @@ async function main(){
  const m=timeline([{pts:5,duration:.04},{pts:5.04,duration:.08},{pts:5.12,duration:.04}],{format:{start_time:'5',duration:'.2'},streams:[{index:0,codec_type:'video',time_base:'1/1000000'},{index:1,codec_type:'audio',start_time:'5.02',duration:'.18'}]});
  assert.equal(m.frame_rate_type,'vfr');assert.equal(m.origin_pts,5);assert(Math.abs(m.duration-.2)<1e-9);assert(Math.abs(m.video_end-.16)<1e-9);
  assert.throws(()=>timeline([{pts:0,duration:.04},{pts:0,duration:.04}],{streams:[{codec_type:'video'}]}),/重复/);
- const verified=(media,cuts)=>({algorithm_id:ALGORITHM,threshold:.5,minimum_duration:2,frame_count:media.frame_count,cuts,decisions:cuts.map(frame=>({frame,status:'kept'}))});
+ const verified=(media,cuts)=>({algorithm_id:ALGORITHM,threshold:.5,minimum_duration:2,boundary_convention:'first_frame_of_next_shot',frame_count:media.frame_count,cuts,decisions:cuts.map(frame=>({frame,status:'kept'}))});
  const scores3={single:[0,.8,0],all:[0,.9,0]};
  assert.throws(()=>buildShots(m,scores3,'task'),/复核/);
  assert.throws(()=>buildShots(m,scores3,'task',verified(m,[1])),/最短2秒/);

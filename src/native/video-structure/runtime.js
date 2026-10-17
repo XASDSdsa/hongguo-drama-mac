@@ -21,7 +21,7 @@ function params(id, settings, rt) {
   const threads = Number(settings.structure_threads ?? Math.max(1, Math.min(4, os.availableParallelism?.() || os.cpus().length)));
   if (!Number.isInteger(threads) || threads < 1 || threads > 32) throw new Error('处理线程数必须为 1–32 的整数');
   const common = { threads };
-  if (id === 'shots') return { ...common, algorithm_id: 'transnetv2-temporal-min2s-v1', minimum_duration: 2, threshold: 0.5, device: settings.structure_device || 'cpu', model: path.join(rt.models, 'transnetv2.pth'), model_id: 'TransNetV2@85cef72' };
+  if (id === 'shots') return { ...common, algorithm_id: 'transnetv2-temporal-min2s-v2', minimum_duration: 2, threshold: 0.5, device: settings.structure_device || 'cpu', model: path.join(rt.models, 'transnetv2.pth'), model_id: 'TransNetV2@85cef72' };
   if (id === 'clips') return { ...common, audio_mode: settings.structure_clip_audio || 'original' };
   if (id === 'separation') return { ...common, binary: rt.binary, provider: settings.structure_sherpa_provider || 'cpu', model: path.join(rt.models, 'UVR-MDX-NET-Inst_HQ_3.onnx'), model_id: 'sherpa-onnx/UVR-MDX-NET-Inst_HQ_3' };
   if (id === 'transcript') return { ...common, provider: settings.structure_sherpa_provider || 'cpu', model: path.join(rt.models, 'sherpa-onnx-paraformer-zh-small-2024-03-09/model.int8.onnx'), tokens: path.join(rt.models, 'sherpa-onnx-paraformer-zh-small-2024-03-09/tokens.txt'), vad: path.join(rt.models, 'silero_vad.onnx'), punctuation: settings.structure_punctuation_model || path.join(rt.models, 'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx'), vad_threshold: 0.5, min_silence: 0.5, min_speech: 0.25, model_id: 'sherpa-onnx/paraformer-zh-small-2024-03-09', sentence_alignment: SENTENCE_ALIGNMENT, sentence_command: rt.sentence?.command || null, sentence_prefix: rt.sentence?.prefixArgs || [], sentence_model: rt.sentence?.modelPath || null, sentence_device: 'cpu', sentence_compute_type: 'int8' };
@@ -59,7 +59,7 @@ async function availability(settings) {
   }
   let versions = null;
   if (rt.command) { try { versions = JSON.parse((await run(rt.command, [...rt.prefix, 'status'])).stdout); } catch (e) { modules.shots = modules.transcript = { ready: false, error: e.message }; } }
-  if (modules.shots.ready && versions?.shot_algorithm !== 'transnetv2-temporal-min2s-v1') modules.shots = { ready: false, error: '内置分镜运行时需要更新，缺少已确认的时间连续性复核算法' };
+  if (modules.shots.ready && versions?.shot_algorithm !== 'transnetv2-temporal-min2s-v2') modules.shots = { ready: false, error: '内置分镜运行时需要更新，缺少已确认的时间连续性复核算法' };
   if (modules.transcript.ready && versions?.sentence_boundary !== 'ct_transformer_global') modules.transcript = { ready: false, error: '内置句级识别引擎需要更新，请使用完整安装包' };
   const device = settings.structure_device || 'cpu';
   if (modules.shots.ready && device !== 'cpu' && !versions?.[device]) modules.shots = { ready: false, error: `所选 ${device} 在当前运行时不可用，不会自动切换` };

@@ -64,17 +64,25 @@ def verify_shots(args):
     frames = np.memmap(args.input, dtype=np.uint8, mode='r', shape=(count, 90, 160, 3))
     origin = float(pts[0])
     relative_pts = pts - origin
-    candidates = candidate_frames(scores, args.threshold)
+    # TransNet V2 flags the LAST frame of the outgoing shot (its one-hot training label sits on the
+    # frame before the cut), so the next shot starts one frame later. The frozen v1 verification keeps
+    # working on the model frame; every frame reported below is the first frame of the next shot.
+    model_frames = [frame for frame in candidate_frames(scores, args.threshold) if frame + 1 < count]
     progress(10, '复核亮度变化、特效闪光和真实画面变化')
-    verified, decisions = verify(frames, relative_pts, candidates, end - origin)
-    cuts, warning = minimum_duration(verified, pts, end, scores, 2)
+    verified_model, decisions = verify(frames, relative_pts, model_frames, end - origin)
+    boundaries = [frame + 1 for frame in verified_model]
+    boundary_scores = np.concatenate(([0.0], scores[:-1]))  # boundary b carries the score of model frame b - 1
+    cuts, warning = minimum_duration(boundaries, pts, end, boundary_scores, 2)
     for decision in decisions:
+        decision['model_frame'] = decision['frame']
+        decision['frame'] += 1
         decision['time'] = float(pts[decision['frame']])
     progress(100, f'复核完成：{len(cuts) + 1} 个分镜，短片段合并且保留全部帧')
-    return dict(algorithm_id='transnetv2-temporal-min2s-v1', threshold=args.threshold,
-                minimum_duration=2, frame_count=count, candidate_frames=candidates,
-                verified_candidate_frames=verified, decisions=decisions, cuts=cuts,
-                duration_merged_frames=[c for c in verified if c not in cuts],
+    return dict(algorithm_id='transnetv2-temporal-min2s-v2', threshold=args.threshold,
+                boundary_convention='first_frame_of_next_shot',
+                minimum_duration=2, frame_count=count, candidate_frames=[frame + 1 for frame in model_frames],
+                verified_candidate_frames=boundaries, decisions=decisions, cuts=cuts,
+                duration_merged_frames=[b for b in boundaries if b not in cuts],
                 warnings=[warning] if warning else [])
 
 
@@ -221,7 +229,7 @@ def main():
         import torch
         import sherpa_onnx
         import cv2
-        print(json.dumps(dict(torch=torch.__version__, sherpa_onnx=sherpa_onnx.__version__, cuda=torch.cuda.is_available(), mps=torch.backends.mps.is_available(), sherpa_providers=['cpu'], opencv=cv2.__version__, shot_algorithm='transnetv2-temporal-min2s-v1', sentence_boundary='ct_transformer_global')))
+        print(json.dumps(dict(torch=torch.__version__, sherpa_onnx=sherpa_onnx.__version__, cuda=torch.cuda.is_available(), mps=torch.backends.mps.is_available(), sherpa_providers=['cpu'], opencv=cv2.__version__, shot_algorithm='transnetv2-temporal-min2s-v2', sentence_boundary='ct_transformer_global')))
         return
     result = {'shots': detect, 'verify-shots': verify_shots, 'transcript': transcribe}[args.module](args)
     temporary = args.output + '.tmp'
