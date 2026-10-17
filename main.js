@@ -948,8 +948,7 @@ function saveSeriesTranscriptionState(seriesId, nextState) {
 function getSeriesDedupedEpisodes(seriesId) {
   const entry = seriesRegistry.find((item) => String(item.series_id) === String(seriesId));
   if (!entry) return [];
-  const tasks = downloadTasks.filter((task) => String(task.hongguoInfo?.series_id) === String(seriesId));
-  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title, tasks);
+  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title);
   return (entry.episodes || [])
     .map((episode) => {
       const episodeIndex = Number(episode.vid_index);
@@ -1020,8 +1019,7 @@ function saveSeriesAnalysisState(seriesId, nextState) {
 function getSeriesAnalysisEpisodes(seriesId) {
   const entry = seriesRegistry.find((item) => String(item.series_id) === String(seriesId));
   if (!entry) return [];
-  const tasks = downloadTasks.filter((task) => String(task.hongguoInfo?.series_id) === String(seriesId));
-  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title, tasks);
+  const seriesDir = resolveSeriesDir(String(seriesId), entry.series_title);
   const transcript = transcriptionState(entry);
   const deduped = new Map(getSeriesDedupedEpisodes(seriesId).map((item) => [item.episodeIndex, item]));
   return (entry.episodes || [])
@@ -1372,8 +1370,7 @@ async function runEpisodeWorkflow(seriesId, episodeIndex, options = {}) {
     if (!input) throw workflowError('当前集没有可用的工作流输入，请先确认视频文件状态', 'WORKFLOW_INPUT_REQUIRED');
     const inputPath = input.path;
     const episode = (entry.episodes || []).find((item) => Number(item.vid_index) === index);
-    const tasks = downloadTasks.filter((task) => String(task.hongguoInfo?.series_id) === sid);
-    const seriesDir = resolveSeriesDir(sid, entry.series_title, tasks) || path.dirname(inputPath);
+    const seriesDir = resolveSeriesDir(sid, entry.series_title) || path.dirname(inputPath);
     const structureRoot = path.join(seriesDir, '结构化拆解');
     updateWorkflowRecord(entry, index, {
       status: 'running',
@@ -3043,13 +3040,8 @@ function seriesRootFromVideoDir(dir) {
   return ['原视频', '去重视频'].includes(path.basename(dir)) ? path.dirname(dir) : dir;
 }
 
-/** 找到某剧在磁盘上的目录（优先用任务记录，其次按标题推导） */
-function resolveSeriesDir(seriesId, seriesTitle, covers) {
-  const fromFile = covers.find(
-    (t) =>
-      t.savePath && path.basename(path.dirname(t.savePath)) === '原视频' && fs.existsSync(path.dirname(t.savePath)),
-  );
-  if (fromFile) return path.dirname(path.dirname(fromFile.savePath));
+/** 某剧在磁盘上的目录：由下载根目录、来源和剧名推导，目录不存在则返回 null。 */
+function resolveSeriesDir(seriesId, seriesTitle) {
   const settings = getCurrentSettings();
   const root = settings.root && String(settings.root).trim() ? String(settings.root).trim() : app.getPath('downloads');
   const guess = seriesDownloadDir(root, seriesId, seriesTitle);
@@ -3115,7 +3107,7 @@ function uniqueEpisodeFilename(settings, title, episode) {
 function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
   const sid = String(seriesId);
   const tasks = downloadTasks.filter((t) => t.hongguoInfo && String(t.hongguoInfo.series_id) === sid && t.savePath);
-  const dir = resolveSeriesDir(sid, seriesTitle, tasks);
+  const dir = resolveSeriesDir(sid, seriesTitle);
 
   const byIndex = new Map();
   const exists = (p) => {
@@ -4717,11 +4709,10 @@ let aiMaterialQueue = null;
 // existed when it was submitted, even if the user edits Settings meanwhile.
 const aiRuntimeConfigs = new Map();
 
-function aiSeriesMaterialDir(seriesId, seriesTitle, tasks = []) {
-  const existing = resolveSeriesDir(String(seriesId), seriesTitle, tasks);
+function aiSeriesMaterialDir(seriesId, seriesTitle) {
   const settings = getCurrentSettings();
   const root = String(settings.root || '').trim() || app.getPath('downloads');
-  return path.join(existing || seriesDownloadDir(root, seriesId, seriesTitle), '发布素材');
+  return path.join(seriesDownloadDir(root, seriesId, seriesTitle), '发布素材');
 }
 
 function aiImageExtension(contentType) {
@@ -5088,8 +5079,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
           settings,
         );
     update({ stage: 'saving', progress: 90 });
-    const tasks = downloadTasks.filter((item) => String(item.hongguoInfo?.series_id) === String(task.seriesId));
-    const outputDir = path.join(aiSeriesMaterialDir(task.seriesId, entry.series_title, tasks), '封面');
+    const outputDir = path.join(aiSeriesMaterialDir(task.seriesId, entry.series_title), '封面');
     await fsp.mkdir(outputDir, { recursive: true });
     const outputPath = path.join(
       outputDir,
@@ -5108,14 +5098,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
     throw new Error('输入视频已移动、删除或发生变化，请重新加入任务');
   const latest = aiLatestEntry(task.seriesId);
   const episode = latest?.episodes?.find((item) => Number(item.vid_index) === Number(task.episodeIndex));
-  const materialDir = path.join(
-    aiSeriesMaterialDir(
-      task.seriesId,
-      latest.series_title,
-      downloadTasks.filter((item) => String(item.hongguoInfo?.series_id) === String(task.seriesId)),
-    ),
-    '文案',
-  );
+  const materialDir = path.join(aiSeriesMaterialDir(task.seriesId, latest.series_title), '文案');
   const productIndices =
     Array.isArray(task.productEpisodeIndices) && task.productEpisodeIndices.length
       ? task.productEpisodeIndices.map(Number).filter(Number.isSafeInteger)

@@ -228,7 +228,7 @@ async function check(name, run) {
     const seriesDir = path.join(h.dir, '红果短剧', 'Short');
     fs.mkdirSync(seriesDir, { recursive: true });
     file(path.join(seriesDir, 'Short 001.mp4'));
-    assert.equal(h.context.resolveSeriesDir('S', 'Short', []), null);
+    assert.equal(h.context.resolveSeriesDir('S', 'Short'), null);
     await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[1]] });
     await h.context.enqueueEpisodes({
       seriesId: 'S',
@@ -238,7 +238,7 @@ async function check(name, run) {
     const tasks = h.run('downloadTasks');
     const expected = h.context.seriesDownloadDir(h.dir, 'S', 'Short');
     for (const item of tasks) assert.equal(item.customDir, path.join(expected, '原视频'));
-    assert.equal(h.context.resolveSeriesDir('S', 'Short', tasks), expected);
+    assert.equal(h.context.resolveSeriesDir('S', 'Short'), expected);
   });
   await check('Windows stage paths retain their drive and series root', () => {
     const h = load({}, { path: path.win32 });
