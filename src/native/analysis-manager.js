@@ -113,7 +113,6 @@ function createAnalysisManager({ getSettings, getEpisodes, getState, saveState, 
         ffmpegPath: getFfmpegPath?.(),
         inputPath: job.inputPath,
         signal: controller.signal,
-        windowSeconds: 15,
         sceneChangeThreshold: 0.4,
       });
       await writeJsonAtomic(job.analysisPath, refined, assertCurrent);
