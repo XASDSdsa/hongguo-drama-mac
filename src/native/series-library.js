@@ -146,6 +146,32 @@ function createFolderList(file) {
   };
 }
 
+/** 记住用户确认过「这几集本来就缺」的导入文件夹，下次不再问。{ 文件夹路径: [集号] } */
+function createGapNotes(file) {
+  const read = () => {
+    try {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch (_) {
+      return {};
+    }
+  };
+  return {
+    get(dir) {
+      const list = read()[path.resolve(String(dir))];
+      return new Set(Array.isArray(list) ? list.filter(Number.isInteger) : []);
+    },
+    add(dir, indices) {
+      const all = read();
+      const key = path.resolve(String(dir));
+      const merged = new Set([...(Array.isArray(all[key]) ? all[key] : []), ...indices.filter(Number.isInteger)]);
+      all[key] = [...merged].sort((a, b) => a - b);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(all, null, 2));
+    },
+  };
+}
+
 /** 文件夹必须是下载目录的一级子文件夹，或者是导入过的文件夹，才允许在里面读写。 */
 function isLibraryFolder(dir, root, imported) {
   const resolved = path.resolve(String(dir || ''));
@@ -160,5 +186,6 @@ module.exports = {
   describeFolder,
   scanLibrary,
   createFolderList,
+  createGapNotes,
   isLibraryFolder,
 };

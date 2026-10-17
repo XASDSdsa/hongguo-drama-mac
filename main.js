@@ -24,6 +24,7 @@ const openai = require('./src/native/openai');
 const seriesInfo = require('./src/native/series-info');
 const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
+const seriesGaps = require('./src/native/series-gaps');
 const whisper = require('./src/native/whisper');
 const fasterWhisper = require('./src/native/faster-whisper');
 const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
@@ -3046,32 +3047,91 @@ ipcMain.handle('library-list', () => {
   }
 });
 
+function libraryTaskStates(seriesId) {
+  const states = new Map();
+  for (const task of downloadTasks) {
+    if (String(task.hongguoInfo?.series_id ?? '') !== String(seriesId)) continue;
+    const index = Number(task.hongguoInfo?.vid_index);
+    if (!(index > 0)) continue;
+    const state = ['downloading', 'pending'].includes(task.status)
+      ? 'active'
+      : ['failed', 'stopped'].includes(task.status)
+        ? 'failed'
+        : null;
+    if (state && states.get(index) !== 'active') states.set(index, state);
+  }
+  return states;
+}
+
+let gapNoteStore = null;
+function libraryGapNotes() {
+  if (!gapNoteStore) {
+    gapNoteStore = seriesLibrary.createGapNotes(path.join(app.getPath('userData'), 'library-gaps.json'));
+  }
+  return gapNoteStore;
+}
+
+/** 一个剧文件夹的详情：磁盘上的集，以及集与集之间缺的是哪几集、为什么缺。 */
+function libraryEpisodeDetail(dir) {
+  const root = downloadRoot();
+  const imported = libraryFolders().list();
+  if (!seriesLibrary.isLibraryFolder(dir, root, imported)) return { success: false, error: '这不是剧文件夹' };
+  const folder = path.resolve(String(dir));
+  const isImported = imported.some((item) => path.resolve(item) === folder);
+  const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
+  const remote = new Map((entry?.episodes || []).map((episode) => [Number(episode.vid_index), episode]));
+  const cover = seriesInfo.findCover(folder);
+  const episodes = seriesLibrary.scanEpisodes(folder).map((episode) => ({
+    name: episode.name,
+    path: episode.path,
+    size: episode.size,
+    index: episode.index,
+    cover: remote.get(episode.index)?.cover || '',
+  }));
+  const onDisk = new Set(episodes.map((episode) => episode.index).filter((index) => index !== null));
+  const missing = seriesGaps.classifyMissing({
+    onDisk,
+    remote: entry ? entry.episodes || [] : null,
+    tasks: entry ? libraryTaskStates(entry.series_id) : new Map(),
+    upTo: Math.max(0, ...onDisk),
+  });
+  const confirmed = libraryGapNotes().get(folder);
+  return {
+    success: true,
+    dir: folder,
+    name: path.basename(folder),
+    imported: isImported,
+    linked: !!entry,
+    seriesId: entry ? String(entry.series_id) : '',
+    remoteUpdatedAt: entry ? Number(entry.episodesUpdatedAt || entry.updatedAt) || 0 : 0,
+    coverUrl: cover ? localAssetUrl(cover) : entry?.cover || '',
+    synopsis: seriesInfo.readSynopsis(folder) || entry?.synopsis || '',
+    outputDir: path.join(folder, '去重'),
+    episodes,
+    missing: missing.map((item) => ({
+      ...item,
+      state: item.state === 'unknown' && confirmed.has(item.index) ? 'confirmed' : item.state,
+      text: seriesGaps.STATE_TEXT[item.state === 'unknown' && confirmed.has(item.index) ? 'confirmed' : item.state],
+    })),
+  };
+}
+
 ipcMain.handle('library-episodes', (_event, dir) => {
   try {
-    const root = downloadRoot();
-    const imported = libraryFolders().list();
-    if (!seriesLibrary.isLibraryFolder(dir, root, imported)) return { success: false, error: '这不是剧文件夹' };
-    const folder = path.resolve(String(dir));
-    const isImported = imported.some((item) => path.resolve(item) === folder);
-    const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
-    const remote = new Map((entry?.episodes || []).map((episode) => [Number(episode.vid_index), episode]));
-    const cover = seriesInfo.findCover(folder);
-    return {
-      success: true,
-      dir: folder,
-      name: path.basename(folder),
-      imported: isImported,
-      coverUrl: cover ? localAssetUrl(cover) : entry?.cover || '',
-      synopsis: seriesInfo.readSynopsis(folder) || entry?.synopsis || '',
-      outputDir: path.join(folder, '去重'),
-      episodes: seriesLibrary.scanEpisodes(folder).map((episode) => ({
-        name: episode.name,
-        path: episode.path,
-        size: episode.size,
-        index: episode.index,
-        cover: remote.get(episode.index)?.cover || '',
-      })),
-    };
+    return libraryEpisodeDetail(dir);
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 向来源平台核对最新的集列表（只读，不下载），再返回最新的详情；连不上就按上次记录。 */
+ipcMain.handle('library-refresh-remote', async (_event, dir) => {
+  try {
+    const first = libraryEpisodeDetail(dir);
+    if (!first.success || !first.linked) return first;
+    const entry = seriesRegistry.find((item) => String(item.series_id) === first.seriesId);
+    const refreshed = entry ? await refreshOneSeries(entry) : { success: false, error: '没有这部剧的档案' };
+    return { ...libraryEpisodeDetail(dir), refreshed: !!refreshed.success, refreshError: refreshed.error || '' };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -3097,7 +3157,110 @@ ipcMain.handle('library-remove-import', (_event, dir) => {
   }
 });
 
-/** 选中的集交给去重队列处理，成品放在 剧文件夹/去重/ 里。 */
+// 「先补下载，下完自动继续」：补下载的集全部下完后，自动用完整的选择开始重新拆分。
+const libraryJobs = new Map();
+let LIBRARY_POLL_MS = 2000;
+const LIBRARY_JOB_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+
+function libraryJobSnapshot(job) {
+  const { timer, request, ...rest } = job;
+  return rest;
+}
+function emitLibraryJob(job) {
+  job.updatedAt = Date.now();
+  sendToRenderer('library-job-update', libraryJobSnapshot(job));
+}
+
+function startLibraryDownloadJob({ dir, request, entry, indices, files }) {
+  const byIndex = new Map(entry.episodes.map((episode) => [Number(episode.vid_index), episode]));
+  const wanted = indices.map((index) => byIndex.get(index)).filter(Boolean);
+  const job = {
+    id: randomUUID(),
+    dir,
+    name: path.basename(dir),
+    indices,
+    status: 'waiting',
+    message: `正在补下载${seriesGaps.describeIndices(indices)}，下完会自动开始处理`,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  libraryJobs.set(job.id, job);
+  const finish = (status, message) => {
+    clearInterval(job.timer);
+    job.status = status;
+    job.message = message;
+    emitLibraryJob(job);
+  };
+  const tick = async () => {
+    if (job.status !== 'waiting') return;
+    if (Date.now() - job.createdAt > LIBRARY_JOB_TIMEOUT_MS)
+      return finish('failed', '补下载等了太久，已放弃，请重新处理');
+    const states = wanted.map((episode) => {
+      const tasks = downloadTasks.filter((task) => String(task.hongguoInfo?.vid) === String(episode.vid));
+      const done = tasks.find((task) => hasCompleteTaskFile(task));
+      if (done) return { index: Number(episode.vid_index), state: 'done', file: done.savePath };
+      if (tasks.some((task) => ['downloading', 'pending'].includes(task.status)))
+        return { index: Number(episode.vid_index), state: 'waiting' };
+      return { index: Number(episode.vid_index), state: 'failed' };
+    });
+    const finished = states.filter((item) => item.state === 'done').length;
+    if (states.some((item) => item.state === 'waiting')) {
+      const message = `正在补下载${seriesGaps.describeIndices(indices)}（${finished}/${states.length}），下完会自动开始处理`;
+      if (message !== job.message) {
+        job.message = message;
+        emitLibraryJob(job);
+      }
+      return;
+    }
+    const failed = states.filter((item) => item.state === 'failed').map((item) => item.index);
+    if (failed.length)
+      return finish(
+        'failed',
+        `${seriesGaps.describeIndices(failed)}下载失败，没有开始处理。可以重试下载，或选择强制拼接。`,
+      );
+    job.status = 'starting';
+    clearInterval(job.timer);
+    emitLibraryJob(job);
+    try {
+      const all = [...new Set([...files, ...states.map((item) => item.file)])];
+      const result = await startResplitBatch({ ...request, dir, files: all });
+      if (result.success) {
+        const s = result.summary;
+        finish('started', `补下载完成，已开始处理：将生成 ${s.count} 集`);
+      } else finish('failed', result.error || '补下载完成，但启动处理失败');
+    } catch (error) {
+      finish('failed', error?.message || String(error));
+    }
+  };
+  job.timer = setInterval(() => void tick(), LIBRARY_POLL_MS);
+  job.timer.unref?.();
+  emitLibraryJob(job);
+  return { job, wanted };
+}
+
+ipcMain.handle('library-jobs', () => [...libraryJobs.values()].slice(-20).map(libraryJobSnapshot));
+ipcMain.handle('library-job-cancel', (_event, id) => {
+  const job = libraryJobs.get(String(id));
+  if (!job) return { success: false, error: '任务不存在' };
+  if (job.status === 'waiting') {
+    clearInterval(job.timer);
+    job.status = 'cancelled';
+    job.message = '已取消；补下载的集仍会继续下载，但不会自动开始处理';
+    emitLibraryJob(job);
+  }
+  return { success: true };
+});
+ipcMain.handle('library-job-dismiss', (_event, id) => {
+  const job = libraryJobs.get(String(id));
+  if (job && job.status !== 'waiting' && job.status !== 'starting') libraryJobs.delete(job.id);
+  return { success: true };
+});
+
+/**
+ * 选中的集交给去重队列处理，成品放在 剧文件夹/去重/ 里。
+ * 重新拆分会先看选中的集之间有没有缺集：平台没有的直接拼；没下载的要用户决定
+ * （gapPolicy：download 先补下载 / force 强制拼接 / confirm 导入的文件夹确认本来就缺）。
+ */
 ipcMain.handle('library-dedup', async (_event, payload = {}) => {
   try {
     const dir = path.resolve(String(payload.dir || ''));
@@ -3113,7 +3276,61 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     }
     const outputDir = path.join(dir, '去重');
     if (payload.mode === 'episode') return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts });
-    return await startResplitBatch({ dir, files, split: payload.split, opts: payload.opts, outputDir });
+
+    const detail = libraryEpisodeDetail(dir);
+    const selected = files.map((file) => seriesLibrary.parseEpisodeIndex(path.basename(file)));
+    const { blocking, notes } = seriesGaps.summarizeGaps({
+      selected,
+      missing: detail.missing.map((item) => ({ index: item.index, state: item.state })),
+      confirmed: libraryGapNotes().get(dir),
+    });
+    const label = (item) => ({ ...item, text: seriesGaps.STATE_TEXT[item.state] });
+    const policy = payload.gapPolicy;
+    if (blocking.length && !policy) {
+      return {
+        success: false,
+        needsDecision: true,
+        kind: detail.linked ? 'download' : 'unknown',
+        blocking: blocking.map(label),
+        notes: notes.map(label),
+      };
+    }
+    const request = { split: payload.split, opts: payload.opts, outputDir };
+    if (blocking.length && policy === 'download') {
+      const entry = seriesRegistry.find((item) => String(item.series_id) === detail.seriesId);
+      if (!detail.linked || !entry) return { success: false, error: '这部剧不是软件下载的，没法补下载' };
+      const indices = blocking.map((item) => item.index);
+      const byIndex = new Map(entry.episodes.map((episode) => [Number(episode.vid_index), episode]));
+      const toDownload = blocking
+        .filter((item) => ['notDownloaded', 'failed'].includes(item.state))
+        .map((item) => byIndex.get(item.index))
+        .filter(Boolean)
+        .map((episode) => ({ ...episode, cover: episode.cover || entry.cover }));
+      if (toDownload.length) {
+        await enqueueEpisodes({
+          seriesId: entry.series_id,
+          seriesTitle: entry.series_title,
+          episodes: toDownload,
+          cover: entry.cover,
+        });
+      }
+      const { job } = startLibraryDownloadJob({ dir, request, entry, indices, files });
+      return { success: true, waitingForDownload: true, job: libraryJobSnapshot(job), indices };
+    }
+    if (blocking.length && policy === 'confirm') {
+      libraryGapNotes().add(
+        dir,
+        blocking.filter((item) => item.state === 'unknown').map((item) => item.index),
+      );
+    }
+    const result = await startResplitBatch({ dir, files, ...request });
+    return {
+      ...result,
+      notes: [
+        ...notes.map(label),
+        ...(policy === 'force' ? blocking.map((item) => ({ ...label(item), forced: true })) : []),
+      ],
+    };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

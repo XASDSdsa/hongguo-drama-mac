@@ -7,12 +7,90 @@ const assert = require('node:assert/strict'),
 const { EventEmitter } = require('node:events'),
   { createRequire } = require('node:module');
 const lib = require('../src/native/series-library');
+const { execFileSync } = require('node:child_process');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'series-lib-'));
 const touch = (file, size = 2048) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, Buffer.alloc(size, 1));
 };
+
+function makeMain(root, userData, registry) {
+  fs.mkdirSync(userData, { recursive: true });
+  const file = path.resolve(__dirname, '../main.js'),
+    req = createRequire(file),
+    app = new EventEmitter(),
+    handlers = {},
+    events = [];
+  Object.assign(app, {
+    getVersion: () => 'test',
+    getPath: () => userData,
+    commandLine: { appendSwitch() {} },
+    whenReady: () => ({ then() {} }),
+  });
+  const electron = {
+    app,
+    ipcMain: { handle: (name, fn) => (handlers[name] = fn) },
+    protocol: { registerSchemesAsPrivileged() {} },
+    dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+  };
+  const context = vm.createContext({
+    require: (n) =>
+      n === 'electron'
+        ? electron
+        : n === './src/store'
+          ? { getSettings: () => ({ root }), saveTasks() {}, saveSeries() {}, saveSettings() {} }
+          : req(n),
+    __dirname: path.dirname(file),
+    process,
+    Buffer,
+    URL,
+    Response,
+    Request,
+    Headers,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    setImmediate,
+    console: { log() {}, warn() {}, error() {} },
+  });
+  vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
+  vm.runInContext(`seriesRegistry=${JSON.stringify(registry)}`, context);
+  context.sendToRenderer = (channel, data) => events.push([channel, data]);
+  context.pumpAllQuchongBatches = () => {};
+  context.resolveFfmpeg = (name) => name;
+  return { context, handlers, events };
+}
+const realEpisode = (file) =>
+  execFileSync('ffmpeg', [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=size=160x284:rate=25:duration=12',
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:duration=12',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-shortest',
+    file,
+  ]);
+
+// 在 vm 里创建的数组原型不同，先转成普通 JSON 再比较。
+const deq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
 let failures = 0;
 async function check(name, fn) {
   try {
@@ -293,6 +371,150 @@ async function check(name, fn) {
     );
     assert.ok(fs.existsSync(path.join(tmp, 'imported', '外来剧', '外来剧_第001集.mp4')));
   });
+
+  let ffmpegOk = true;
+  try {
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+  } catch (_) {
+    ffmpegOk = false;
+  }
+  if (ffmpegOk) {
+    await check('main: missing episodes — platform gaps splice, undownloaded gaps need a decision', async () => {
+      const root = path.join(tmp, 'gap-dl');
+      const dir = path.join(root, '缺集剧');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const n of [1, 2, 5]) realEpisode(path.join(dir, `缺集剧_第00${n}集.mp4`));
+      const registry = [
+        {
+          series_id: '9',
+          series_title: '缺集剧',
+          folder: '缺集剧',
+          total: 5,
+          episodes: [
+            { vid: 'v1', vid_index: 1 },
+            { vid: 'v2', vid_index: 2 },
+            { vid: 'v3', vid_index: 3 },
+            { vid: 'v5', vid_index: 5 },
+          ],
+        },
+      ];
+      const { context, handlers, events } = makeMain(root, path.join(tmp, 'ud-gap'), registry);
+      const split = { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5 };
+      const opts = { speed_min: 1.03, speed_max: 1.2, black_intro: false };
+      const pick = (...numbers) => numbers.map((n) => path.join(dir, `缺集剧_第00${n}集.mp4`));
+
+      const detail = await handlers['library-episodes']({}, dir);
+      deq(
+        detail.missing.map((item) => [item.index, item.state, item.text]),
+        [
+          [3, 'notDownloaded', '没下载'],
+          [4, 'absent', '平台无此集'],
+        ],
+      );
+
+      const asked = await handlers['library-dedup']({}, { dir, files: pick(2, 5), split, opts });
+      assert.equal(asked.success, false);
+      assert.equal(asked.needsDecision, true);
+      assert.equal(asked.kind, 'download');
+      deq(
+        asked.blocking.map((item) => [item.index, item.state]),
+        [[3, 'notDownloaded']],
+      );
+      deq(
+        asked.notes.map((item) => [item.index, item.state]),
+        [[4, 'absent']],
+      );
+      assert.equal(vm.runInContext('quchongBatches.size', context), 0, 'nothing is queued before the user decides');
+
+      const spliced = await handlers['library-dedup']({}, { dir, files: pick(1, 2), split, opts });
+      assert.equal(spliced.success, true, spliced.error);
+      assert.ok(!spliced.needsDecision, 'contiguous episodes need no decision');
+
+      const platformOnly = await handlers['library-dedup'](
+        {},
+        { dir, files: pick(2, 5), split, opts, gapPolicy: 'force' },
+      );
+      assert.equal(platformOnly.success, true, platformOnly.error);
+      deq(
+        platformOnly.notes.map((item) => [item.index, item.state, !!item.forced]),
+        [
+          [4, 'absent', false],
+          [3, 'notDownloaded', true],
+        ],
+      );
+
+      // 先补下载：下载完成后自动用完整的选择开始处理。
+      vm.runInContext('LIBRARY_POLL_MS = 30', context);
+      const downloaded = [];
+      context.enqueueEpisodes = async ({ episodes }) => {
+        downloaded.push(...episodes.map((episode) => episode.vid_index));
+        const file = path.join(dir, '缺集剧_第003集.mp4');
+        realEpisode(file);
+        vm.runInContext(
+          `downloadTasks.push({ status: 'completed', savePath: ${JSON.stringify(file)}, hongguoInfo: { vid: 'v3', series_id: '9', vid_index: 3 } })`,
+          context,
+        );
+        return episodes.length;
+      };
+      context.hasCompleteTaskFile = (task) => task.status === 'completed';
+      const waiting = await handlers['library-dedup'](
+        {},
+        { dir, files: pick(2, 5), split, opts, gapPolicy: 'download' },
+      );
+      assert.equal(waiting.success, true, waiting.error);
+      assert.equal(waiting.waitingForDownload, true);
+      deq(downloaded, [3]);
+      const deadline = Date.now() + 15000;
+      while (
+        Date.now() < deadline &&
+        !events.some(([name, data]) => name === 'library-job-update' && data.status === 'started')
+      )
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      const last = events.filter(([name]) => name === 'library-job-update').pop()[1];
+      assert.equal(last.status, 'started', last.message);
+      const tasks = vm
+        .runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context)
+        .filter((item) => item.segments);
+      const files = new Set(tasks.flatMap((item) => item.segments.map((segment) => path.basename(segment.src))));
+      assert.ok(files.has('缺集剧_第003集.mp4'), 'the newly downloaded episode is part of the plan');
+      assert.ok(files.has('缺集剧_第002集.mp4') && files.has('缺集剧_第005集.mp4'));
+    });
+
+    await check('main: an imported folder asks once, then remembers episodes that were always missing', async () => {
+      const root = path.join(tmp, 'gap2-dl');
+      fs.mkdirSync(root, { recursive: true });
+      const dir = path.join(tmp, 'gap2-imported', '外来缺集');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const n of [1, 3]) realEpisode(path.join(dir, `外来缺集_第00${n}集.mp4`));
+      const { handlers, context } = makeMain(root, path.join(tmp, 'ud-gap2'), []);
+      context.libraryFolders().add(dir);
+      const files = [1, 3].map((n) => path.join(dir, `外来缺集_第00${n}集.mp4`));
+      const split = { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5 };
+      const opts = { speed_min: 1.03, speed_max: 1.2, black_intro: false };
+      const asked = await handlers['library-dedup']({}, { dir, files, split, opts });
+      assert.equal(asked.needsDecision, true);
+      assert.equal(asked.kind, 'unknown');
+      deq(
+        asked.blocking.map((item) => item.index),
+        [2],
+      );
+      const noDownload = await handlers['library-dedup']({}, { dir, files, split, opts, gapPolicy: 'download' });
+      assert.equal(noDownload.success, false);
+      const confirmed = await handlers['library-dedup']({}, { dir, files, split, opts, gapPolicy: 'confirm' });
+      assert.equal(confirmed.success, true, confirmed.error);
+      const again = await handlers['library-dedup']({}, { dir, files, split, opts });
+      assert.equal(again.success, true, 'remembered: no second question');
+      deq(
+        again.notes.map((item) => [item.index, item.state]),
+        [[2, 'confirmed']],
+      );
+      const detail = await handlers['library-episodes']({}, dir);
+      deq(
+        detail.missing.map((item) => item.state),
+        ['confirmed'],
+      );
+    });
+  }
 
   if (failures) process.exitCode = 1;
 })().finally(() => fs.rmSync(tmp, { recursive: true, force: true }));

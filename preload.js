@@ -185,6 +185,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryImport: () => ipcRenderer.invoke('library-import'),
   libraryRemoveImport: (dir) => ipcRenderer.invoke('library-remove-import', dir),
   libraryDedup: (payload) => ipcRenderer.invoke('library-dedup', payload),
+  libraryRefreshRemote: (dir) => ipcRenderer.invoke('library-refresh-remote', dir),
+  libraryJobs: () => ipcRenderer.invoke('library-jobs'),
+  libraryJobCancel: (id) => ipcRenderer.invoke('library-job-cancel', id),
+  libraryJobDismiss: (id) => ipcRenderer.invoke('library-job-dismiss', id),
+  onLibraryJobUpdate: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('library-job-update', listener);
+    return () => ipcRenderer.removeListener('library-job-update', listener);
+  },
   onLibraryPlanProgress: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('library-plan-progress', listener);

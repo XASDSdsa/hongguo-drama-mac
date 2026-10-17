@@ -339,7 +339,110 @@
 .lib-notice-lines {
   white-space: pre-line;
 }
-.lib-dialog-foot {
-  max-height: 50vh;
-  overflow: auto;
+.lib-episode.is-missing {
+  cursor: default;
+}
+.lib-ghost {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed var(--border-strong);
+  background: transparent;
+  outline: none;
+}
+.lib-ghost-no {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.lib-ghost-state {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+}
+.lib-episode.is-notDownloaded .lib-ghost,
+.lib-episode.is-downloading .lib-ghost,
+.lib-episode.is-failed .lib-ghost,
+.lib-episode.is-unknown .lib-ghost {
+  border-color: var(--primary);
+}
+.lib-episode.is-notDownloaded .lib-ghost-state,
+.lib-episode.is-downloading .lib-ghost-state,
+.lib-episode.is-failed .lib-ghost-state,
+.lib-episode.is-unknown .lib-ghost-state {
+  color: var(--primary);
+  background: var(--accent-soft);
+}
+.lib-remote-note {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.lib-jobs {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.lib-job {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.lib-job strong {
+  margin-right: 6px;
+}
+.lib-job.is-failed {
+  border-color: var(--primary);
+}
+.lib-job-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lib-mask-top {
+  z-index: 1100;
+  align-items: center;
+  padding-top: 24px;
+}
+.lib-confirm {
+  width: 100%;
+  max-width: 520px;
+  padding: 20px 24px;
+  background: var(--bg-card);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+}
+.lib-confirm h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+.lib-confirm p {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.lib-confirm-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  color: var(--primary);
+}
+.lib-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+.lib-dialog-body > * {
+  flex-shrink: 0;
 }
