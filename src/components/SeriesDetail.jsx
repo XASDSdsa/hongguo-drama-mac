@@ -80,6 +80,7 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
   const [showAllIssues, setShowAllIssues] = useState(false);
   const [actionError, setActionError] = useState('');
   const [synopsisOpen, setSynopsisOpen] = useState(false);
+  const [publish, setPublish] = useState(null); // AI 发布素材的最新结果（新海报、新剧名）
   const requestId = useRef(0);
   const paramsRef = useRef(null);
   const reloadTimer = useRef(null);
@@ -299,25 +300,45 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
       </div>
 
       <header className="lib-detail-head">
-        <h2>
-          <Film size={22} /> {title}
-        </h2>
-        <div className="lib-detail-meta">
-          {folder.imported ? '导入的文件夹' : folder.source || '下载目录'}
-          {` · 已有 ${downloaded} 集`}
-          {total > 0 && ` / 共 ${total} 集`}
-          <span className="lib-detail-path" title={folder.path}>
-            {folder.path}
-          </span>
+        <div className="lib-detail-text">
+          <h2>
+            <Film size={22} /> {title}
+          </h2>
+          <div className="lib-detail-meta">
+            {folder.imported ? '导入的文件夹' : folder.source || '下载目录'}
+            {` · 已有 ${downloaded} 集`}
+            {total > 0 && ` / 共 ${total} 集`}
+            <span className="lib-detail-path" title={folder.path}>
+              {folder.path}
+            </span>
+          </div>
+          {detail?.synopsis && (
+            <p className={`lib-synopsis ${synopsisOpen ? 'is-open' : ''}`}>
+              {detail.synopsis}
+              <button className="lib-link" onClick={() => setSynopsisOpen((value) => !value)}>
+                {synopsisOpen ? '收起' : '展开'}
+              </button>
+            </p>
+          )}
         </div>
-        {detail?.synopsis && (
-          <p className={`lib-synopsis ${synopsisOpen ? 'is-open' : ''}`}>
-            {detail.synopsis}
-            <button className="lib-link" onClick={() => setSynopsisOpen((value) => !value)}>
-              {synopsisOpen ? '收起' : '展开'}
-            </button>
-          </p>
-        )}
+        <div className="lib-heads">
+          <figure className="lib-head-pic">
+            <div className="lib-head-frame">
+              {detail?.coverUrl ? <img src={detail.coverUrl} alt={`《${title}》原封面`} /> : <span>没有封面</span>}
+            </div>
+            <figcaption>原封面</figcaption>
+          </figure>
+          <figure className="lib-head-pic">
+            <div className={`lib-head-frame ${publish?.posterUrl ? 'is-new' : ''}`}>
+              {publish?.posterUrl ? (
+                <img src={publish.posterUrl} alt={`《${publish.title}》新海报`} />
+              ) : (
+                <span>还没生成</span>
+              )}
+            </div>
+            <figcaption>{publish?.posterUrl ? `新海报 · ${publish.title}` : 'AI 新海报'}</figcaption>
+          </figure>
+        </div>
       </header>
 
       {loading && (
@@ -329,7 +350,7 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
 
       {detail && (
         <>
-          <PublishPanel dir={detail.dir} />
+          <PublishPanel dir={detail.dir} onResult={setPublish} showPoster={false} />
 
           {(issueRows.length > 0 || platformGaps.length > 0) && (
             <section className="lib-issues" aria-label="下载状态">

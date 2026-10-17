@@ -9,7 +9,7 @@ const STAGES = [
 ];
 
 /** 一部剧的“AI 发布素材”：改写简介、改写剧名、重新生成海报。结果直接存进剧文件夹。 */
-export default function PublishPanel({ dir }) {
+export default function PublishPanel({ dir, onResult, showPoster = true }) {
   const [state, setState] = useState(null);
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
@@ -51,6 +51,12 @@ export default function PublishPanel({ dir }) {
       }
     });
   }, [load]);
+
+  // 把最新结果（海报、新剧名、新简介）交给页头显示。
+  const latest = state ? state.result || null : undefined;
+  useEffect(() => {
+    if (latest !== undefined) onResult?.(latest);
+  }, [latest, onResult]);
 
   const start = async (keepCopy) => {
     setError('');
@@ -150,13 +156,15 @@ export default function PublishPanel({ dir }) {
 
       {result && (
         <div className="pub-result">
-          <div className="pub-poster">
-            {result.posterUrl ? (
-              <img src={result.posterUrl} alt={`《${result.title}》海报`} />
-            ) : (
-              <div className="pub-poster-empty">海报未生成</div>
-            )}
-          </div>
+          {showPoster && (
+            <div className="pub-poster">
+              {result.posterUrl ? (
+                <img src={result.posterUrl} alt={`《${result.title}》海报`} />
+              ) : (
+                <div className="pub-poster-empty">海报未生成</div>
+              )}
+            </div>
+          )}
           <div className="pub-side">
             <label className="pub-field">
               <span>新剧名</span>
