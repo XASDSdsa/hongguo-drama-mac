@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './OneClick.css';
 import { Folder, Play, Square, Sparkles } from './icons';
+import DedupParams from './DedupParams';
 
 const STORAGE_KEY = 'oneclick-config';
 const STATUS_TEXT = {
@@ -20,22 +21,6 @@ const ITEM_TEXT = {
   failed: '失败',
   stopped: '已停止',
 };
-const NUMBER_PARAMS = [
-  ['crop_ratio', '裁切比例', 0.01, 0.85, 1],
-  ['speed_min', '变速下限', 0.01, 1, 1.1],
-  ['speed_max', '变速上限', 0.01, 1, 1.1],
-  ['pitch_min', '音调下限', 0.01, 1, 1.1],
-  ['pitch_max', '音调上限', 0.01, 1, 1.1],
-  ['noise_min', '噪点下限', 1, 0, 15],
-  ['noise_max', '噪点上限', 1, 0, 15],
-  ['rotation_max', '最大旋转', 0.001, 0, 0.02],
-  ['rgb_shift', 'RGB 偏移', 1, 0, 5],
-  ['contrast', '对比度', 0.01, 0.9, 1.3],
-  ['saturation', '饱和度', 0.01, 0.8, 1.6],
-  ['hue_range', '色相范围', 1, 0, 30],
-  ['orig_volume', '原声音量', 0.05, 0.1, 1],
-  ['bgm_volume', 'BGM 音量', 0.05, 0, 0.5],
-];
 const RESERVED = [
   { id: 'cost', label: '自动生成成本配置报告', note: '预留：后续接入模板和填写规则' },
   {
@@ -244,54 +229,7 @@ export default function OneClick({ active = true }) {
             去重参数…
           </button>
         </div>
-        {dedup && showParams && opts && (
-          <div className="oneclick-params">
-            <label>
-              分辨率
-              <select value={opts.resolution} onChange={(e) => setOpt('resolution', e.target.value)} disabled={busy}>
-                <option value="1080x1920">1080×1920</option>
-                <option value="720x1280">720×1280</option>
-              </select>
-            </label>
-            <label>
-              画质
-              <select value={opts.quality} onChange={(e) => setOpt('quality', e.target.value)} disabled={busy}>
-                <option value="standard">标准</option>
-                <option value="lean">精简</option>
-              </select>
-            </label>
-            {NUMBER_PARAMS.map(([key, label, step, min, max]) => (
-              <label key={key}>
-                {label}
-                <input
-                  className="input-field"
-                  type="number"
-                  step={step}
-                  min={min}
-                  max={max}
-                  value={opts[key] ?? ''}
-                  onChange={(e) => setOpt(key, Number(e.target.value))}
-                  disabled={busy}
-                />
-              </label>
-            ))}
-            {[
-              ['black_intro', '黑场开头'],
-              ['vignette', '暗角'],
-              ['eq_enable', '均衡器'],
-            ].map(([key, label]) => (
-              <label key={key} className="oneclick-check">
-                <input
-                  type="checkbox"
-                  checked={!!opts[key]}
-                  onChange={(e) => setOpt(key, e.target.checked)}
-                  disabled={busy}
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-        )}
+        {dedup && showParams && opts && <DedupParams opts={opts} onChange={setOpt} disabled={busy} />}
       </section>
 
       <section className="oneclick-card">

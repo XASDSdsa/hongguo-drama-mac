@@ -22,6 +22,7 @@ const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
 const seriesInfo = require('./src/native/series-info');
+const seriesLibrary = require('./src/native/series-library');
 const whisper = require('./src/native/whisper');
 const fasterWhisper = require('./src/native/faster-whisper');
 const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
@@ -2806,7 +2807,7 @@ ipcMain.handle('oneclick-select-image', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle('quchong-start', async (_event, payload = {}) => {
+async function startQuchongBatch(payload = {}) {
   try {
     const sources = [...new Set(Array.isArray(payload.sources) ? payload.sources : [])].map((file) =>
       path.resolve(String(file)),
@@ -2887,6 +2888,119 @@ ipcMain.handle('quchong-start', async (_event, payload = {}) => {
       status: quchongActive >= QUCHONG_MAX_ACTIVE ? 'queued' : 'running',
       tasks: batch.tasks.map(quchongTaskPayload),
     };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+}
+ipcMain.handle('quchong-start', (_event, payload) => startQuchongBatch(payload));
+
+// ===== 管理剧集：一个文件夹就是一部剧，集以文件夹里实际存在的视频为准 =====
+let libraryFolderList = null;
+function libraryFolders() {
+  if (!libraryFolderList) {
+    libraryFolderList = seriesLibrary.createFolderList(path.join(app.getPath('userData'), 'library-folders.json'));
+  }
+  return libraryFolderList;
+}
+
+/** 剧文件夹对应的剧档案（只有软件下载过的剧才有）。 */
+function linkedSeriesEntries() {
+  const byId = new Map(seriesRegistry.map((entry) => [String(entry.series_id), entry]));
+  const result = new Map();
+  for (const [name, id] of seriesFolderOwners()) {
+    const entry = byId.get(String(id));
+    if (entry) result.set(name, entry);
+  }
+  return result;
+}
+
+ipcMain.handle('library-list', () => {
+  try {
+    const root = downloadRoot();
+    const linked = linkedSeriesEntries();
+    const folders = seriesLibrary.scanLibrary(root, libraryFolders().list()).map((folder) => {
+      const entry = !folder.imported ? linked.get(folder.name.toLowerCase()) : null;
+      const { coverPath, ...rest } = folder;
+      return {
+        ...rest,
+        coverUrl: coverPath ? localAssetUrl(coverPath) : entry?.cover || '',
+        source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
+        totalEpisodes: entry ? Number(entry.total) || 0 : 0,
+        linked: !!entry,
+      };
+    });
+    return { success: true, root, folders };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-episodes', (_event, dir) => {
+  try {
+    const root = downloadRoot();
+    const imported = libraryFolders().list();
+    if (!seriesLibrary.isLibraryFolder(dir, root, imported)) return { success: false, error: '这不是剧文件夹' };
+    const folder = path.resolve(String(dir));
+    const isImported = imported.some((item) => path.resolve(item) === folder);
+    const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
+    const remote = new Map((entry?.episodes || []).map((episode) => [Number(episode.vid_index), episode]));
+    const cover = seriesInfo.findCover(folder);
+    return {
+      success: true,
+      dir: folder,
+      name: path.basename(folder),
+      imported: isImported,
+      coverUrl: cover ? localAssetUrl(cover) : entry?.cover || '',
+      synopsis: seriesInfo.readSynopsis(folder) || entry?.synopsis || '',
+      outputDir: path.join(folder, '去重'),
+      episodes: seriesLibrary.scanEpisodes(folder).map((episode) => ({
+        name: episode.name,
+        path: episode.path,
+        size: episode.size,
+        index: episode.index,
+        cover: remote.get(episode.index)?.cover || '',
+      })),
+    };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-import', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+    if (result.canceled || !result.filePaths[0]) return { success: true, dir: null };
+    return { success: true, dir: libraryFolders().add(result.filePaths[0]) };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+// 只是不再显示这个文件夹，不会删除或改动里面的任何文件。
+ipcMain.handle('library-remove-import', (_event, dir) => {
+  try {
+    libraryFolders().remove(dir);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 选中的集交给去重队列处理，成品放在 剧文件夹/去重/ 里。 */
+ipcMain.handle('library-dedup', async (_event, payload = {}) => {
+  try {
+    const dir = path.resolve(String(payload.dir || ''));
+    if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    const files = [
+      ...new Set(Array.isArray(payload.files) ? payload.files.map((file) => path.resolve(String(file))) : []),
+    ];
+    if (!files.length) return { success: false, error: '请先选择要处理的集' };
+    if (files.some((file) => path.dirname(file) !== dir || !seriesLibrary.VIDEO_EXT.test(file))) {
+      return { success: false, error: '选中的文件不在这部剧的文件夹里' };
+    }
+    return await startQuchongBatch({ sources: files, outputDir: path.join(dir, '去重'), opts: payload.opts });
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

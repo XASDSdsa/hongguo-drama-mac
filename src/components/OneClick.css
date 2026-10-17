@@ -69,25 +69,6 @@
 .oneclick-number {
   width: 72px;
 }
-.oneclick-params {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 10px 14px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--border);
-}
-.oneclick-params label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.oneclick-params label.oneclick-check {
-  flex-direction: row;
-  align-items: center;
-}
 .oneclick-branch {
   display: flex;
   align-items: center;
