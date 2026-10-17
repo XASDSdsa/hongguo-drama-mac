@@ -154,6 +154,19 @@ async function shots(ctx, media) {
         '-f',
         'rawvideo',
         framesPath,
+        // The same decode pass also writes the larger frames used by the boundary review.
+        '-map',
+        `0:${media.video.index}`,
+        '-an',
+        '-vf',
+        'scale=160:90',
+        '-fps_mode',
+        'passthrough',
+        '-pix_fmt',
+        'rgb24',
+        '-f',
+        'rawvideo',
+        reviewPath,
       ],
       ctx,
     );
@@ -181,30 +194,6 @@ async function shots(ctx, media) {
       video_end: media.video_end,
       frames: media.frames.map((f) => ({ start: f.start })),
     });
-    await run(
-      ctx.ffmpeg,
-      [
-        '-nostdin',
-        '-y',
-        '-v',
-        'error',
-        '-i',
-        ctx.input,
-        '-map',
-        `0:${media.video.index}`,
-        '-an',
-        '-vf',
-        'scale=160:90',
-        '-fps_mode',
-        'passthrough',
-        '-pix_fmt',
-        'rgb24',
-        '-f',
-        'rawvideo',
-        reviewPath,
-      ],
-      ctx,
-    );
     await run(
       ctx.runtime.command,
       [

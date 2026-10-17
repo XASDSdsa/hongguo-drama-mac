@@ -354,13 +354,13 @@ function SettingsPage({ active = true }) {
           </p>
           <div className="settings-grid mt8">
             <label className="settings-field">
-              <span>处理线程数</span>
+              <span>处理线程数（0 = 自动）</span>
               <input
                 className="input-field"
                 type="number"
-                min="1"
+                min="0"
                 max="32"
-                value={settings.structure_threads ?? 2}
+                value={settings.structure_threads ?? 0}
                 onChange={(e) => update('structure_threads', Number(e.target.value))}
               />
             </label>

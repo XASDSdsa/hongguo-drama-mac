@@ -48,20 +48,46 @@ async function clips(ctx, media, shotResult) {
   }
   requireThat(previousFrame === media.frames.length, '视觉分镜未覆盖完整视频帧');
   requireThat(['original', 'mute'].includes(ctx.params.audio_mode), '必须明确切片音轨模式：original 或 mute');
-  const results = [];
-  for (const shot of shotResult.shots) {
-    ctx.signal?.throwIfAborted();
+  // Each shot is cut from its own position in the source instead of decoding from the start of the file, and
+  // several shots are encoded at once. Frame count, every frame PTS and the tail duration are still verified
+  // per clip below, so a wrong seek can never pass silently.
+  const total = shotResult.shots.length;
+  const workers = Math.max(1, Math.min(total, 4, Math.floor(ctx.params.threads / 2)));
+  const threadsEach = Math.max(2, Math.floor(ctx.params.threads / workers));
+  const origin = media.origin_pts;
+  // Frame-accurate bounds halfway between neighbouring frames, so rounding in the timestamps cannot add or drop one.
+  const between = (index) => origin + (media.frames[index - 1].start + media.frames[index].start) / 2;
+  const SEEK_LEAD = 3; // decode a few seconds before the shot so the first frame never depends on seek quirks
+  const SEEK_TAIL = 1;
+  const progressOf = new Array(total).fill(0);
+  const emitProgress = (shot) =>
+    ctx.onProgress?.({
+      message: `分镜 ${shot.order}/${total}（气口落在切镜上才切开）`,
+      progress: (progressOf.reduce((sum, value) => sum + value, 0) / total) * 100,
+    });
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  ctx.signal?.addEventListener('abort', stop, { once: true });
+  const encode = async (shot, slot) => {
+    abort.signal.throwIfAborted();
     const file = `shot-${String(shot.order).padStart(4, '0')}.mp4`;
-    const sourceStart = media.origin_pts + shot.start;
-    const sourceEnd = media.origin_pts + shot.end;
+    const sourceStart = origin + shot.start;
+    const sourceEnd = origin + shot.end;
     const expected = shot.end_frame_exclusive - shot.start_frame;
     const lastDuration = Math.round(media.frames[shot.end_frame_exclusive - 1].duration * 1000000);
+    const first = shot.start_frame === 0 ? null : between(shot.start_frame);
+    const last = shot.end_frame_exclusive === media.frames.length ? null : between(shot.end_frame_exclusive);
     // Subtract the decoded first-frame timestamp in its integer time base.
     // Decimal seconds / TB can round by a tick and shift every following frame.
-    const filters = [
-      `[0:${media.video.index}]trim=start_frame=${shot.start_frame}:end_frame=${shot.end_frame_exclusive},setpts=PTS-STARTPTS[v]`,
-    ];
-    const args = ['-nostdin', '-y', '-v', 'error', '-copyts', '-i', ctx.input];
+    const trim = [first == null ? null : `start=${first.toFixed(6)}`, last == null ? null : `end=${last.toFixed(6)}`]
+      .filter(Boolean)
+      .join(':');
+    const filters = [`[0:${media.video.index}]${trim ? `trim=${trim},` : ''}setpts=PTS-STARTPTS[v]`];
+    const seek = Math.max(0, sourceStart - SEEK_LEAD);
+    const args = ['-nostdin', '-y', '-v', 'error', '-copyts'];
+    if (seek > 0) args.push('-ss', seek.toFixed(6));
+    if (last != null) args.push('-t', (last + SEEK_TAIL - seek).toFixed(6));
+    args.push('-i', ctx.input);
     const audio = ctx.params.audio_mode === 'original' && media.has_audio;
     if (audio)
       filters.push(
@@ -84,7 +110,7 @@ async function clips(ctx, media, shotResult) {
       '-pix_fmt',
       'yuv420p',
       '-threads',
-      String(ctx.params.threads),
+      String(threadsEach),
       '-fps_mode',
       'passthrough',
       '-enc_time_base',
@@ -101,13 +127,12 @@ async function clips(ctx, media, shotResult) {
     );
     await run(ctx.ffmpeg, args, {
       ...ctx,
+      signal: abort.signal,
       duration: shot.end - shot.start,
-      onProgress: (event) =>
-        ctx.onProgress?.({
-          ...event,
-          message: `分镜 ${shot.order}/${shotResult.shots.length}（气口落在切镜上才切开）`,
-          progress: ((results.length + (event.progress || 0) / 100) / shotResult.shots.length) * 100,
-        }),
+      onProgress: (event) => {
+        progressOf[slot] = Math.max(progressOf[slot], Math.min(0.99, (event.progress || 0) / 100));
+        emitProgress(shot);
+      },
     });
     const check = await probe(
       ctx.ffprobe,
@@ -120,7 +145,7 @@ async function clips(ctx, media, shotResult) {
         '-show_entries',
         'frame=best_effort_timestamp_time:stream=duration',
       ],
-      ctx,
+      { ...ctx, signal: abort.signal },
     );
     requireThat(
       check.frames?.length === expected,
@@ -138,14 +163,37 @@ async function clips(ctx, media, shotResult) {
       Math.abs(Number(check.streams?.[0]?.duration) - (shot.end - shot.start)) < 0.00002,
       `镜头 ${shot.order} 尾帧时长不一致`,
     );
-    results.push({
+    progressOf[slot] = 1;
+    emitProgress(shot);
+    return {
       ...shot,
       path: file,
       audio_mode: audio ? 'original' : 'mute',
       frame_count: expected,
       validation: 'frame_count_pts_and_end_duration',
-    });
+    };
+  };
+  const results = new Array(total);
+  let next = 0;
+  const lane = async () => {
+    while (next < total) {
+      const slot = next++;
+      results[slot] = await encode(shotResult.shots[slot], slot);
+    }
+  };
+  try {
+    await Promise.all(
+      Array.from({ length: workers }, () =>
+        lane().catch((error) => {
+          stop(); // a failed clip stops the others instead of leaving encoders running
+          throw error;
+        }),
+      ),
+    );
+  } finally {
+    ctx.signal?.removeEventListener('abort', stop);
   }
+
   const result = envelope(ctx.taskId, { boundary_policy: POLICY, alignment_algorithm_id: ALGORITHM, clips: results });
   await atomicJson(path.join(ctx.dir, 'clips.json'), result);
   return result;

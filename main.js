@@ -180,7 +180,8 @@ function getDefaultSettings() {
     ai_image_quality: 'high',
     ai_concurrency: 2,
     // 本地视频结构化拆解。
-    structure_threads: 2,
+    // 0 = 自动（按本机核心数选择）。
+    structure_threads: 0,
     structure_threshold: 0.5,
     structure_device: 'cpu',
     structure_sherpa_provider: 'cpu',

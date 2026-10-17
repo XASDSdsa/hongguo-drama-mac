@@ -32,11 +32,16 @@ function runtime(settings = {}) {
     sentence: resolveBundledRuntime(settings),
   };
 }
+// 0 / 空 = 自动：留出两个核心给系统和界面，最多 8 线程（再多对人声分离和编码收益很小）。
+function autoThreads() {
+  const cores = os.availableParallelism?.() || os.cpus().length || 1;
+  return Math.max(2, Math.min(8, cores - 2));
+}
 function params(id, settings, rt) {
-  const threads = Number(
-    settings.structure_threads ?? Math.max(1, Math.min(4, os.availableParallelism?.() || os.cpus().length)),
-  );
-  if (!Number.isInteger(threads) || threads < 1 || threads > 32) throw new Error('处理线程数必须为 1–32 的整数');
+  const configured = Number(settings.structure_threads || 0);
+  const threads = configured === 0 ? autoThreads() : configured;
+  if (!Number.isInteger(threads) || threads < 1 || threads > 32)
+    throw new Error('处理线程数必须为 0（自动）或 1–32 的整数');
   const common = { threads };
   if (id === 'shots')
     return {
