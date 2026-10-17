@@ -1842,7 +1842,7 @@ async function executeHongguoDownload(task) {
     task.cancelled = false;
     task.progress = 0;
     sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
-    const downloadDir = task.customDir || downloadRoot();
+    const downloadDir = task.customDir || seriesFolder(series_title);
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
     task.savePath = finalPath;
@@ -2953,6 +2953,11 @@ function downloadRoot() {
   return path.resolve(configured || app.getPath('downloads'));
 }
 
+/** 下载时为每部剧建一个以剧名命名的文件夹：下载目录/剧名/，不再有来源、ID 摘要或阶段子目录。 */
+function seriesFolder(seriesTitle) {
+  return path.join(downloadRoot(), sanitizeFolderName(seriesTitle) || '未命名短剧');
+}
+
 /** 输出目录：先用本次操作明确给出的目录，其次是设置里指定的目录；都没有就报错，绝不自动推导。 */
 function configuredDir(explicit, settingKey, label) {
   const dir = String(explicit ?? '').trim() || String(getCurrentSettings()[settingKey] || '').trim();
@@ -2996,7 +3001,7 @@ function repairTaskDestination(task) {
   if (!task.pathConflict) return;
   const settings = getCurrentSettings(),
     info = task.hongguoInfo || {};
-  task.customDir = downloadRoot();
+  task.customDir = seriesFolder(info.series_title);
   const filename = uniqueEpisodeFilename(settings, info.series_title, {
     vid_index: info.vid_index,
     title: info.ep_title,
@@ -4429,7 +4434,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
 
   const settings = getCurrentSettings();
   const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
-  const downloadDir = downloadRoot();
+  const downloadDir = seriesFolder(cleanSeriesTitle);
   try {
     fs.mkdirSync(downloadDir, { recursive: true });
   } catch (_) {}

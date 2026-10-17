@@ -278,7 +278,7 @@ function SettingsPage({ active = true }) {
               选择文件夹
             </button>
           </div>
-          <p className="settings-hint">下载的视频直接保存在这个目录里，不会再自动建子文件夹。</p>
+          <p className="settings-hint">每部剧会在这里建一个以剧名命名的文件夹，视频保存在里面。</p>
         </div>
 
         {OUTPUT_DIRS.map(({ key, label, hint }) => (

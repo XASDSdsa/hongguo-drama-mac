@@ -131,23 +131,19 @@ async function check(name, run) {
     assert.equal(detail.data.episodes.length, 1);
     assert.equal(detail.data.episodes[0].vid_index, 1);
   });
-  await check('downloads are saved directly in the download directory without creating subfolders', async () => {
+  await check('downloads go into a folder named after the series inside the download directory', async () => {
     const h = load();
     h.set('seriesRegistry', series());
     await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
     const tasks = h.run('downloadTasks');
     assert.equal(tasks.length, 2);
     for (const item of tasks) {
-      assert.equal(item.customDir, h.dir);
-      assert.equal(path.dirname(item.savePath), h.dir);
+      assert.equal(item.customDir, path.join(h.dir, 'Short'));
+      assert.equal(path.dirname(item.savePath), item.customDir);
       file(item.savePath);
       item.status = 'completed';
     }
-    assert.deepEqual(
-      fs.readdirSync(h.dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()),
-      [],
-      'no folders may be created for series, source or stage',
-    );
+    assert.deepEqual(fs.readdirSync(h.dir), ['Short'], 'only the series-name folder may be created');
   });
   await check('episode files come from task records only; directories are never scanned', async () => {
     const h = load();

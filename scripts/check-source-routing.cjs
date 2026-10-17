@@ -61,7 +61,7 @@ const checks = [
     },
   ],
   [
-    'downloads go straight into the configured download directory for every source',
+    'downloads go into <download directory>/<series name> for every source',
     () => {
       const make = (root) => {
         const context = {
@@ -69,12 +69,13 @@ const checks = [
           app: { getPath: () => '/system/downloads' },
           getCurrentSettings: () => ({ root }),
         };
-        vm.runInNewContext(extract('downloadRoot'), context);
-        return context.downloadRoot();
+        context.sanitizeFolderName = (value) => value;
+        vm.runInNewContext(extract('downloadRoot') + extract('seriesFolder'), context);
+        return context.seriesFolder('同名剧');
       };
-      assert.equal(make('/downloads'), path.resolve('/downloads'));
-      assert.equal(make('  /my/videos  '), path.resolve('/my/videos'));
-      assert.equal(make(''), path.resolve('/system/downloads'));
+      assert.equal(make('/downloads'), path.resolve('/downloads/同名剧'));
+      assert.equal(make('  /my/videos  '), path.resolve('/my/videos/同名剧'));
+      assert.equal(make(''), path.resolve('/system/downloads/同名剧'));
     },
   ],
   [
