@@ -332,24 +332,24 @@ async function check(name, fn) {
           context,
         ),
       );
-    assert.deepEqual(pickFiles(undefined).files, [
+    const names = (r) => r.files;
+    assert.deepEqual(names(pickFiles(undefined)), [
       '剧_第001集.mp4',
       '剧_第002集.mp4',
       '剧_第003集.mp4',
       '剧_第004集.mp4',
     ]);
-    assert.deepEqual(pickFiles({ mode: 'first', count: 2 }).files, ['剧_第001集.mp4', '剧_第002集.mp4']);
-    assert.deepEqual(pickFiles({ mode: 'pick', numbers: [10, 3, 99] }), {
-      files: ['剧_第003集.mp4', '剧_第010集.mp4'],
-      missing: [99],
-    });
+    assert.deepEqual(names(pickFiles({ count: 2 })), ['剧_第001集.mp4', '剧_第002集.mp4']);
+    assert.deepEqual(names(pickFiles({ from: 4, count: 3 })), ['剧_第004集.mp4', '剧_第005集.mp4', '剧_第006集.mp4']);
+    assert.deepEqual(names(pickFiles({ from: 6, count: 9 })), ['剧_第006集.mp4', '剧_第010集.mp4']);
+    assert.deepEqual(names(pickFiles({ from: 11, count: 4 })), []);
     assert.equal(
-      vm.runInContext("JSON.stringify(normalizeDraftScope({ mode: 'pick', numbers: ['2', 2, 'x', -1] }))", context),
-      JSON.stringify({ mode: 'pick', numbers: [2] }),
+      vm.runInContext("JSON.stringify(normalizeDraftScope({ from: 'x', count: 0 }))", context),
+      JSON.stringify({ from: 1, count: 4 }),
     );
     const noneMatched = await handlers['library-draft'](
       {},
-      { dir: series.path, mode: 'simple', scope: { mode: 'pick', numbers: [7] } },
+      { dir: series.path, mode: 'simple', scope: { from: 7, count: 2 } },
     );
     assert.equal(noneMatched.success, false);
     // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。

@@ -41,6 +41,10 @@ const TIME_GROUPS = [
     ],
   },
   {
+    title: '新集编号',
+    fields: [['split', 'start_number', '从第几集开始', 1, 1, 9999]],
+  },
+  {
     title: '视频变速范围',
     fields: [
       ['opts', 'speed_min', '最小倍速', 0.01, 1, 1.3],

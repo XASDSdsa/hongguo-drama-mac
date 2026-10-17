@@ -72,13 +72,6 @@
   font-size: 13px;
   color: var(--text-secondary);
 }
-.lib-detail-path {
-  display: block;
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  word-break: break-all;
-}
 .lib-synopsis {
   max-width: 62ch;
   margin: 12px 0 0;
@@ -160,11 +153,14 @@
   outline: 2px solid var(--text);
   outline-offset: 1px;
 }
+.lib-ep:not(.is-selected):not(.is-missing) {
+  color: var(--text-tertiary);
+  background: transparent;
+  border-style: dashed;
+}
 .lib-ep.is-selected {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-hover);
-  font-weight: 600;
+  border-color: var(--border-strong);
+  background: var(--bg-card);
 }
 .lib-ep.is-missing {
   height: 52px;
@@ -261,9 +257,9 @@
   color: var(--text-tertiary);
 }
 
-/* 处理面板：去重 + 支线任务 + 开始处理 */
+/* 处理面板：一行一件事 */
 .proc-panel {
-  padding: 20px 22px 18px;
+  padding: 18px 22px 18px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -274,105 +270,75 @@
   font-size: 15px;
   font-weight: 650;
 }
-.proc-head {
+.proc-item {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+.proc-panel h3 + .proc-item {
+  margin-top: 6px;
+  border-top: 1px solid var(--border-muted);
+}
+.proc-line {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-.proc-out {
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.proc-block {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  transition: border-color 0.15s;
-}
-.proc-block:not(.is-off) {
-  border-color: var(--border-strong);
-}
-.proc-block + .proc-block {
-  margin-top: 10px;
+  align-items: center;
+  gap: 14px;
+  min-height: 30px;
 }
 .proc-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   cursor: pointer;
 }
 .proc-check input {
   flex-shrink: 0;
   width: 16px;
   height: 16px;
-  margin-top: 2px;
   accent-color: var(--accent);
   cursor: inherit;
 }
-.proc-check-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.proc-check-text b {
+.proc-check b {
   font-size: 14px;
   font-weight: 600;
 }
-.proc-check-text small {
+.proc-summary {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-tertiary);
-}
-.proc-check.is-reserved {
-  margin-top: 10px;
-  padding: 10px 14px;
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-.proc-detail {
-  margin: 12px 0 2px 28px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-muted);
-}
-.proc-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 18px;
-}
-.proc-label {
-  font-size: 13px;
-  color: var(--text-secondary);
 }
 .proc-more {
   margin-left: auto;
 }
-.proc-hint {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--text-tertiary);
+.proc-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+  margin: 10px 0 0 26px;
 }
-.proc-side-title {
-  margin: 20px 0 8px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text-tertiary);
+.proc-item.is-reserved {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.proc-item.is-reserved .proc-check {
+  cursor: not-allowed;
+}
+.proc-item.is-reserved .proc-check b {
+  font-weight: 500;
+}
+.proc-item.is-reserved .proc-summary {
+  flex: none;
 }
 .proc-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-muted);
+  margin-top: 16px;
 }
 .proc-foot-info {
   flex: 1;
@@ -385,10 +351,7 @@
   height: 38px;
   font-size: 14px;
 }
-.proc-detail .lib-estimate {
-  margin-top: 8px;
-}
-.proc-detail .lib-params-card {
+.proc-item .lib-params-card {
   margin-top: 12px;
   padding: 14px 16px;
   background: var(--bg-inset);
@@ -431,9 +394,6 @@
   outline-offset: 1px;
 }
 @media (max-width: 900px) {
-  .proc-more {
-    margin-left: 0;
-  }
   .proc-foot {
     flex-direction: column;
     align-items: stretch;
@@ -446,13 +406,4 @@ button.lib-ep.is-missing {
 }
 button.lib-ep.is-missing:hover {
   background: var(--accent-soft);
-}
-
-.proc-row-gap {
-  margin-top: 14px;
-}
-.proc-detail .proc-pick {
-  flex: none;
-  width: 240px;
-  padding: 5px 10px;
 }

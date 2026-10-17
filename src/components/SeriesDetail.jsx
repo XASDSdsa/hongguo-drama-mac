@@ -23,19 +23,6 @@ const DRAFT_MODES = [
   ],
 ];
 
-/** 「1,3,5-8」→ [1,3,5,6,7,8]；写错的部分直接忽略。 */
-export function parseEpisodeNumbers(text) {
-  const out = new Set();
-  for (const part of String(text || '').split(/[,，、\s]+/)) {
-    const range = /^(\d{1,4})\s*[-~－—到]\s*(\d{1,4})$/.exec(part);
-    if (range) {
-      const [from, to] = [Number(range[1]), Number(range[2])].sort((a, b) => a - b);
-      for (let n = from; n <= Math.min(to, from + 999); n++) out.add(n);
-    } else if (/^\d{1,4}$/.test(part) && Number(part) > 0) out.add(Number(part));
-  }
-  return [...out].sort((a, b) => a - b);
-}
-
 function readJson(key) {
   try {
     return JSON.parse(window.localStorage.getItem(key) || '{}') || {};
@@ -88,13 +75,11 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const view = useRef(readJson(VIEW_KEY)).current;
   const [opts, setOpts] = useState(null);
   const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
-  const [mode, setMode] = useState(saved.mode === 'episode' ? 'episode' : 'resplit');
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
-  const [draftScope, setDraftScope] = useState(saved.draftScope === 'pick' ? 'pick' : 'first');
+  const [draftFrom, setDraftFrom] = useState(Math.max(1, Math.floor(Number(saved.draftFrom)) || 1));
   const [draftCount, setDraftCount] = useState(Math.max(1, Math.floor(Number(saved.draftCount)) || 4));
-  const [draftPick, setDraftPick] = useState(String(saved.draftPick || ''));
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
@@ -149,10 +134,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       setDetail((previous) =>
         previous ? { ...previous, missing: fresh.missing, remoteUpdatedAt: fresh.remoteUpdatedAt } : previous,
       );
+      // 核对成功不用说；没连上才提醒一句。
       setRemoteNote(
-        fresh.refreshed
-          ? '缺集状态已和来源平台核对。'
-          : `没连上来源平台，缺集状态按上次记录（${formatTime(fresh.remoteUpdatedAt)}）判断。`,
+        fresh.refreshed ? '' : `没连上来源平台，缺集状态按上次记录（${formatTime(fresh.remoteUpdatedAt)}）判断。`,
       );
     } else setRemoteNote('');
   }, [folder.path, folder.source, folder.totalEpisodes]);
@@ -212,19 +196,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   }, [saved]);
 
   useEffect(() => {
-    if (opts)
-      writeJson(STORAGE_KEY, {
-        opts,
-        split,
-        mode,
-        dedupOn,
-        draftOn,
-        draftMode,
-        draftScope,
-        draftCount,
-        draftPick,
-      });
-  }, [opts, split, mode, dedupOn, draftOn, draftMode, draftScope, draftCount, draftPick]);
+    if (opts) writeJson(STORAGE_KEY, { opts, split, dedupOn, draftOn, draftMode, draftFrom, draftCount });
+  }, [opts, split, dedupOn, draftOn, draftMode, draftFrom, draftCount]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
   }, [pageSize]);
@@ -239,16 +212,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   };
 
   const episodes = detail?.episodes || [];
-  const allSelected = episodes.length > 0 && selected.size === episodes.length;
   const selectedCount = useMemo(() => episodes.filter((item) => selected.has(item.path)).length, [episodes, selected]);
-
-  const toggle = (file) =>
-    setSelected((previous) => {
-      const next = new Set(previous);
-      if (next.has(file)) next.delete(file);
-      else next.add(file);
-      return next;
-    });
 
   // 重新拆分按时间线处理：整部，或从第一集起的前 N 集，不能跳着选。
   const isPrefix = selectedCount > 0 && episodes.slice(0, selectedCount).every((item) => selected.has(item.path));
@@ -257,24 +221,23 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     setSelected(new Set(episodes.slice(0, size).map((item) => item.path)));
   };
   const clickEpisode = (episode, position) => {
-    if (mode !== 'resplit') return toggle(episode.path);
     // 点第 N 集 = 处理到这一集为止；再点最后选中的那一集 = 往回缩一集。
     setPrefix(selected.has(episode.path) && position === selectedCount - 1 ? position : position + 1);
   };
   useEffect(() => {
     // 切到「重新拆分」时，如果现在的选择不是从第一集起的连续前缀，就改成整部。
-    if (mode === 'resplit' && episodes.length && selectedCount > 0 && !isPrefix) setPrefix(episodes.length);
+    if (episodes.length && selectedCount > 0 && !isPrefix) setPrefix(episodes.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, episodes.length, selectedCount, isPrefix]);
+  }, [episodes.length, selectedCount, isPrefix]);
 
   // 预览：按选中的集和当前参数估算会得到多少集（改参数、改范围后稍等一下自动更新）。
   const selectedKey = episodes
     .filter((item) => selected.has(item.path))
     .map((item) => item.path)
     .join('|');
-  const estimateKey = JSON.stringify([selectedKey, mode, split, opts?.speed_min, opts?.speed_max, opts?.black_intro]);
+  const estimateKey = JSON.stringify([selectedKey, split, opts?.speed_min, opts?.speed_max, opts?.black_intro]);
   useEffect(() => {
-    if (mode !== 'resplit' || !detail?.dir || !selectedKey || !opts || !isPrefix) {
+    if (!detail?.dir || !selectedKey || !opts || !isPrefix) {
       setEstimate({ loading: false, data: null, error: '' });
       return undefined;
     }
@@ -338,7 +301,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     const result = await window.electronAPI.libraryDedup({
       dir: detail.dir,
       dedup: dedupOn,
-      mode,
+      mode: 'resplit',
       files: episodes.filter((item) => selected.has(item.path)).map((item) => item.path),
       opts,
       split,
@@ -373,11 +336,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
         : activity?.draft?.status === 'running'
           ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
           : '';
-  const pickNumbers = parseEpisodeNumbers(draftPick);
-  const draftScopeValue =
-    draftScope === 'pick' ? { mode: 'pick', numbers: pickNumbers } : { mode: 'first', count: draftCount };
-  const draftBlocked = draftOn && draftScope === 'pick' && !pickNumbers.length;
-  const nothingToDo = (dedupOn ? !selectedCount : !draftOn) || draftBlocked;
+  const draftScopeValue = { from: draftFrom, count: draftCount };
+  const nothingToDo = dedupOn ? !selectedCount : !draftOn;
 
   const hopeless = (decision?.blocking || [])
     .filter((item) => item.reason && item.reason.retryHelps === false)
@@ -387,14 +347,10 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
   const est = estimate.data;
   const estimateText =
-    mode === 'resplit'
-      ? estimate.loading && !est
-        ? '正在估算会得到多少集…'
-        : est && est.count > 0
-          ? `预计生成约 ${est.count} 集（大致 ${est.minCount}–${est.maxCount} 集），每集 ${est.finalMin}–${est.finalMax} 秒`
-          : ''
-      : selectedCount
-        ? `将按原集去重 ${selectedCount} 集，一集出一集`
+    estimate.loading && !est
+      ? '正在估算…'
+      : est && est.count > 0
+        ? `每集 ${est.finalMin}–${est.finalMax} 秒，预计约 ${est.count} 集`
         : '';
   const startLabel = dedupOn ? `开始处理（${selectedCount} 集）` : '开始处理';
 
@@ -422,9 +378,6 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             {folder.imported ? '导入的文件夹' : folder.source || '下载目录'}
             {` · 已有 ${downloaded} 集`}
             {total > 0 && ` / 共 ${total} 集`}
-            <span className="lib-detail-path" title={folder.path}>
-              {folder.path}
-            </span>
           </div>
           {detail?.synopsis && <p className="lib-synopsis">{detail.synopsis}</p>}
         </div>
@@ -461,68 +414,35 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
           <section className="lib-section" aria-label="剧集">
             <div className="lib-toolbar">
-              {mode === 'resplit' ? (
-                <>
-                  <span>
-                    {selectedCount === episodes.length
-                      ? `处理范围：整部（${episodes.length} 集）`
-                      : `处理范围：第 1 集起的前 ${selectedCount} 集（共 ${episodes.length} 集）`}
-                  </span>
-                  <span className="lib-toolbar-btns">
-                    <label className="lib-number">
-                      只处理前
-                      <input
-                        className="input-field"
-                        type="number"
-                        min="1"
-                        max={episodes.length || 1}
-                        value={selectedCount || ''}
-                        onChange={(e) => setPrefix(e.target.value)}
-                        disabled={submitting || !episodes.length}
-                        aria-label="只处理前几集"
-                      />
-                      集
-                    </label>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => setPrefix(episodes.length)}
-                      disabled={selectedCount === episodes.length}
-                    >
-                      整部
-                    </button>
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span>
-                    已选 {selectedCount} / {episodes.length} 集
-                  </span>
-                  <span className="lib-toolbar-btns">
-                    <button
-                      className="btn btn-sm"
-                      onClick={() =>
-                        setSelected((previous) => {
-                          const next = new Set(previous);
-                          for (const card of visible) if (card.kind === 'episode') next.add(card.episode.path);
-                          return next;
-                        })
-                      }
-                    >
-                      选本页
-                    </button>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => setSelected(allSelected ? new Set() : new Set(episodes.map((e) => e.path)))}
-                    >
-                      {allSelected ? '全不选' : '全选'}
-                    </button>
-                  </span>
-                </>
-              )}
+              <span>
+                {selectedCount === episodes.length
+                  ? `处理整部（${episodes.length} 集）`
+                  : `处理前 ${selectedCount} 集（共 ${episodes.length} 集）`}
+              </span>
+              <span className="lib-toolbar-btns">
+                <label className="lib-number">
+                  只处理前
+                  <input
+                    className="input-field"
+                    type="number"
+                    min="1"
+                    max={episodes.length || 1}
+                    value={selectedCount || ''}
+                    onChange={(e) => setPrefix(e.target.value)}
+                    disabled={submitting || !episodes.length}
+                    aria-label="只处理前几集"
+                  />
+                  集
+                </label>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setPrefix(episodes.length)}
+                  disabled={selectedCount === episodes.length}
+                >
+                  整部
+                </button>
+              </span>
             </div>
-            {mode === 'resplit' && episodes.length > 0 && (
-              <p className="lib-range-hint">按时间线从第一集开始连续处理，点某一集就是处理到这一集为止，不能跳着选。</p>
-            )}
             {remoteNote && <div className="lib-remote-note">{remoteNote}</div>}
             {!episodes.length && !loading && <div className="lib-empty">这个文件夹里没有视频。</div>}
 
@@ -591,194 +511,113 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
           </section>
 
           <section className="proc-panel" aria-label="处理">
-            <div className="proc-head">
-              <h3>处理</h3>
-              <span className="proc-out" title={`成品放进：${detail.outputDir}`}>
-                成品放进「{detail.outputDir ? detail.outputDir.split(/[\\/]/).filter(Boolean).pop() : '去重'}」
-              </span>
-            </div>
+            <h3>处理</h3>
 
-            <div className={`proc-block ${dedupOn ? '' : 'is-off'}`}>
-              <label className="proc-check">
-                <input
-                  type="checkbox"
-                  checked={dedupOn}
-                  onChange={(e) => setDedupOn(e.target.checked)}
-                  disabled={submitting}
-                />
-                <span className="proc-check-text">
+            <div className="proc-item">
+              <div className="proc-line">
+                <label className="proc-check">
+                  <input
+                    type="checkbox"
+                    checked={dedupOn}
+                    onChange={(e) => setDedupOn(e.target.checked)}
+                    disabled={submitting}
+                  />
                   <b>视频去重</b>
-                  <small>改变画面和声音的指纹，每集成品放进「去重」文件夹</small>
-                </span>
-              </label>
-              {dedupOn && (
-                <div className="proc-detail">
-                  <div className="proc-row">
-                    <div className="seg" role="radiogroup" aria-label="处理方式">
-                      {[
-                        ['resplit', '重新拆分', '选中的集接起来，按成品时长重新切成新的集，再去重'],
-                        ['episode', '按原集去重', '一集出一集，不改变集数'],
-                      ].map(([id, label, hint]) => (
-                        <label key={id} className={`seg-item ${mode === id ? 'is-active' : ''}`} title={hint}>
-                          <input
-                            type="radio"
-                            name="lib-mode"
-                            checked={mode === id}
-                            onChange={() => setMode(id)}
-                            disabled={submitting}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
-                    {mode === 'resplit' && (
-                      <label className="lib-number">
-                        新集从第
-                        <input
-                          className="input-field"
-                          type="number"
-                          min="1"
-                          max="9999"
-                          value={split.start_number}
-                          onChange={(e) =>
-                            setSplit({ ...split, start_number: Math.max(1, Math.floor(Number(e.target.value)) || 1) })
-                          }
-                          disabled={submitting}
-                        />
-                        集开始编号
-                      </label>
-                    )}
-                    <button className="btn btn-sm proc-more" onClick={() => setShowParams((value) => !value)}>
-                      {showParams ? '收起参数' : '去重参数'}
-                    </button>
-                  </div>
-                  <p className="proc-hint">
-                    {mode === 'resplit'
-                      ? '选中的集按时间线接起来，再按成品时长重新切成新的集。'
-                      : '一集出一集，不改变集数。'}
-                  </p>
-                  {estimateText && <div className="lib-estimate">{estimateText}</div>}
-                  {showParams && opts && (
-                    <div ref={paramsRef} className="lib-params-card">
-                      <DedupParams
-                        opts={opts}
-                        onChange={(k, v) => setOpts({ ...opts, [k]: v })}
-                        split={mode === 'resplit' ? split : null}
-                        onSplitChange={(k, v) => setSplit({ ...split, [k]: v })}
-                        onReset={resetParams}
-                        disabled={submitting}
-                      />
-                    </div>
-                  )}
+                </label>
+                {dedupOn && (
+                  <span className="proc-summary">{estimateText || `每集 ${split.min_len}–${split.max_len} 秒`}</span>
+                )}
+                {dedupOn && (
+                  <button className="btn btn-sm proc-more" onClick={() => setShowParams((value) => !value)}>
+                    {showParams ? '收起参数' : '参数'}
+                  </button>
+                )}
+              </div>
+              {dedupOn && showParams && opts && (
+                <div ref={paramsRef} className="lib-params-card">
+                  <DedupParams
+                    opts={opts}
+                    onChange={(k, v) => setOpts({ ...opts, [k]: v })}
+                    split={split}
+                    onSplitChange={(k, v) =>
+                      setSplit({ ...split, [k]: k === 'start_number' ? Math.max(1, Math.floor(v) || 1) : v })
+                    }
+                    onReset={resetParams}
+                    disabled={submitting}
+                  />
                 </div>
               )}
             </div>
 
-            <div className="proc-side-title">支线任务</div>
-            <div className={`proc-block ${draftOn ? '' : 'is-off'}`}>
-              <label className="proc-check">
-                <input
-                  type="checkbox"
-                  checked={draftOn}
-                  onChange={(e) => setDraftOn(e.target.checked)}
-                  disabled={submitting}
-                />
-                <span className="proc-check-text">
+            <div className="proc-item">
+              <div className="proc-line">
+                <label className="proc-check">
+                  <input
+                    type="checkbox"
+                    checked={draftOn}
+                    onChange={(e) => setDraftOn(e.target.checked)}
+                    disabled={submitting}
+                  />
                   <b>生成剪映草稿</b>
-                  <small>
-                    {dedupOn ? '去重完成后，从成品里挑几集生成草稿' : '从「去重」文件夹里已有的成品里挑几集生成草稿'}
-                  </small>
-                </span>
-              </label>
+                </label>
+                {!draftOn && <span className="proc-summary">用去重后的成品生成</span>}
+              </div>
               {draftOn && (
-                <div className="proc-detail">
-                  <div className="proc-row">
-                    <span className="proc-label">分轨方式</span>
-                    <div className="seg" role="radiogroup" aria-label="分轨方式">
-                      {DRAFT_MODES.map(([id, label, hint]) => (
-                        <label key={id} className={`seg-item ${draftMode === id ? 'is-active' : ''}`} title={hint}>
-                          <input
-                            type="radio"
-                            name="lib-draft-mode"
-                            checked={draftMode === id}
-                            onChange={() => setDraftMode(id)}
-                            disabled={submitting}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  <p className="proc-hint">{DRAFT_MODES.find(([id]) => id === draftMode)[2]}。</p>
-                  <div className="proc-row proc-row-gap">
-                    <span className="proc-label">做哪几集</span>
-                    <div className="seg" role="radiogroup" aria-label="做哪几集">
-                      {[
-                        ['first', '前几集'],
-                        ['pick', '自己选'],
-                      ].map(([id, label]) => (
-                        <label key={id} className={`seg-item ${draftScope === id ? 'is-active' : ''}`}>
-                          <input
-                            type="radio"
-                            name="lib-draft-scope"
-                            checked={draftScope === id}
-                            onChange={() => setDraftScope(id)}
-                            disabled={submitting}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
-                    {draftScope === 'first' ? (
-                      <label className="lib-number">
-                        成品的前
+                <div className="proc-options">
+                  <div className="seg" role="radiogroup" aria-label="分轨方式">
+                    {DRAFT_MODES.map(([id, label, hint]) => (
+                      <label key={id} className={`seg-item ${draftMode === id ? 'is-active' : ''}`} title={hint}>
                         <input
-                          className="input-field"
-                          type="number"
-                          min="1"
-                          max="999"
-                          value={draftCount}
-                          onChange={(e) => setDraftCount(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
+                          type="radio"
+                          name="lib-draft-mode"
+                          checked={draftMode === id}
+                          onChange={() => setDraftMode(id)}
                           disabled={submitting}
-                          aria-label="成品的前几集"
                         />
-                        集
+                        {label}
                       </label>
-                    ) : (
-                      <input
-                        className="input-field proc-pick"
-                        value={draftPick}
-                        placeholder="成品集号，如 1,3,5-8"
-                        onChange={(e) => setDraftPick(e.target.value)}
-                        disabled={submitting}
-                        aria-label="要做草稿的成品集号"
-                      />
-                    )}
+                    ))}
                   </div>
-                  <p className="proc-hint">
-                    {draftScope === 'first'
-                      ? `按成品集号从小到大取前 ${draftCount} 集（重新拆分后用新集号）。草稿只用去重后的成品。`
-                      : pickNumbers.length
-                        ? `将做成品第 ${pickNumbers.join('、')} 集。集号以去重成品文件名里的「第N集」为准。`
-                        : '填成品的集号，多个用逗号隔开，连续的用短横线，如 1,3,5-8。'}
-                  </p>
+                  <label className="lib-number">
+                    成品从第
+                    <input
+                      className="input-field"
+                      type="number"
+                      min="1"
+                      max="9999"
+                      value={draftFrom}
+                      onChange={(e) => setDraftFrom(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
+                      disabled={submitting}
+                      aria-label="从成品第几集开始"
+                    />
+                    集起，做
+                    <input
+                      className="input-field"
+                      type="number"
+                      min="1"
+                      max="999"
+                      value={draftCount}
+                      onChange={(e) => setDraftCount(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
+                      disabled={submitting}
+                      aria-label="做几集"
+                    />
+                    集
+                  </label>
                 </div>
               )}
             </div>
-            <label className="proc-check is-reserved" title="功能预留，暂未开放">
-              <input type="checkbox" disabled />
-              <span className="proc-check-text">
-                <b>自动生成 AI 分镜工程图</b>
-                <small>预留，暂未开放</small>
-              </span>
-            </label>
-            <label className="proc-check is-reserved" title="功能预留，暂未开放">
-              <input type="checkbox" disabled />
-              <span className="proc-check-text">
-                <b>自动配置成本报告</b>
-                <small>预留，暂未开放</small>
-              </span>
-            </label>
+
+            <div className="proc-item is-reserved" title="功能预留，暂未开放">
+              <label className="proc-check">
+                <input type="checkbox" disabled />
+                <b>AI 分镜工程图</b>
+              </label>
+              <label className="proc-check">
+                <input type="checkbox" disabled />
+                <b>成本配置报告</b>
+              </label>
+              <span className="proc-summary">预留</span>
+            </div>
 
             <div className="proc-foot">
               <div className="proc-foot-info">
@@ -787,7 +626,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               </div>
               <button
                 className="btn btn-primary proc-start"
-                onClick={() => (dedupOn && mode === 'resplit' ? setPreview(true) : submit(undefined))}
+                onClick={() => (dedupOn ? setPreview(true) : submit(undefined))}
                 disabled={submitting || !!activity?.planning || nothingToDo || (dedupOn && !opts)}
               >
                 {startLabel}
