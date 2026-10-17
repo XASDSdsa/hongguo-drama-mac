@@ -11,6 +11,7 @@ const VOICE_TAIL_SAFETY_SECONDS = 0.04;
 const VOICE_TAIL_MAX_SECONDS = 0.6;
 const VOICE_TAIL_RATIO_DB = 18;
 const VOICE_TAIL_MIN_DROP_DB = 12;
+const MASK_FRAME_FILTER = 'asetnsamples=n=64:p=0';
 function sentenceRange(segment, rate) {
   const start = Number.isSafeInteger(segment.start_sample) ? segment.start_sample / rate : Number(segment.start);
   const end = Number.isSafeInteger(segment.end_sample_exclusive) ? segment.end_sample_exclusive / rate : Number(segment.end);
@@ -204,7 +205,10 @@ function timelineFilter(segments, { offset = 0, videoEnd, sourceDuration, sample
       // `if(...,1,0)` expression when passed through child_process.spawn. A
       // conditional mute is equivalent and keeps the original samples inside
       // the selected ranges without multiplying the whole track by zero.
-      filters.push(`volume=0:enable='not(${expression})'`);
+      // `enable` is evaluated once per audio frame, at the frame's start time, so the mask is only
+      // as precise as the frame size, which differs between FFmpeg builds. Small fixed frames keep the
+      // mask edges within about a millisecond whatever the decoder hands over.
+      filters.push(MASK_FRAME_FILTER, `volume=0:enable='not(${expression})'`);
     }
   }
   // Rebase the source stream onto the video timeline. For a positive offset,
@@ -238,7 +242,7 @@ function voiceFilter(segments, options = {}) {
       .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start);
     if (!ranges.length) return 'volume=0';
     const expression = ranges.map(([start, end]) => `between(t,${start.toFixed(6)},${end.toFixed(6)})`).join('+');
-    return `volume=0:enable='not(${expression})'`;
+    return `${MASK_FRAME_FILTER},volume=0:enable='not(${expression})'`;
   }
   return timelineFilter(segments, { ...options, keepOnlySegments: true });
 }

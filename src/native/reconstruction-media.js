@@ -130,10 +130,10 @@ async function normalizeMedia({ ffmpegPath, ffprobePath, media, outputPath, sign
   await fsp.mkdir(path.dirname(outputPath), { recursive: true });
   const temporary = `${outputPath}.${crypto.randomUUID()}.tmp.mp4`;
   try {
+    // ffmpeg applies the rotate tag / display matrix itself when transcoding (autorotate)
+    // and clears the metadata on output. Adding transpose here would rotate a second time,
+    // so only the frame rate is normalised; the re-probed output carries the final size.
     const filters = [`fps=${fps}`];
-    if (Number(media.rotation) === 90) filters.push('transpose=1');
-    if (Number(media.rotation) === -90 || Number(media.rotation) === 270) filters.push('transpose=2');
-    if (Number(media.rotation) === 180 || Number(media.rotation) === -180) filters.push('hflip,vflip');
     await runProcess(ffmpegPath, [
       '-y', '-hide_banner', '-loglevel', 'error', '-i', media.original_file,
       '-map', '0:v:0', '-map', '0:a?', '-vf', filters.join(','), '-fps_mode', 'cfr',

@@ -51,9 +51,14 @@ async function main() {
   assert.throws(() => voiceSegments(raw, { offset: NaN }, media), /偏移无效/);
   const cuts = [0, .3, .6, .9, 1.2].slice(0, -1).map((start, i) => ({ shot_id: `s${i}`, order: i + 1, start, end: [0, .3, .6, .9, 1.2][i + 1], start_frame: i * 10, end_frame_exclusive: (i + 1) * 10 }));
   const indexed = align(cuts, { ...mapped, voice_timeline: { segments: voices } }, 'test');
-  assert.equal(indexed.shots.length, cuts.length);
+  // Visual cuts at .3 (inside speech) and .9 (pause shorter than 0.2 s) are merged;
+  // only the cut at .6 sits in a real 0.25 s pause, so two output shots remain.
+  assert.deepEqual(indexed.boundary_decisions.map(d => [d.time, d.status]), [[.3, 'merged'], [.6, 'kept'], [.9, 'merged']]);
+  assert.equal(indexed.shots.length, 2);
+  assert.equal(indexed.raw_shot_count, cuts.length);
+  assert.equal(indexed.merged_boundary_count, 2);
   assert.equal(indexed.associations.length, 2);
-  assert.equal(indexed.associations[0].shot_ids.length, 3);
+  assert.equal(indexed.associations[0].shot_ids.length, 2);
   // Audio-confirmed continuity crosses both an ASR window and a visual cut;
   // wrong punctuation must remain text, never become another voice clip.
   const continuousSpan={...span(.1,.9,'vad:a'),source_segment_ids:['vad:a','vad:b']};
@@ -64,7 +69,9 @@ async function main() {
   near(continuousVoices[0].start,continuousText.utterances[0].start);
   near(continuousVoices[0].end,continuousText.utterances[0].end);
   const continuousIndex=align(cuts,{...continuousText,voice_timeline:{segments:continuousVoices}},'continuous');
-  assert.equal(continuousIndex.associations[0].shot_ids.length,4);
+  // Continuous speech covers every visual cut, so nothing may be cut inside it.
+  assert.equal(continuousIndex.shots.length,1);
+  assert.equal(continuousIndex.associations[0].shot_ids.length,1);
   assert.equal(continuousText.utterances[0].text,'突破汉月。五、品');
   const punctuation = { ...raw, alignment_summary: { sentences: 3 }, segments: [
     { ...span(.1, .3, 'vad:a'), text: '桥，', speech_spans: [span(.1, .3, 'vad:a')] },
@@ -85,7 +92,9 @@ async function main() {
   assert.equal(clauseVoices[2].end, clauses.utterances[2].end);
   assert.deepEqual(clauseVoices.map(item => item.utterance_id), clauses.utterances.map(item => item.utterance_id));
   const clauseIndex = align(cuts, { ...clauses, voice_timeline: { segments: clauseVoices } }, 'punctuation');
-  assert.deepEqual(clauseIndex.shots.map(item => [item.start, item.end]), cuts.map(item => [item.start, item.end]));
+  // Clause voices touch each other (no 0.2 s pause), so punctuation alone must not keep any visual cut.
+  assert.deepEqual(clauseIndex.shots.map(item => [item.start, item.end]), [[0, 1.2]]);
+  assert.equal(clauseIndex.merged_boundary_count, cuts.length - 1);
   assert.equal(clauseIndex.associations.length, 3);
 
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'speech-sentence-test-'));
@@ -110,7 +119,7 @@ async function main() {
     assert.equal(pcm.length / 2, 19200);
     assert(rms(.25,.32)>500); assert(rms(.45,.55)<1); assert(rms(.67,.73)>500);
     assert.match(voiceFilter(voices), /between/);
-    console.log('PASS speech mapping: pre-segmented text/voice boundaries, unchanged visual cuts, metadata, offsets, no duplicate/lost spans, real silent gaps, raw→alignment CLI sequence');
+    console.log('PASS speech mapping: pre-segmented text/voice boundaries, breath-gated visual cuts, metadata, offsets, no duplicate/lost spans, real silent gaps, raw→alignment CLI sequence');
   } finally { await fs.rm(temp, { recursive:true, force:true }); }
 }
 main().catch(error => { console.error(error); process.exitCode=1; });

@@ -99,7 +99,7 @@ async function main(){
  const shot=envelope('task',{shots:[{shot_id:'left',start:0,end:.04,start_frame:0,end_frame_exclusive:1},{shot_id:'right',start:.04,end:.16,start_frame:1,end_frame_exclusive:3}]});
  const t=mapTranscript({sample_rate:16000,duration:.2,segments:[{start_sample:0,end_sample_exclusive:1600,text:'跨镜头的话'}]},{offset:.02},m,'task');
  t.voice_timeline={segments:t.utterances.map(u=>({segment_id:`${u.utterance_id}:voice:1`,utterance_id:u.utterance_id,start:u.start,end:u.end}))};
- const vs=voiceSegments({segments:[{start:.02,end:.08,text:'说话'}]},{offset:.01},{video_end:.2});assert.deepEqual(vs.map(x=>[x.start,x.end]),[[.03,.09]]);assert.match(voiceFilter(vs),/^volume=0:enable='not\(/);assert.equal(voiceFilter([]),'volume=0');
+ const vs=voiceSegments({segments:[{start:.02,end:.08,text:'说话'}]},{offset:.01},{video_end:.2});assert.deepEqual(vs.map(x=>[x.start,x.end]),[[.03,.09]]);assert.match(voiceFilter(vs),/^asetnsamples=n=64:p=0,volume=0:enable='not\(/);assert.equal(voiceFilter([]),'volume=0');
  // VAD-only intervals are candidates for ASR, not confirmed human speech.
  // They must be muted in place instead of being copied into the vocal track.
  const vadOnly=voiceSegments({segments:[],vad_segments:[{start:.10,end:.16,text:''}]},{offset:.01},{video_end:.2});assert.deepEqual(vadOnly,[]);assert.equal(voiceFilter(vadOnly),'volume=0');
