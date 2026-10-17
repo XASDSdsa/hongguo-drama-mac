@@ -7,6 +7,10 @@ on:
         description: Existing GitHub release tag to receive the macOS asset
         required: true
         default: v1.1.30
+  # Branch build of the shot-breath cut. Does not check out or upload to v1.1.30.
+  push:
+    branches:
+      - cursor/shot-breath-cuts-7d93
 
 permissions:
   contents: write
@@ -18,7 +22,9 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          # A manual dispatch still builds the requested tag. A push of this
+          # branch builds that commit and must not fall back to v1.1.30.
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.tag }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -101,13 +107,38 @@ jobs:
           cp "dist/红果短剧-${version}-mac-arm64.dmg" "dist/release/hongguo-downloader-${version}-mac-arm64.dmg"
           shasum -a 256 "dist/release/hongguo-downloader-${version}-mac-arm64.dmg" > "dist/release/hongguo-downloader-${version}-mac-arm64.sha256"
 
+      - name: Keep a workflow artifact copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: hongguo-downloader-${{ github.event_name == 'push' && 'shot-breath' || inputs.tag }}-macos
+          path: dist/release/*
+          retention-days: 90
+
       - name: Upload macOS assets to the release
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
 
-      - name: Keep a workflow artifact copy
-        uses: actions/upload-artifact@v4
-        with:
-          name: hongguo-downloader-${{ inputs.tag }}-macos
-          path: dist/release/*
+      - name: Publish branch DMG without touching v1.1.30
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v1.1.30-shot-breath"
+          if [ "$tag" = "v1.1.30" ]; then
+            echo "refusing to publish onto the official v1.1.30 release" >&2
+            exit 1
+          fi
+          notes="Apple Silicon DMG from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Not the official v1.1.30 release; that release's assets are left unchanged."
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/release/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$tag" dist/release/* \
+              --repo "${{ github.repository }}" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "macOS arm64 气口切断试用" \
+              --notes "$notes"
+          fi
