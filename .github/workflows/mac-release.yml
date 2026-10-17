@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub release tag to receive the macOS asset. Never v1.1.30.
-        required: true
-        default: v1.1.41
+        description: Existing GitHub release tag to receive the macOS asset (leave empty to only keep a workflow artifact). Never v1.1.30.
+        required: false
+        default: ''
+      ref:
+        description: Branch, tag or commit to build. Defaults to the tag when one is given, otherwise main.
+        required: false
+        default: ''
   # Build this branch's Apple Silicon DMG. Do not check out or upload to v1.1.30.
   push:
     branches:
@@ -30,7 +34,7 @@ jobs:
         with:
           # A manual dispatch builds the requested tag. A push of this branch
           # builds that commit and must not fall back to v1.1.30.
-          ref: ${{ github.event_name == 'push' && github.sha || inputs.tag }}
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.ref || inputs.tag || 'main' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -120,7 +124,7 @@ jobs:
           shasum -a 256 "dist/release/hongguo-downloader-${version}-mac-arm64.dmg" > "dist/release/hongguo-downloader-${version}-mac-arm64.sha256"
 
       - name: Upload macOS assets to the release
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -156,5 +160,5 @@ jobs:
       - name: Keep a workflow artifact copy
         uses: actions/upload-artifact@v4
         with:
-          name: hongguo-downloader-${{ github.event_name == 'push' && '1.1.41-breath-on-shot' || inputs.tag }}-macos
+          name: hongguo-downloader-${{ github.event_name == 'push' && '1.1.41-breath-on-shot' || inputs.tag || github.sha }}-macos
           path: dist/release/*
