@@ -1993,6 +1993,7 @@ function logDownloadFailure(task) {
       path.join(downloadRoot(), claimed),
       'error',
       `第 ${task.hongguoInfo?.vid_index ?? '?'} 集下载失败：${reason.label}。${reason.text}${reason.detail ? `（${reason.detail}）` : ''}`,
+      'side',
     );
   } catch (_) {
     /* 记日志失败不影响下载。 */
@@ -2445,10 +2446,10 @@ function libraryLog() {
   }
   return activityLogStore;
 }
-function libLog(dir, level, text) {
+function libLog(dir, level, text, channel = 'main') {
   if (!dir) return;
   try {
-    libraryLog().add(dir, level, text);
+    libraryLog().add(dir, level, text, channel);
   } catch (_) {
     /* 日志写不进去不影响处理本身。 */
   }
@@ -3592,6 +3593,7 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
     const controller = new AbortController();
     const job = { status: 'running', stage: 'copy', message: '准备中', controller };
     publishJobs.set(context.dir, job);
+    libLog(context.dir, 'info', '发布素材：开始生成（海报、简介、标题）', 'side');
     publishNotify(context.dir);
     const settings = getCurrentSettings();
     (async () => {
@@ -3610,6 +3612,7 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
             signal: controller.signal,
             keepCopy: payload.keepCopy === true,
             onProgress: ({ stage, message }) => {
+              if (message && message !== job.message) libLog(context.dir, 'info', `发布素材：${message}`, 'side');
               job.stage = stage;
               job.message = message;
               publishNotify(context.dir);
@@ -3618,10 +3621,13 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
         );
         job.status = 'done';
         job.message = '已完成';
+        libLog(context.dir, 'ok', '发布素材：全部生成完成', 'side');
       } catch (error) {
         job.status = controller.signal.aborted ? 'cancelled' : 'failed';
         job.error = controller.signal.aborted ? '' : aiRedact(error);
         job.message = controller.signal.aborted ? '已取消' : '生成失败';
+        if (controller.signal.aborted) libLog(context.dir, 'warn', '发布素材：已取消', 'side');
+        else libLog(context.dir, 'error', `发布素材：生成失败：${job.error}`, 'side');
       } finally {
         publishNotify(context.dir);
       }
@@ -3658,6 +3664,7 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
         layout: payload.layout,
       }),
     );
+    libLog(context.dir, 'ok', '发布素材：已按新的标题/样式重新排版海报', 'side');
     return { success: true, result: publishResultView(context) };
   } catch (error) {
     return { success: false, error: aiRedact(error) };

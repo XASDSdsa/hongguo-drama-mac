@@ -28,6 +28,11 @@ assert.deepEqual(
   ],
   'unknown levels fall back to info',
 );
+assert.deepEqual(
+  log.list('/d/A').map((line) => line.channel),
+  ['main', 'main', 'main'],
+  'lines default to the main-task log',
+);
 assert.deepEqual(log.list('/d/B'), [], 'another series has its own log');
 for (let i = 4; i <= 9; i++) log.add('/d/A', 'info', String(i));
 assert.deepEqual(
@@ -36,6 +41,8 @@ assert.deepEqual(
   'keeps only the newest perDir lines',
 );
 assert.equal(log.add('', 'info', 'x'), null, 'no folder, no log');
+assert.equal(log.add('/d/A', 'info', '海报', 'side').channel, 'side', 'side-task lines keep their channel');
+assert.equal(log.add('/d/A', 'info', 'x', 'weird').channel, 'main', 'unknown channels fall back to main');
 log.add('/d/B', 'ok', 'b');
 log.add('/d/C', 'ok', 'c');
 assert.deepEqual(log.list('/d/A'), [], 'the least recently written series is dropped beyond maxDirs');

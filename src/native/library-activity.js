@@ -51,12 +51,17 @@ function createActivityLog({ file, perDir = 300, maxDirs = 100, now = Date.now, 
   };
 
   return {
-    add(dir, level, text) {
+    add(dir, level, text, channel = 'main') {
       if (!dir || !text) return null;
       const map = load();
       const key = dirKey(dir);
       const entry = map.get(key) || { dir: path.resolve(String(dir)), lines: [] };
-      const line = { t: now(), level: LEVELS.has(level) ? level : 'info', text: String(text).slice(0, 600) };
+      const line = {
+        t: now(),
+        level: LEVELS.has(level) ? level : 'info',
+        text: String(text).slice(0, 600),
+        channel: channel === 'side' ? 'side' : 'main',
+      };
       entry.lines.push(line);
       if (entry.lines.length > perDir) entry.lines.splice(0, entry.lines.length - perDir);
       map.delete(key);

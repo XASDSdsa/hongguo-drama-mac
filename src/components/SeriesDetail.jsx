@@ -515,10 +515,6 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             </section>
           )}
 
-          <div ref={progressRef}>
-            <SeriesProgress dir={detail.dir} activity={activity} onChanged={refreshActivity} />
-          </div>
-
           {showParams && opts && (
             <div ref={paramsRef} className="lib-params-card">
               <DedupParams
@@ -531,6 +527,10 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               />
             </div>
           )}
+
+          <div ref={progressRef}>
+            <SeriesProgress dir={detail.dir} activity={activity} onChanged={refreshActivity} />
+          </div>
 
           <div className="lib-bar">
             <div className="lib-foot-info">
