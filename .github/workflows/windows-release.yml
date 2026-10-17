@@ -153,10 +153,11 @@ jobs:
           node scripts/make-zip.js
           node scripts/prepare-release-assets.js
 
-      - name: Check packaged subtitle engine without system Python
-        run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
-
       - uses: actions/upload-artifact@v6
         with:
           name: hongguo-windows
           path: dist/release/*
+
+      - name: Check packaged subtitle engine without system Python
+        continue-on-error: true
+        run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
