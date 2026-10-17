@@ -236,6 +236,10 @@ export default function SeriesEpisodePanel({
             {source} · 共 {episodes.length} 集 · 已下载 <b>{completed}</b> 集
           </p>
           <p className="sep-updated">上次更新：{formatUpdatedAt(updatedAt)}</p>
+          <details className="sep-synopsis">
+            <summary>剧情简介</summary>
+            <p>{detail?.synopsis || '来源平台暂未提供简介，或还没读取到。点“更新剧集”可重新读取。'}</p>
+          </details>
           <p className="sep-hint">绿色为已下载，勾选未下载集数可继续下载。</p>
           <div className="sep-range-row">
             <input

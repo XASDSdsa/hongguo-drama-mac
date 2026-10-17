@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { pickSynopsis } = require('./synopsis');
 
 const ORIGIN = 'https://www.kuaikaw.cn';
 const ID = /^\d{1,30}$/;
@@ -151,7 +152,8 @@ async function fetchEpisodeList(seriesId) {
     }))
     .sort((a, b) => a.vid_index - b.vid_index);
   if (!episodes.length) throw new Error('河马分集列表为空');
-  return { series_id: seriesId, series_title, cover, total: episodes.length, episodes, source: 'hema' };
+  const synopsis = pickSynopsis(result.bookInfoVo);
+  return { series_id: seriesId, series_title, cover, synopsis, total: episodes.length, episodes, source: 'hema' };
 }
 
 async function fetchPlayUrlSingle(vid, sid) {

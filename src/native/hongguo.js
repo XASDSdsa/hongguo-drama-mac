@@ -1,3 +1,4 @@
+const { pickSynopsis, pickSynopsisFromText } = require('./synopsis');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
@@ -224,6 +225,7 @@ async function fetchEpisodeListFromWeb(seriesId) {
     cover: cover || (episodes[0] && episodes[0].cover) || '',
     total: episodes.length,
     web_accessible_episodes: webAccessibleEpisodes,
+    synopsis: pickSynopsisFromText(html),
     episodes,
     source: 'web', // 标记来源，便于排查
   };
@@ -352,6 +354,7 @@ async function fetchEpisodeListFresh(seriesId) {
     series_id: String(sid),
     series_title: vd.series_title || '未命名短剧',
     cover: vd.series_cover || vd.cover_url || (eps[0] && eps[0].cover) || '',
+    synopsis: pickSynopsis(vd),
     total: eps.length,
     episodes: eps,
   };

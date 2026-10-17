@@ -83,7 +83,9 @@ async function check() {
             get: (url, options) => request('GET', url, null, options),
             post: (url, body, options) => request('POST', url, body, options),
           }
-        : require(name),
+        : name === './synopsis'
+          ? require('../src/native/synopsis')
+          : require(name),
     Buffer,
     URL,
     AbortController,

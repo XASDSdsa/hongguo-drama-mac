@@ -67,7 +67,8 @@ async function check() {
   };
   const context = {
     module: { exports: {} },
-    require: (name) => (name === 'axios' ? axios : require(name)),
+    require: (name) =>
+      name === 'axios' ? axios : name === './synopsis' ? require('../src/native/synopsis') : require(name),
     Buffer,
     URL,
     AbortController,
@@ -128,7 +129,9 @@ async function check() {
                 throw Error('西饭不得回退红果');
               },
             }
-          : require(name),
+          : name === './synopsis'
+            ? require('../src/native/synopsis')
+            : require(name),
     console,
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/native/hongguo.js'), 'utf8'), nativeContext);

@@ -244,3 +244,20 @@
     margin-left: 0;
   }
 }
+
+.sep-synopsis {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.sep-synopsis summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.sep-synopsis p {
+  margin: 6px 0 0;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}

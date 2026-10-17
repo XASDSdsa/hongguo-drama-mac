@@ -1546,6 +1546,8 @@ function upsertSeriesRegistry(data) {
     // 远端偶发返回空标题/封面时，继续使用本地已知值，避免一次失败响应冲掉展示信息。
     series_title: data.series_title || previous?.series_title || '未命名短剧',
     cover: data.cover || previous?.cover || '',
+    // 来源平台的原始简介；这次没读到时沿用之前存的，避免一次异常响应把它清空。
+    synopsis: data.synopsis || previous?.synopsis || '',
     total: data.episodes.length,
     web_accessible_episodes: data.web_accessible_episodes ?? previous?.web_accessible_episodes ?? null,
     episodes: data.episodes.map((e) => ({
@@ -3389,6 +3391,7 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
         series_id: sid,
         series_title: seriesTitle,
         cover: (entry && entry.cover) || '',
+        synopsis: (entry && entry.synopsis) || '',
         aiCover: aiValidCover(entry),
         episodeCopies: Object.fromEntries(
           (entry?.episodes || [])
@@ -5022,6 +5025,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
     transcript,
     {
       seriesTitle: latest.series_title,
+      seriesSynopsis: latest.synopsis || '',
       episodeIndex: task.episodeIndex,
       episodeTitle: task.productId ? `最终成品（第 ${productIndices.join('、')} 集）` : episode?.title || '',
       signal,

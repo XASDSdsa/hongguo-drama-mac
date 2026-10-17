@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { pickSynopsis } = require('./synopsis');
 
 const API = 'https://xifan-api-cn.youlishipin.com';
 const ID = /^[a-zA-Z0-9_-]{1,200}$/;
@@ -177,7 +178,8 @@ async function fetchEpisodeList(seriesId) {
     }))
     .sort((a, b) => a.vid_index - b.vid_index);
   if (!episodes.length) throw new Error('西饭分集列表为空');
-  return { series_id: seriesId, series_title, cover, total: episodes.length, episodes, source: 'xifan' };
+  const synopsis = pickSynopsis(result);
+  return { series_id: seriesId, series_title, cover, synopsis, total: episodes.length, episodes, source: 'xifan' };
 }
 
 async function fetchPlayUrlSingle(vid, sid) {

@@ -146,7 +146,9 @@ async function check(name, fn) {
                   throw Error('wrong source');
                 },
               }
-            : req(n),
+            : n === './synopsis'
+              ? req('./src/native/synopsis')
+              : req(n),
       Buffer,
       URL,
       console,

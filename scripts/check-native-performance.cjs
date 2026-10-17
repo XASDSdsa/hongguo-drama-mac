@@ -48,7 +48,9 @@ function fixture({ web = true, api = false, app = false, blockedVids = [], html 
                 return { url: 'https://media.example/app.mp4', contentKey: '01'.repeat(16), source: 'app' };
               },
             }
-          : require(name),
+          : name === './synopsis'
+            ? require('../src/native/synopsis')
+            : require(name),
     Date: class extends Date {
       static now() {
         return now;

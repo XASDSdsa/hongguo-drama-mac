@@ -282,6 +282,9 @@ async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
   const title = String(metadata.seriesTitle || metadata.title || '未命名短剧');
   const episodeIndex = Number(metadata.episodeIndex) || 0;
   const episodeTitle = String(metadata.episodeTitle || '').trim();
+  const seriesSynopsis = String(metadata.seriesSynopsis || '')
+    .trim()
+    .slice(0, 1200);
   const { payload } = await request(config, '/chat/completions', {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -294,7 +297,9 @@ async function summarizeEpisode(transcript, metadata = {}, baseConfig = {}) {
         },
         {
           role: 'user',
-          content: `剧名：${title}\n集数：${episodeIndex || '未知'}\n分集标题：${episodeTitle || '无'}\n\n转写文本：\n${text}`,
+          content: `剧名：${title}\n${
+            seriesSynopsis ? `来源平台的剧简介（仅供理解背景，不要照抄）：${seriesSynopsis}\n` : ''
+          }集数：${episodeIndex || '未知'}\n分集标题：${episodeTitle || '无'}\n\n转写文本：\n${text}`,
         },
       ],
     }),
