@@ -149,7 +149,16 @@ jobs:
           npm run build:react
 
       - name: Build NSIS installer
-        run: npx electron-builder --win nsis --x64 --publish never
+        shell: bash
+        run: |
+          set +e
+          npx electron-builder --win nsis --x64 --publish never > "$RUNNER_TEMP/nsis.log" 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            msg=$(tail -n 25 "$RUNNER_TEMP/nsis.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=NSIS build log::$msg"
+          fi
+          exit $code
 
       - name: Build portable executable
         run: npx electron-builder --win portable --x64 --publish never
