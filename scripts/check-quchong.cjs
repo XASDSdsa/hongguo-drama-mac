@@ -464,17 +464,46 @@ async function main() {
     } catch (error) {
       if (!error.message.includes('已拒绝覆盖')) throw error;
     }
+    // 取消要在任务还在跑的时候发生：机器快的话 50 毫秒任务就跑完了，所以等 ffmpeg 真正启动后立刻取消，
+    // 用一个够长的源视频，避免「任务先跑完」造成偶发失败。
+    const longSrc = path.join(dir, 'long-source.mp4');
+    await execFileAsync(ffmpeg, [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=size=1280x720:rate=30',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:sample_rate=48000',
+      '-t',
+      '120',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-shortest',
+      longSrc,
+    ]);
     const cancelDst = path.join(dir, 'cancel.mp4');
     const controller = new AbortController();
     const cancelled = quchong.runJob({
       ffmpegPath: ffmpeg,
       ffprobePath: ffprobe,
-      src,
+      src: longSrc,
       dst: cancelDst,
       opts,
       signal: controller.signal,
     });
-    setTimeout(() => controller.abort(), 50);
+    setTimeout(() => controller.abort(), 300);
     try {
       await cancelled;
       throw new Error('取消没有中断任务');
