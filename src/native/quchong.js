@@ -207,12 +207,16 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
       'setsar=1',
     );
   }
+  // rgbashift 只能在 RGB 里做，噪点也留在 RGB 里加（和以前的画面效果、码率一致），
+  // 加完立刻转回 yuv420p：以前整条后续滤镜链都按 4:4:4 全分辨率在跑，数据量翻倍，白白变慢。
   if (opts.rgb_shift > 0) vf.push(`rgbashift=rh=${opts.rgb_shift}:rv=1:gh=0:gv=0:bh=-${opts.rgb_shift}:bv=1`);
   if (r.NOISE > 0) vf.push(`noise=alls=${r.NOISE}:allf=t`);
+  if (opts.rgb_shift > 0) vf.push('format=yuv420p');
   vf.push('unsharp=5:5:0.8');
   vf.push(`setpts=(PTS-STARTPTS)/${speed.toFixed(6)}`);
   vf.push(`eq=contrast=${opts.contrast}:saturation=${opts.saturation},hue=h=${r.HUE}`);
-  if (opts.vignette) vf.push('vignette=PI/5');
+  // dither=0：关掉暗角自带的逐像素抖动，肉眼看不出，但每帧省不少计算。
+  if (opts.vignette) vf.push('vignette=PI/5:dither=0');
   vf.push(`pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`);
   if (videoDelay > 0) vf.push(`tpad=start_duration=${videoDelay.toFixed(6)}:color=black`);
   if (opts.black_intro) vf.push(`fade=t=in:st=${videoDelay.toFixed(6)}:d=0.3`);
