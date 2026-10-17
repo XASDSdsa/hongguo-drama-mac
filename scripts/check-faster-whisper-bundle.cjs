@@ -9,7 +9,6 @@ function verifyBundle(root, platform, arch) {
   if (!fs.existsSync(manifestFile)) throw new Error(`缺少内置字幕引擎 ${target}。请在对应系统构建机运行 npm run setup:transcription；不能发布缺少运行时的安装包。`);
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   if (manifest.platform !== target || manifest.offlineSelfTest !== true) throw new Error('字幕引擎未通过离线识别检查');
-  if (manifest.sceneDetectSelfTest !== true) throw new Error('内置镜头检测尚未通过离线检查，请在构建机运行 npm run setup:transcription');
   if (manifest.sentenceAlignmentSelfTest !== true || manifest.sentenceAlignmentAlgorithm !== 'whisper-audio-pause-v4') throw new Error('内置句级声学对齐尚未通过离线检查，请在构建机运行 npm run setup:transcription');
   if (platform === 'darwin' && (!manifest.minimumMacOS || Number(manifest.minimumMacOS) > 13)) throw new Error('字幕引擎尚未通过 macOS 13 兼容性检查，请重新构建');
   const files = [platform === 'win32' ? 'hongguo-transcribe.exe' : 'hongguo-transcribe', 'models/tiny/model.bin', 'models/tiny/config.json', 'models/tiny/tokenizer.json', 'models/tiny/vocabulary.txt'];

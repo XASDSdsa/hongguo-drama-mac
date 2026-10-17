@@ -36,7 +36,6 @@
     "check:structure-bundle": "node scripts/check-video-structure-bundle.cjs",
     "check:structure-ui": "npm run build:react && electron scripts/check-video-structure-ui.cjs",
     "setup:jianying": "node scripts/setup-jianying-runtime.cjs",
-    "check:reconstruction": "node scripts/check-reconstruction.cjs",
     "check:dialogue": "node scripts/check-dialogue-boundaries.cjs"
   },
   "dependencies": {

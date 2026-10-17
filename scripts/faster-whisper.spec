@@ -27,7 +27,7 @@ a = Analysis(
     pathex=[str(root), str(root / 'src/native')],
     binaries=binaries,
     datas=datas,
-    hiddenimports=['scenedetect_runner', 'sentence_alignment'] + collect_submodules('av') + collect_submodules('huggingface_hub') + collect_submodules('scenedetect'),
+    hiddenimports=['sentence_alignment'] + collect_submodules('av') + collect_submodules('huggingface_hub'),
     excludes=['torch', 'tensorflow', 'transformers', 'matplotlib', 'scipy', 'pandas', 'IPython'],
     noarchive=False,
 )

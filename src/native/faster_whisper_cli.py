@@ -56,8 +56,6 @@ def probe() -> int:
         "python": sys.executable,
         "faster_whisper": False,
         "cuda": False,
-        "scenedetect": False,
-        "scene_backend": "pyav",
         "bundled": bool(getattr(sys, 'frozen', False)),
         "error": "",
         "sentence_alignment": "whisper-audio-pause-v4",
@@ -69,12 +67,6 @@ def probe() -> int:
         result["cuda"] = detect_cuda()
     except Exception as exc:  # pragma: no cover - depends on user runtime
         result["error"] = str(exc)
-    try:
-        from scenedetect_runner import self_test as scene_self_test
-        scene_self_test()
-        result["scenedetect"] = True
-    except Exception as exc:  # keep transcription capability separate from scene detection
-        result["scene_error"] = str(exc)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     # Probe is a capability query.  A missing package is represented in JSON
     # so the Electron side can show the actionable install/path error instead
@@ -104,8 +96,6 @@ def self_test(args) -> int:
     model = load_model(args)
     segments, _ = model.transcribe(audio, language='zh', beam_size=1, vad_filter=False, word_timestamps=True)
     list(segments)
-    from scenedetect_runner import self_test as scene_self_test
-    scene_self_test()
     from sentence_alignment import align_transcript, whisper_aligner
     # Exercise the acoustic alignment API in the frozen worker, without speech downloads.
     checked = align_transcript({'sample_rate': 16000, 'duration': 1,
@@ -116,7 +106,7 @@ def self_test(args) -> int:
     if any('对齐引擎失败' in row.get('reason', '') for row in checked['warnings']):
         raise RuntimeError('句级声学对齐引擎自检失败')
     print(json.dumps({'ok': True, 'bundled': bool(getattr(sys, 'frozen', False)),
-                      'model': str(args.model), 'device': args.device, 'vad': True, 'scene_detect': True,
+                      'model': str(args.model), 'device': args.device, 'vad': True,
                       'sentence_alignment': 'whisper-audio-pause-v4'}), flush=True)
     return 0
 
@@ -241,10 +231,7 @@ def align_transcript_file(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", action="store_true")
-    parser.add_argument("--scene-detect")
     parser.add_argument("--align-transcript", help="Paraformer 原始 JSON；按真实音频停顿分段并对齐，不改写台词")
-    parser.add_argument("--min-scene-seconds", type=float, default=0.2)
-    parser.add_argument("--adaptive-threshold", type=float, default=3.0)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--input")
@@ -257,13 +244,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.probe:
         return probe()
-    if not args.self_test and not args.scene_detect and (not args.input or not args.output):
+    if not args.self_test and (not args.input or not args.output):
         parser.error("转写需要 --input 和 --output")
     try:
-        if args.scene_detect:
-            from scenedetect_runner import detect
-            print(json.dumps(detect(args.scene_detect, args.min_scene_seconds, args.adaptive_threshold), ensure_ascii=False), flush=True)
-            return 0
         if args.self_test:
             return self_test(args)
         if args.align_transcript:

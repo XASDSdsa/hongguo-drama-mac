@@ -22,7 +22,7 @@ const checks = [
   ['工作流要求气口落在切镜上才切断', main.includes(`manifest.boundary_policy === '${POLICY}'`) && main.includes(`manifest.alignment_algorithm === '${ALGORITHM}'`)],
   ['页面按气口决定画面切断', reconstruction.includes('气口落在切镜上才切') && reconstruction.includes('一口气没断') && reconstruction.includes('不因识别标点') && reconstruction.includes('音频真实停顿分段') && reconstruction.includes('人声字幕') && !reconstruction.includes('不为了台词合并视频') && !reconstruction.includes('逗号等标点分段')],
   ['音频停顿算法贯穿 CLI、构建和发布校验', ['src/native/sentence_alignment.py', 'src/native/faster_whisper_cli.py', 'scripts/build-faster-whisper.py', 'scripts/check-faster-whisper-bundle.cjs'].every(file => read(file).includes(audioPauseAlgorithm))],
-  ['运行时与流水线使用相同音频停顿缓存策略', ['src/native/video-structure/runtime.js', 'src/native/video-structure/pipeline.js'].every(file => read(file).includes(audioPausePolicy))],
+  ['运行时参数带有音频停顿算法标识（缓存指纹据此失效）', read('src/native/video-structure/runtime.js').includes(audioPausePolicy)],
   ['工作流状态持久化到短剧档案', main.includes('entry.workflow') && main.includes('saveSeriesRegistry')],
   ['渲染进程暴露工作流接口', preload.includes('startSeriesWorkflow') && preload.includes('onEpisodeWorkflowProgress')],
   ['下载管理有一键工作流入口', ui.includes('一键处理本剧') && ui.includes('startSeriesWorkflow')],
