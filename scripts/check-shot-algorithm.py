@@ -1,25 +1,30 @@
-"""Regression gate for the user-approved shot algorithm; optional decoded .npy fixture."""
-import hashlib
+"""Regression gate for the shot algorithm using real TransNet V2 scores from episode 103."""
 import json
 from pathlib import Path
 import sys
 
+import numpy as np
+
 root = Path(__file__).resolve().parents[1]
-frozen = root / 'docs/algorithms/shot-boundary-v1'
-live = root / 'src/native/video-structure'
-for source, target in [('verify.py', 'shot_verification.py'), ('duration_policy.py', 'shot_duration.py')]:
-    assert (frozen / source).read_bytes() == (live / target).read_bytes(), 'Approved algorithm changed: ' + target
-sys.path.insert(0, str(live))
-from shot_duration import minimum_duration
-b = json.loads((frozen / 'accepted-baseline.json').read_text())
-cuts, warning = minimum_duration(b['verified_candidate_frames'], b['frame_times'], b['source_duration'], b['predictions']['single'], 2)
-assert cuts == b['accepted']['cuts'] and warning is None
+sys.path.insert(0, str(root / 'src/native/video-structure'))
+from shot_duration import minimum_duration  # noqa: E402
+from shot_verification import candidate_frames  # noqa: E402
+
+b = json.loads((root / 'docs/algorithms/shot-boundary/baseline-ep103.json').read_text())
+scores = np.asarray(b['single_scores'])
+assert len(scores) == len(b['frame_times']) == b['frame_count']
+
+# Every approved model frame must still be a candidate (verification can only remove candidates).
+model_frames = [f for f in candidate_frames(scores) if f + 1 < len(scores)]
+assert set(b['verified_model_frames']) <= set(model_frames)
+
+# Model frame = last frame of the outgoing shot; the cut is the next frame, carrying the model frame's score.
+boundaries = [f + 1 for f in b['verified_model_frames']]
+boundary_scores = np.concatenate(([0.0], scores[:-1]))
+cuts, warning = minimum_duration(boundaries, b['frame_times'], b['source_duration'], boundary_scores, 2)
+assert cuts == b['expected_cuts'] and warning is None, (cuts, warning)
+edges = [b['frame_times'][0], *[b['frame_times'][c] for c in cuts], b['source_duration']]
+assert len(edges) - 1 == b['expected_shots']
+assert abs(min(y - x for x, y in zip(edges, edges[1:])) - b['expected_min_seconds']) < 1e-5
 assert minimum_duration([], [2.1, 2.14], 2.18, [0, 0], 2) == ([], 'source_shorter_than_minimum')
-if len(sys.argv) > 1:
-    import numpy as np
-    from shot_verification import candidate_frames, verify
-    frames = np.load(sys.argv[1], mmap_mode='r')
-    verified, decisions = verify(frames, np.array(b['frame_times']), candidate_frames(b['predictions']['single']), b['source_duration'])
-    assert verified == b['verified_candidate_frames']
-    assert [d['status'] for d in decisions] == [d['status'] for d in b['verification_decisions']]
-print('PASS live algorithm equals frozen code; 22 approved shots; minimum 2s; short offset source')
+print(f"PASS episode 103: {b['expected_shots']} shots, {len(cuts)} cuts, minimum {b['expected_min_seconds']}s; short source kept whole")

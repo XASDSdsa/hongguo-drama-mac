@@ -65,8 +65,8 @@ def verify_shots(args):
     origin = float(pts[0])
     relative_pts = pts - origin
     # TransNet V2 flags the LAST frame of the outgoing shot (its one-hot training label sits on the
-    # frame before the cut), so the next shot starts one frame later. The frozen v1 verification keeps
-    # working on the model frame; every frame reported below is the first frame of the next shot.
+    # frame before the cut), so the next shot starts one frame later. Verification runs on the model
+    # frame; every frame reported below is the first frame of the next shot.
     model_frames = [frame for frame in candidate_frames(scores, args.threshold) if frame + 1 < count]
     progress(10, '复核亮度变化、特效闪光和真实画面变化')
     verified_model, decisions = verify(frames, relative_pts, model_frames, end - origin)
