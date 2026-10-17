@@ -34,15 +34,22 @@ jobs:
           architecture: x64
 
       - name: Bundle offline subtitle engine and tiny model
+        shell: bash
         run: |
-          npm run setup:transcription
-          npm run check:transcription-bundle
+          set +e
+          (npm run setup:transcription && npm run check:transcription-bundle) > "$RUNNER_TEMP/t.log" 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then echo "::error title=transcription::$(tail -n 25 "$RUNNER_TEMP/t.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; fi
+          exit $code
 
       - name: Bundle offline video structure runtime
+        shell: bash
         run: |
-          npm run setup:structure
-          npm run check:structure-bundle
-          npm run check:structure
+          set +e
+          (npm run setup:structure && npm run check:structure-bundle && npm run check:structure) > "$RUNNER_TEMP/s.log" 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then echo "::error title=structure::$(tail -n 25 "$RUNNER_TEMP/s.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; fi
+          exit $code
 
       - name: Download tested Windows FFmpeg build artifact
         uses: actions/download-artifact@v7
@@ -144,6 +151,7 @@ jobs:
           npm run check:ai
 
       - name: Build React assets and title fonts
+        shell: bash
         run: |
           npm run setup:title-fonts
           npm run build:react
@@ -164,6 +172,7 @@ jobs:
         run: npx electron-builder --win portable --x64 --publish never
 
       - name: Build unpacked directory and zip
+        shell: bash
         run: |
           npx electron-builder --win --dir --x64 --publish never
           node scripts/make-zip.js
