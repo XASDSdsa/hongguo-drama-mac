@@ -2998,7 +2998,7 @@ async function startResplitBatch(args) {
   }
 }
 
-async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTasks = null }) {
+async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTasks = null, title = '' }) {
   const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...opts });
   const splitOptions = resplit.validateSplit(split);
   const ffmpegPath = resolveFfmpeg('ffmpeg');
@@ -3056,8 +3056,12 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
   });
   if (!plan.pieces.length) return { success: false, error: plan.warnings.join('；') || '没有可处理的内容' };
 
+  // 新的一版开始前，旧成品挪进废纸篓：成品文件夹里只留最新一版。
+  const retired = await retireLibraryOutputs(dir);
+  if (retired) libLog(dir, 'info', `「去重」里的旧成品 ${retired} 个已挪进废纸篓，这一版重新生成`);
   await fsp.mkdir(outputDir, { recursive: true });
-  const seriesName = sanitizeFolderName(path.basename(dir)) || '短剧';
+  const seriesName =
+    sanitizeFolderName(title) || libraryReleaseTitle(dir) || sanitizeFolderName(path.basename(dir)) || '短剧';
   const names = plan.pieces.map((piece) => `${seriesName}_第${String(piece.number).padStart(3, '0')}集`);
   const destinations = allocateQuchongDestinations(
     plan.pieces.map((piece) => piece.segments[0].file),
@@ -3629,6 +3633,7 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
         job.status = 'done';
         job.message = '已完成';
         libLog(context.dir, 'ok', `发布素材：${PUBLISH_TASK_TEXT[task]}完成`, 'side');
+        if (task === 'titles') renameLibraryOutputs(context.dir);
       } catch (error) {
         job.status = controller.signal.aborted ? 'cancelled' : 'failed';
         job.error = controller.signal.aborted ? '' : aiRedact(error);
@@ -3673,11 +3678,95 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
       }),
     );
     libLog(context.dir, 'ok', '发布素材：已记下剧名/样式，海报有的话已重新排版', 'side');
+    renameLibraryOutputs(context.dir);
     return { success: true, result: publishResultView(context) };
   } catch (error) {
     return { success: false, error: aiRedact(error) };
   }
 });
+
+// ===== 成品命名：用 AI 发布素材里选定的新剧名 =====
+const LIBRARY_OUTPUT_NAME = /^(.+)_第(\d+)集(?:_\d+)?\.mp4$/i;
+
+/** 这部剧选定的新剧名（「AI 发布素材」里选的或填的）；还没选返回空字符串。 */
+function libraryReleaseTitle(dir) {
+  try {
+    const result = publishMaterials.readResult({ outputDir: dir, workDir: publishWorkDir(dir) });
+    return sanitizeFolderName(result?.title || '');
+  } catch (_) {
+    return '';
+  }
+}
+
+/** 这部剧还有没有在分析、处理、排队或等补下载的任务；有就返回原因。 */
+function libraryBusyReason(dir) {
+  const key = path.resolve(dir);
+  if (libraryPlanning.has(key) || libraryPlanning.has(dir)) return '这部剧正在分析切点，等它开始处理或先停止';
+  for (const batch of quchongBatches.values()) {
+    if (!batch.finished && batch.libraryDir && path.resolve(batch.libraryDir) === key) {
+      return '这部剧正在处理，等这一批做完，或先点「停止」';
+    }
+  }
+  for (const job of libraryJobs.values()) {
+    if (path.resolve(job.dir) === key && ['waiting', 'starting'].includes(job.status)) {
+      return '这部剧在等补下载，下完会自动处理；要重来请先取消';
+    }
+  }
+  return '';
+}
+
+/**
+ * 重新拆分前，把「去重」里的旧成品挪进废纸篓：成品文件夹里永远只有最新一版，
+ * 不会出现「_1」这种重复的集，剪映草稿也不会挑到旧的。挪不进废纸篓时放到应用私有目录。
+ */
+async function retireLibraryOutputs(dir) {
+  const output = path.join(dir, '去重');
+  if (!fs.existsSync(output)) return 0;
+  const files = fs
+    .readdirSync(output, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
+    .map((entry) => path.join(output, entry.name));
+  let moved = 0;
+  for (const file of files) {
+    try {
+      if (typeof shell?.trashItem === 'function') await shell.trashItem(file);
+      else throw new Error('no trash');
+      moved += 1;
+    } catch (_) {
+      const keep = path.join(publishWorkDir(dir), 'replaced-outputs', String(Date.now()));
+      fs.mkdirSync(keep, { recursive: true });
+      fs.renameSync(file, path.join(keep, path.basename(file)));
+      moved += 1;
+    }
+  }
+  return moved;
+}
+
+/** 剧名改了：把「去重」里已有成品改成新剧名（集号不变）。有任务在跑时先不动。 */
+function renameLibraryOutputs(dir) {
+  const title = libraryReleaseTitle(dir);
+  const output = path.join(dir, '去重');
+  if (!title || !fs.existsSync(output)) return;
+  const busy =
+    libraryBusyReason(dir) || (libraryDraftJobs.get(path.resolve(dir))?.status === 'running' ? '剪映草稿正在生成' : '');
+  const stale = fs
+    .readdirSync(output)
+    .map((name) => ({ name, match: LIBRARY_OUTPUT_NAME.exec(name) }))
+    .filter((row) => row.match && row.match[1] !== title);
+  if (!stale.length) return;
+  if (busy) {
+    libLog(dir, 'warn', `剧名已改成「${title}」，但${busy}，成品文件名先不改；做完后再改一次剧名即可同步`, 'side');
+    return;
+  }
+  let renamed = 0;
+  for (const row of stale) {
+    const target = path.join(output, `${title}_第${row.match[2]}集.mp4`);
+    if (fs.existsSync(target)) continue;
+    fs.renameSync(path.join(output, row.name), target);
+    renamed += 1;
+  }
+  if (renamed) libLog(dir, 'ok', `成品已按新剧名「${title}」改名：${renamed} 个文件`, 'side');
+}
 
 // ===== 管理剧集的支线任务：生成剪映草稿 =====
 // 对「去重」成品逐集做结构化拆解（分镜 + 文案），再生成剪映草稿。多分轨沿用完整草稿；
@@ -3837,8 +3926,6 @@ async function generateLibraryDraft(job, file) {
 /** 对这些去重成品逐集生成剪映草稿；后台运行，进度和日志写进这部剧的「支线任务日志」。 */
 async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   const key = path.resolve(dir);
-  const running = libraryDraftJobs.get(key);
-  if (running?.status === 'running') return { success: false, error: '这部剧的剪映草稿正在生成' };
   if (!candidates.length)
     return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
   const { files, missing, numbers } = selectDraftFiles(candidates, scope);
@@ -3854,10 +3941,23 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
     libLog(key, 'error', `剪映草稿：没有开始：${problem}`, 'side');
     return { success: false, error: problem };
   }
+  // 已经在生成：这几集排到后面接着做，不丢。
+  const running = libraryDraftJobs.get(key);
+  if (running?.status === 'running') {
+    const queued = new Set([...running.queue.map((item) => item.file), running.currentFile].filter(Boolean));
+    const added = files.filter((file) => !queued.has(file));
+    for (const file of added) running.queue.push({ file, mode: kind });
+    running.total += added.length;
+    libLog(key, 'info', `剪映草稿：正在生成，这 ${added.length} 集排到后面接着做`, 'side');
+    libraryDraftEmit(running);
+    return { success: true, queued: added.length, job: libraryDraftSnapshot(running) };
+  }
   const job = {
     id: randomUUID(),
     dir: key,
     mode: kind,
+    queue: files.map((file) => ({ file, mode: kind })),
+    currentFile: null,
     status: 'running',
     total: files.length,
     done: 0,
@@ -3875,8 +3975,11 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   libLog(key, 'info', `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}）`, 'side');
   libraryDraftEmit(job);
   (async () => {
-    for (const file of files) {
+    while (job.queue.length) {
       if (job.cancelled) break;
+      const { file, mode: itemMode } = job.queue.shift();
+      job.mode = itemMode;
+      job.currentFile = file;
       const label = path.basename(file, path.extname(file));
       job.current = label;
       job.progress = 0;
@@ -3896,6 +3999,8 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
     }
     job.status = job.cancelled ? 'stopped' : job.failed ? 'failed' : 'completed';
     job.current = null;
+    job.currentFile = null;
+    job.queue = [];
     job.endTime = Date.now();
     libLog(
       key,
@@ -4039,6 +4144,9 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
       return { success: false, error: '这不是剧文件夹' };
     }
+    // 同一部剧同一时间只跑一批，免得两批互相覆盖、出现重复的集。
+    const busy = libraryBusyReason(dir);
+    if (busy) return { success: false, error: busy };
     // 没勾选「去重」、只勾了剪映草稿：直接拿已有的去重成品生成草稿。
     if (payload.dedup === false) {
       const draft = normalizeSideTasks(payload.sideTasks)?.jianyingDraft;
@@ -4060,6 +4168,9 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     }
     const outputDir = path.join(dir, '去重');
     const sideTasks = normalizeSideTasks(payload.sideTasks);
+    // 成品用新剧名命名，所以要先在「AI 发布素材」里选定剧名。
+    const title = libraryReleaseTitle(dir);
+    if (!title) return { success: false, error: '先在上面「AI 发布素材」里选定新剧名，成品会用新剧名命名' };
     if (payload.mode === 'episode') {
       return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts, libraryDir: dir, sideTasks });
     }
@@ -4092,7 +4203,7 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
         notes: notes.map(label),
       };
     }
-    const request = { split: payload.split, opts: payload.opts, outputDir, sideTasks };
+    const request = { split: payload.split, opts: payload.opts, outputDir, sideTasks, title };
     if (blocking.length && policy === 'download') {
       const entry = seriesRegistry.find((item) => String(item.series_id) === detail.seriesId);
       if (!detail.linked || !entry) return { success: false, error: '这部剧不是软件下载的，没法补下载' };

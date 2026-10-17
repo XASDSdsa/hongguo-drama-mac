@@ -341,6 +341,14 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const draftNumbers = [...new Set(draftNums.map((n) => Math.floor(Number(n))).filter((n) => n >= 1 && n < 10000))];
   const draftScopeValue = { numbers: draftNumbers };
   const nothingToDo = dedupOn ? !selectedCount : !draftOn;
+  // 成品用「AI 发布素材」里选定的新剧名命名：没选定不能开始去重。
+  const releaseTitle = (publish?.title || '').trim();
+  const needTitle = dedupOn && !releaseTitle;
+  // 同一部剧同一时间只跑一批（分析切点、处理中、等补下载都算）。
+  const seriesBusy =
+    !!activity?.planning ||
+    activeBatches.length > 0 ||
+    (activity?.jobs || []).some((job) => ['waiting', 'starting'].includes(job.status));
   const draftBlocked = draftOn && draftNumbers.length === 0;
 
   const hopeless = (decision?.blocking || [])
@@ -537,6 +545,13 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                   </button>
                 )}
               </div>
+              {dedupOn && (
+                <p className={`proc-name ${releaseTitle ? '' : 'is-missing'}`}>
+                  {releaseTitle
+                    ? `成品命名：${releaseTitle}_第001集.mp4 …`
+                    : '先在上面「AI 发布素材」里选定新剧名，成品会用新剧名命名'}
+                </p>
+              )}
               {dedupOn && showParams && opts && (
                 <div ref={paramsRef} className="lib-params-card">
                   <DedupParams
@@ -624,7 +639,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               <button
                 className="btn btn-primary proc-start"
                 onClick={() => (dedupOn ? setPreview(true) : submit(undefined))}
-                disabled={submitting || !!activity?.planning || nothingToDo || draftBlocked || (dedupOn && !opts)}
+                disabled={submitting || seriesBusy || nothingToDo || needTitle || draftBlocked || (dedupOn && !opts)}
               >
                 {startLabel}
               </button>

@@ -406,3 +406,12 @@ button.lib-ep.is-missing:hover {
   width: 64px;
   text-align: center;
 }
+
+.proc-name {
+  margin: 6px 0 0 26px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.proc-name.is-missing {
+  color: var(--primary);
+}

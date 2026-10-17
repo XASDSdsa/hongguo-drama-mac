@@ -372,6 +372,31 @@ function SettingsPage({ active = true }) {
         </div>
 
         <div className="settings-group">
+          <label className="settings-label">视频去重同时处理</label>
+          <select
+            className="input-field select-field"
+            aria-label="去重并发数"
+            value={settings.quchong_jobs || 2}
+            onChange={async (e) => {
+              const jobs = parseInt(e.target.value, 10);
+              const res = await window.electronAPI.quchongSetConcurrency(jobs);
+              if (res?.success) setSettings((previous) => ({ ...previous, quchong_jobs: jobs }));
+              else setSaveError(res?.error || '去重并发设置保存失败');
+            }}
+          >
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+              <option key={n} value={n}>
+                {n} 集同时处理
+              </option>
+            ))}
+          </select>
+          <p className="settings-hint">
+            同时去重 <b>{settings.quchong_jobs || 2}</b>{' '}
+            集，改了立即生效（正在跑的也会跟着调整）。越多越快，但更占电脑，一般 2~4。
+          </p>
+        </div>
+
+        <div className="settings-group">
           <label className="settings-label">完整字幕识别（faster-whisper）</label>
           <p className="settings-hint">已内置字幕引擎和 tiny 模型，无需安装 Python，离线即可识别。</p>
           <div className="preset-row mt8">

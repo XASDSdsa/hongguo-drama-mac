@@ -61,6 +61,8 @@ function makeMain(root, userData, registry) {
   context.sendToRenderer = (channel, data) => events.push([channel, data]);
   context.pumpAllQuchongBatches = () => {};
   context.resolveFfmpeg = (name) => name;
+  // 成品用「AI 发布素材」里选定的新剧名命名；测试里直接当作已选定（剧名 = 文件夹名）。
+  context.libraryReleaseTitle = (dir) => path.basename(dir);
   return { context, handlers, events };
 }
 const realEpisode = (file) =>
@@ -287,6 +289,13 @@ async function check(name, fn) {
 
     context.resolveFfmpeg = () => '/bin/true';
     context.pumpAllQuchongBatches = () => {};
+    // 没选定新剧名不能开始：成品要用新剧名命名
+    const noTitle = await handlers['library-dedup'](
+      {},
+      { dir: series.path, mode: 'episode', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+    );
+    assert.match(noTitle.error, /选定新剧名/);
+    context.libraryReleaseTitle = () => '新剧名';
     const started = await handlers['library-dedup'](
       {},
       {
@@ -296,8 +305,16 @@ async function check(name, fn) {
       },
     );
     assert.equal(started.success, true, started.error);
+    context.libraryReleaseTitle = (dir) => path.basename(dir);
     const [task] = vm.runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context);
     assert.equal(task.dst, path.join(series.path, '去重', '同名剧_第002集_去重.mp4'));
+    // 同一部剧同一时间只跑一批
+    const twice = await handlers['library-dedup'](
+      {},
+      { dir: series.path, mode: 'episode', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+    );
+    assert.match(twice.error, /正在处理/);
+    vm.runInContext('for (const b of quchongBatches.values()) b.finished = true', context);
     // 支线任务：没勾去重也没勾草稿 → 拒绝；只做草稿但还没有去重成品 → 说清楚
     const nothing = await handlers['library-dedup']({}, { dir: series.path, dedup: false, sideTasks: {} });
     assert.match(nothing.error, /至少勾选/);
@@ -356,6 +373,20 @@ async function check(name, fn) {
       { dir: series.path, mode: 'simple', scope: { numbers: [7] } },
     );
     assert.equal(noneMatched.success, false);
+
+    // 剧名改了：「去重」里已有成品跟着改名（集号不变，_1 这种重复后缀去掉）
+    const outDir = path.join(series.path, '去重');
+    fs.mkdirSync(outDir, { recursive: true });
+    for (const name of ['旧名_第001集.mp4', '旧名_第002集_1.mp4', '说明.txt'])
+      fs.writeFileSync(path.join(outDir, name), 'x');
+    context.libraryReleaseTitle = () => '新名';
+    context.renameLibraryOutputs(series.path);
+    assert.deepEqual(fs.readdirSync(outDir).sort(), ['新名_第001集.mp4', '新名_第002集.mp4', '说明.txt']);
+    // 重新拆分前旧成品整个挪走：「去重」里只留最新一版
+    const moved = await context.retireLibraryOutputs(series.path);
+    assert.equal(moved, 3);
+    assert.deepEqual(fs.readdirSync(outDir), []);
+    context.libraryReleaseTitle = (dir) => path.basename(dir);
     // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。
     const [batch] = vm.runInContext('[...quchongBatches.values()]', context);
     assert.equal(batch.libraryDir, series.path);
@@ -599,6 +630,7 @@ async function check(name, fn) {
       const spliced = await handlers['library-dedup']({}, { dir, files: pick(1, 2), split, opts });
       assert.equal(spliced.success, true, spliced.error);
       assert.ok(!spliced.needsDecision, 'contiguous episodes need no decision');
+      vm.runInContext('for (const b of quchongBatches.values()) b.finished = true', context); // 上一批视为做完，才能开始下一批
 
       const platformOnly = await handlers['library-dedup'](
         {},
@@ -612,6 +644,7 @@ async function check(name, fn) {
           [3, 'notDownloaded', true],
         ],
       );
+      vm.runInContext('for (const b of quchongBatches.values()) b.finished = true', context); // 上一批视为做完，才能开始下一批
 
       // 先补下载：下载完成后自动用完整的选择开始处理。
       vm.runInContext('LIBRARY_POLL_MS = 30', context);
@@ -738,6 +771,7 @@ async function check(name, fn) {
       assert.equal(noDownload.success, false);
       const confirmed = await handlers['library-dedup']({}, { dir, files, split, opts, gapPolicy: 'confirm' });
       assert.equal(confirmed.success, true, confirmed.error);
+      vm.runInContext('for (const b of quchongBatches.values()) b.finished = true', context); // 上一批视为做完，才能开始下一批
       const again = await handlers['library-dedup']({}, { dir, files, split, opts });
       assert.equal(again.success, true, 'remembered: no second question');
       deq(

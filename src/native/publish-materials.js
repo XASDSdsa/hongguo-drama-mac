@@ -314,7 +314,7 @@ function loadState(workDir, originalTitle) {
   return state;
 }
 
-/** 改写剧名：给出一批候选并默认选第一个；已有海报时顺手按新名字重新排版（不调用模型）。 */
+/** 改写剧名：给出一批候选；还没选过剧名时默认选第一个。已选定的剧名不会被替换。 */
 async function makeTitles({
   title,
   synopsis = '',
@@ -333,11 +333,13 @@ async function makeTitles({
   const found = normalizeTitles(raw, { title, synopsis });
   const state = loadState(workDir, title);
   Object.assign(state.copy, found);
-  state.chosen = { title: found.titles[0], style: found.style, tagline: found.tagline };
+  // 已经选定（或手填）过剧名就不动它，只更新候选；还没选过才默认选第一个。
+  const kept = !!state.chosen?.title;
+  if (!kept) state.chosen = { title: found.titles[0], style: found.style, tagline: found.tagline };
   const paths = outputPaths(outputDir);
   writeAtomic(paths.title, state.chosen.title + '\n');
   writeState(workDir, state);
-  if (state.art?.file && renderer) {
+  if (!kept && state.art?.file && renderer) {
     onProgress?.({ stage: 'titles', message: '正在把新剧名排到海报上' });
     const meta = await renderPoster({
       renderer,

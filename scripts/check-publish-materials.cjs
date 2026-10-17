@@ -344,11 +344,13 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       const poster = await publish.generate({ task: 'poster', ...base });
       assert.equal(poster.title, '我自己起的名字');
       assert.ok(fs.existsSync(path.join(d.outputDir, '发布海报.jpg')));
-      // 改写剧名：已有海报会按新名字重新排版，不再画图
+      // 改写剧名：只更新候选，已选定（手填）的剧名不被替换，也不再画图
       imageCalls = 0;
       const again = await publish.generate({ task: 'titles', ...base });
       assert.equal(imageCalls, 0);
-      assert.equal(again.title, again.candidates[0]);
+      assert.equal(again.title, '我自己起的名字');
+      assert.ok(again.candidates.length > 0);
+      assert.equal(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'), 'utf8').trim(), '我自己起的名字');
     });
 
     await check('without an original poster the picture is generated from the scene description', async () => {
