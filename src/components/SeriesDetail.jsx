@@ -23,6 +23,19 @@ const DRAFT_MODES = [
   ],
 ];
 
+/** 「1,3,5-8」→ [1,3,5,6,7,8]；写错的部分直接忽略。 */
+export function parseEpisodeNumbers(text) {
+  const out = new Set();
+  for (const part of String(text || '').split(/[,，、\s]+/)) {
+    const range = /^(\d{1,4})\s*[-~－—到]\s*(\d{1,4})$/.exec(part);
+    if (range) {
+      const [from, to] = [Number(range[1]), Number(range[2])].sort((a, b) => a - b);
+      for (let n = from; n <= Math.min(to, from + 999); n++) out.add(n);
+    } else if (/^\d{1,4}$/.test(part) && Number(part) > 0) out.add(Number(part));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
 function readJson(key) {
   try {
     return JSON.parse(window.localStorage.getItem(key) || '{}') || {};
@@ -79,6 +92,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
+  const [draftScope, setDraftScope] = useState(saved.draftScope === 'pick' ? 'pick' : 'first');
+  const [draftCount, setDraftCount] = useState(Math.max(1, Math.floor(Number(saved.draftCount)) || 4));
+  const [draftPick, setDraftPick] = useState(String(saved.draftPick || ''));
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
@@ -196,8 +212,19 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   }, [saved]);
 
   useEffect(() => {
-    if (opts) writeJson(STORAGE_KEY, { opts, split, mode, dedupOn, draftOn, draftMode });
-  }, [opts, split, mode, dedupOn, draftOn, draftMode]);
+    if (opts)
+      writeJson(STORAGE_KEY, {
+        opts,
+        split,
+        mode,
+        dedupOn,
+        draftOn,
+        draftMode,
+        draftScope,
+        draftCount,
+        draftPick,
+      });
+  }, [opts, split, mode, dedupOn, draftOn, draftMode, draftScope, draftCount, draftPick]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
   }, [pageSize]);
@@ -316,7 +343,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       opts,
       split,
       gapPolicy,
-      sideTasks: { jianyingDraft: { enabled: draftOn, mode: draftMode } },
+      sideTasks: { jianyingDraft: { enabled: draftOn, mode: draftMode, scope: draftScopeValue } },
     });
     setSubmitting(false);
     if (result?.needsDecision) return setDecision(result);
@@ -346,7 +373,11 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
         : activity?.draft?.status === 'running'
           ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
           : '';
-  const nothingToDo = dedupOn ? !selectedCount : !draftOn;
+  const pickNumbers = parseEpisodeNumbers(draftPick);
+  const draftScopeValue =
+    draftScope === 'pick' ? { mode: 'pick', numbers: pickNumbers } : { mode: 'first', count: draftCount };
+  const draftBlocked = draftOn && draftScope === 'pick' && !pickNumbers.length;
+  const nothingToDo = (dedupOn ? !selectedCount : !draftOn) || draftBlocked;
 
   const hopeless = (decision?.blocking || [])
     .filter((item) => item.reason && item.reason.retryHelps === false)
@@ -654,7 +685,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                 />
                 <span className="proc-check-text">
                   <b>生成剪映草稿</b>
-                  <small>{dedupOn ? '去重完成后，每集成品生成一份草稿' : '用「去重」文件夹里已有的成品生成草稿'}</small>
+                  <small>
+                    {dedupOn ? '去重完成后，从成品里挑几集生成草稿' : '从「去重」文件夹里已有的成品里挑几集生成草稿'}
+                  </small>
                 </span>
               </label>
               {draftOn && (
@@ -677,6 +710,58 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     </div>
                   </div>
                   <p className="proc-hint">{DRAFT_MODES.find(([id]) => id === draftMode)[2]}。</p>
+                  <div className="proc-row proc-row-gap">
+                    <span className="proc-label">做哪几集</span>
+                    <div className="seg" role="radiogroup" aria-label="做哪几集">
+                      {[
+                        ['first', '前几集'],
+                        ['pick', '自己选'],
+                      ].map(([id, label]) => (
+                        <label key={id} className={`seg-item ${draftScope === id ? 'is-active' : ''}`}>
+                          <input
+                            type="radio"
+                            name="lib-draft-scope"
+                            checked={draftScope === id}
+                            onChange={() => setDraftScope(id)}
+                            disabled={submitting}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                    {draftScope === 'first' ? (
+                      <label className="lib-number">
+                        成品的前
+                        <input
+                          className="input-field"
+                          type="number"
+                          min="1"
+                          max="999"
+                          value={draftCount}
+                          onChange={(e) => setDraftCount(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
+                          disabled={submitting}
+                          aria-label="成品的前几集"
+                        />
+                        集
+                      </label>
+                    ) : (
+                      <input
+                        className="input-field proc-pick"
+                        value={draftPick}
+                        placeholder="成品集号，如 1,3,5-8"
+                        onChange={(e) => setDraftPick(e.target.value)}
+                        disabled={submitting}
+                        aria-label="要做草稿的成品集号"
+                      />
+                    )}
+                  </div>
+                  <p className="proc-hint">
+                    {draftScope === 'first'
+                      ? `按成品集号从小到大取前 ${draftCount} 集（重新拆分后用新集号）。草稿只用去重后的成品。`
+                      : pickNumbers.length
+                        ? `将做成品第 ${pickNumbers.join('、')} 集。集号以去重成品文件名里的「第N集」为准。`
+                        : '填成品的集号，多个用逗号隔开，连续的用短横线，如 1,3,5-8。'}
+                  </p>
                 </div>
               )}
             </div>

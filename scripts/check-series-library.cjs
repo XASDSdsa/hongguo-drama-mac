@@ -322,6 +322,36 @@ async function check(name, fn) {
       'multi',
     );
     assert.equal(vm.runInContext('normalizeSideTasks({ jianyingDraft: { enabled: false } })', context), null);
+    // 草稿只做几集：默认前 4 集，或按成品集号指定
+    const pickFiles = (scope) =>
+      JSON.parse(
+        vm.runInContext(
+          `JSON.stringify((() => { const r = selectDraftFiles(${JSON.stringify(
+            [6, 1, 2, 10, 3, 4, 5].map((n) => `/s/去重/剧_第${String(n).padStart(3, '0')}集.mp4`),
+          )}, ${JSON.stringify(scope ?? null)}); return { files: r.files.map((f) => f.split('/').pop()), missing: r.missing }; })())`,
+          context,
+        ),
+      );
+    assert.deepEqual(pickFiles(undefined).files, [
+      '剧_第001集.mp4',
+      '剧_第002集.mp4',
+      '剧_第003集.mp4',
+      '剧_第004集.mp4',
+    ]);
+    assert.deepEqual(pickFiles({ mode: 'first', count: 2 }).files, ['剧_第001集.mp4', '剧_第002集.mp4']);
+    assert.deepEqual(pickFiles({ mode: 'pick', numbers: [10, 3, 99] }), {
+      files: ['剧_第003集.mp4', '剧_第010集.mp4'],
+      missing: [99],
+    });
+    assert.equal(
+      vm.runInContext("JSON.stringify(normalizeDraftScope({ mode: 'pick', numbers: ['2', 2, 'x', -1] }))", context),
+      JSON.stringify({ mode: 'pick', numbers: [2] }),
+    );
+    const noneMatched = await handlers['library-draft'](
+      {},
+      { dir: series.path, mode: 'simple', scope: { mode: 'pick', numbers: [7] } },
+    );
+    assert.equal(noneMatched.success, false);
     // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。
     const [batch] = vm.runInContext('[...quchongBatches.values()]', context);
     assert.equal(batch.libraryDir, series.path);

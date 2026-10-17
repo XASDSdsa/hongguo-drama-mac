@@ -447,3 +447,12 @@ button.lib-ep.is-missing {
 button.lib-ep.is-missing:hover {
   background: var(--accent-soft);
 }
+
+.proc-row-gap {
+  margin-top: 14px;
+}
+.proc-detail .proc-pick {
+  flex: none;
+  width: 240px;
+  padding: 5px 10px;
+}

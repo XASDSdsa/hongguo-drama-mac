@@ -2685,11 +2685,13 @@ function finishQuchongBatch(batch) {
   if (draftTask?.enabled && batch.libraryDir && !batch.cancelled) {
     const outputs = batch.tasks.filter((task) => task.status === 'completed' && task.dst).map((task) => task.dst);
     if (outputs.length) {
-      startLibraryDrafts({ dir: batch.libraryDir, files: outputs, mode: draftTask.mode }).then((started) => {
-        if (!started.success) {
-          libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
-        }
-      });
+      startLibraryDrafts({ dir: batch.libraryDir, files: outputs, mode: draftTask.mode, scope: draftTask.scope }).then(
+        (started) => {
+          if (!started.success) {
+            libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
+          }
+        },
+      );
     } else libLog(batch.libraryDir, 'warn', '剪映草稿：这一批没有成功的去重成品，没有生成草稿', 'side');
   }
   sendToRenderer('quchong-complete', {
@@ -3704,7 +3706,43 @@ const DRAFT_MODULES = [
 function normalizeSideTasks(value) {
   const draft = value?.jianyingDraft;
   if (!draft?.enabled) return null;
-  return { jianyingDraft: { enabled: true, mode: normalizeDraftMode(draft.mode) } };
+  return {
+    jianyingDraft: { enabled: true, mode: normalizeDraftMode(draft.mode), scope: normalizeDraftScope(draft.scope) },
+  };
+}
+
+const DEFAULT_DRAFT_COUNT = 4;
+
+/** 草稿只做几集：前 N 集（默认 4），或者按成品集号自己指定。 */
+function normalizeDraftScope(value) {
+  if (value?.mode === 'pick') {
+    const numbers = [...new Set((Array.isArray(value.numbers) ? value.numbers : []).map(Number))]
+      .filter((n) => Number.isInteger(n) && n > 0 && n < 10000)
+      .sort((a, b) => a - b);
+    return { mode: 'pick', numbers };
+  }
+  const count = Math.floor(Number(value?.count));
+  return { mode: 'first', count: count >= 1 && count <= 999 ? count : DEFAULT_DRAFT_COUNT };
+}
+
+/**
+ * 从去重成品里挑出要做草稿的几集，按成品文件名里的集号（重新拆分后的新集号）判断：
+ * 前 N 集 = 集号最小的 N 个；指定 = 集号在名单里的。认不出集号的文件排在最后。
+ */
+function selectDraftFiles(files, scope) {
+  const rule = normalizeDraftScope(scope);
+  const rows = files
+    .map((file) => ({ file, index: seriesLibrary.parseEpisodeIndex(path.basename(file)) }))
+    .sort(
+      (a, b) =>
+        (a.index ?? Infinity) - (b.index ?? Infinity) || a.file.localeCompare(b.file, 'zh-CN', { numeric: true }),
+    );
+  if (rule.mode === 'first') return { files: rows.slice(0, rule.count).map((row) => row.file), missing: [] };
+  const have = new Set(rows.map((row) => row.index));
+  return {
+    files: rows.filter((row) => rule.numbers.includes(row.index)).map((row) => row.file),
+    missing: rule.numbers.filter((n) => !have.has(n)),
+  };
 }
 
 function normalizeDraftMode(value) {
@@ -3801,11 +3839,21 @@ async function generateLibraryDraft(job, file) {
 }
 
 /** 对这些去重成品逐集生成剪映草稿；后台运行，进度和日志写进这部剧的「支线任务日志」。 */
-async function startLibraryDrafts({ dir, files, mode }) {
+async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   const key = path.resolve(dir);
   const running = libraryDraftJobs.get(key);
   if (running?.status === 'running') return { success: false, error: '这部剧的剪映草稿正在生成' };
-  if (!files.length) return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
+  if (!candidates.length)
+    return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
+  const { files, missing } = selectDraftFiles(candidates, scope);
+  if (!files.length) {
+    return {
+      success: false,
+      error: missing.length ? `去重成品里没有第 ${missing.join('、')} 集，没法生成剪映草稿` : '没有选到要做草稿的集',
+    };
+  }
+  if (missing.length)
+    libLog(path.resolve(dir), 'warn', `剪映草稿：成品里没有第 ${missing.join('、')} 集，已跳过`, 'side');
   const kind = normalizeDraftMode(mode);
   const problem = await libraryDraftReadiness(kind);
   if (problem) {
@@ -3898,7 +3946,7 @@ ipcMain.handle('library-draft', async (_event, payload = {}) => {
     if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
       return { success: false, error: '这不是剧文件夹' };
     }
-    return await startLibraryDrafts({ dir, files: libraryDedupOutputs(dir), mode: payload.mode });
+    return await startLibraryDrafts({ dir, files: libraryDedupOutputs(dir), mode: payload.mode, scope: payload.scope });
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -4001,7 +4049,12 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     if (payload.dedup === false) {
       const draft = normalizeSideTasks(payload.sideTasks)?.jianyingDraft;
       if (!draft) return { success: false, error: '请至少勾选一项要做的事' };
-      const started = await startLibraryDrafts({ dir, files: libraryDedupOutputs(dir), mode: draft.mode });
+      const started = await startLibraryDrafts({
+        dir,
+        files: libraryDedupOutputs(dir),
+        mode: draft.mode,
+        scope: draft.scope,
+      });
       return started.success ? { ...started, draftOnly: true } : started;
     }
     const files = [
