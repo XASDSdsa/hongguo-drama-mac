@@ -31,7 +31,7 @@ async function main(){
    assert.equal(canMigrateLegacyInput(id,{...stage,implementation:unknown,input_fingerprint:fingerprint({...current,implementation:unknown})},{implementation,identity:current}),false);
  }
  const runtimePrevious='74e2041213866bc07f3ccc86119902749805d8c47ea4bb4f1b3bb136451add5b';
- const alignmentCurrent='b2da11c798105420a5e8ab1ef833e6e3dde264f097ec26e3cf6929834c43e66d';
+ const alignmentCurrent='4212277f16a99a3dc530b8ba9ce27134a6ec5102335745819cb66ce69d96181e';
  const alignmentPrevious='c34a07d380372038bba35d27ff474125d9d4448bf99aa90c4836810856758bc9';
  assert.equal(await sha256(path.resolve(__dirname,'../src/native/video-structure/alignment.js')),alignmentCurrent);
  const alignmentImplementation={'contracts.js':currentImplementation['contracts.js'],'runtime.js':runtimeCurrent,'io.js':'unchanged-io','alignment.js':alignmentCurrent};
@@ -105,7 +105,7 @@ async function main(){
  const vadOnly=voiceSegments({segments:[],vad_segments:[{start:.10,end:.16,text:''}]},{offset:.01},{video_end:.2});assert.deepEqual(vadOnly,[]);assert.equal(voiceFilter(vadOnly),'volume=0');
  const emptyText=voiceSegments({segments:[{start:.10,end:.16,text:'   '}],vad_segments:[{start:.10,end:.16}]},{offset:.01},{video_end:.2});assert.deepEqual(emptyText,[]);
  const emptyTranscript=mapTranscript({sample_rate:16000,duration:.2,segments:[],warnings:[]},{offset:.02},m,'empty');assert.equal(emptyTranscript.utterances.length,0);assert(emptyTranscript.warnings.length>0);assert.equal(emptyTranscript.duration,m.video_end);
- const a=align(shot.shots,t,'task');assert.equal(a.associations.length,1);assert.equal(a.shots.length,2);assert.equal(a.merged_boundary_count,0);assert.equal(a.associations[0].shot_ids.length,2);assert.equal(a.associations[0].utterance_id,t.utterances[0].utterance_id);
+ const a=align(shot.shots,t,'task');assert.equal(a.associations.length,1);assert.equal(a.shots.length,1);assert.equal(a.merged_boundary_count,1);assert.equal(a.boundary_decisions[0].reason,'speech_not_finished');assert.equal(a.associations[0].shot_ids.length,1);assert.equal(a.associations[0].utterance_id,t.utterances[0].utterance_id);
  assert.equal((srt(t.utterances).match(/-->/g)||[]).length,1);assert(srt(t.utterances).includes('00:00:00,020 --> 00:00:00,120'));
  assert.equal(align([{shot_id:'a',start:0,end:1,start_frame:0,end_frame_exclusive:25},{shot_id:'b',start:1,end:2,start_frame:25,end_frame_exclusive:50}],{duration:2,utterances:[{utterance_id:'x',start:1,end:2,text:'边界'}]},'t').associations.length,1);
  assert.deepEqual(MODULES.map(s=>s.id),['media','audio','shots','separation','transcript','alignment','clips','export']);assert.deepEqual(descendants('shots'),['alignment','clips','export']);assert.deepEqual(descendants('transcript'),['alignment','clips','export']);

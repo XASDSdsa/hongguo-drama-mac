@@ -10,8 +10,8 @@ from pathlib import Path
 
 
 def validate_dialogue_tracks(content: dict, manifest: dict, tracks: dict) -> None:
-    if manifest.get("boundary_policy") != "preserve_visual_cuts_dialogue_index" or manifest.get("alignment_algorithm") != "visual-shots-with-dialogue-index-v2":
-        raise SystemExit("草稿未使用保留视觉切点的台词索引，请继续完整流程后重新生成。")
+    if manifest.get("boundary_policy") != "shot_cut_requires_acoustic_pause" or manifest.get("alignment_algorithm") != "visual-shot-on-acoustic-pause-v1":
+        raise SystemExit("草稿未按气口落在切镜上才切，请继续完整流程后重新生成。")
     expected_tracks = manifest["tracks"]
     video_rows = expected_tracks["video"].get("clips", [])
     native_video = tracks["视频片段"]["segments"]
@@ -20,7 +20,7 @@ def validate_dialogue_tracks(content: dict, manifest: dict, tracks: dict) -> Non
     shots = {}
     source_ids = []
     for row, segment in zip(video_rows, native_video):
-        if row.get("shot_id") in shots or len(row.get("source_shot_ids", [])) != 1:
+        if row.get("shot_id") in shots or not row.get("source_shot_ids"):
             raise SystemExit("video shot mapping is missing or duplicated")
         target = segment["target_timerange"]
         if target != {"start": row["start_us"], "duration": row["duration_us"]}:

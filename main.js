@@ -1000,7 +1000,7 @@ function workflowDraftExists(record) {
     const manifestPath = path.join(record.draftPath, 'hongguo-draft-manifest.json');
     if (!fs.existsSync(manifestPath)) return false;
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    return manifest.boundary_policy === 'preserve_visual_cuts_dialogue_index' && manifest.alignment_algorithm === 'visual-shots-with-dialogue-index-v2';
+    return manifest.boundary_policy === 'shot_cut_requires_acoustic_pause' && manifest.alignment_algorithm === 'visual-shot-on-acoustic-pause-v1';
   } catch (_) { return false; }
 }
 
@@ -1037,7 +1037,7 @@ function getSeriesWorkflowStatus(seriesId) {
     if (record.status === 'completed' && (!workflowDraftExists(record) || inputChanged)) {
       record.status = 'stale';
       record.stage = 'jianying';
-      record.error = inputChanged ? '输入视频已变化，请重新生成工作流' : '剪映草稿缺失或仍使用旧版合并分镜，请继续完整流程更新';
+      record.error = inputChanged ? '输入视频已变化，请重新生成工作流' : '剪映草稿缺失或仍按画面切点直接切断，请继续完整流程按气口重切';
       record.updatedAt = Date.now();
     }
     return { ...record, episodeIndex };

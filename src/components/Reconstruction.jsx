@@ -7,8 +7,8 @@ const STAGES = [
   ['shots', '检测视觉分镜', ['media'], '视觉候选边界 · 结构复核 · 最短 2 秒'],
   ['separation', '分离人声与背景', ['audio'], '整集 UVR 分离 · vocals / background'],
   ['transcript', '识别台词', ['media', 'separation'], '中文识别 · 音频真实停顿分段 · 人声字幕同步'],
-  ['alignment', '关联台词与分镜', ['shots', 'transcript'], '保留视觉切点 · 连续说话可跨镜头 · 不移动时间'],
-  ['clips', '导出最终分镜', ['media', 'alignment'], '按原视觉切点导出 · 校验帧数和时间戳'],
+  ['alignment', '关联台词与分镜', ['shots', 'transcript'], '气口落在切镜上才切 · 话没说完不切 · 不移动时间'],
+  ['clips', '导出最终分镜', ['media', 'alignment'], '按气口切镜导出 · 校验帧数和时间戳'],
   ['export', '导出字幕与文件清单', ['alignment', 'clips', 'transcript'], '全局 SRT · 分镜文件清单'],
   ['jianying', '生成剪映草稿', ['media', 'audio', 'shots', 'clips', 'separation', 'transcript', 'alignment', 'export'], '配音 / 整集背景 / 分镜特效 / 隐藏字幕 / 水印'],
 ];
@@ -83,7 +83,7 @@ export default function Reconstruction({ active = true }) {
       <div className="reconstruction-row"><label htmlFor="structure-input">输入视频</label><input id="structure-input" className="input-field" readOnly value={inputPath} placeholder="选择需要拆解的单集视频" /><button className="btn" disabled={busy || loading} onClick={choose}><Film size={14} /> 选择</button></div>
       {!projectId && <div className="reconstruction-row"><label htmlFor="structure-output">结果目录</label><input id="structure-output" className="input-field" value={outputRoot} onChange={e => setOutputRoot(e.target.value)} placeholder="默认：视频所在目录 / 结构化拆解" disabled={busy || loading} /><button className="btn" onClick={chooseOutput} disabled={busy || loading}><Folder size={14} /> 选择</button></div>}
       <div className="structure-toolbar"><button className="btn btn-primary" disabled={!inputPath || loading || busy} onClick={() => start(awaitingDraft ? 'jianying' : undefined)}><Play size={15} />{loading ? '启动中…' : awaitingDraft ? '生成剪映草稿' : job ? '继续完整流程' : '开始完整流程'}</button><button className="btn" onClick={cancel} disabled={!busy || job?.status === 'stopping'}><Square size={14} />停止</button>{job?.manifestPath && <button className="btn" onClick={() => window.electronAPI.showInFolder(job.manifestPath)}><Folder size={14} />查看结果</button>}<button className="btn" disabled={!projectId || loading} onClick={() => refresh()}><RefreshCw size={14} />刷新</button></div>
-      <p className="reconstruction-hint">保留画面切点，人声按音频真实停顿分段，字幕与人声同步；连续说话可跨镜头，不因识别标点切断人声，不为了台词合并视频。完整流程复用未变化的结果；单步运行只执行该模块。</p>
+      <p className="reconstruction-hint">画面切镜只有落在语音气口上才切断。一口气没断时，话没说完也不切，多个切镜并进同一段；有气口但没有切镜不切。气口是语音里的真实空隙，不因识别标点、字幕条或话题切断。人声字幕仍按音频停顿同步。完整流程复用未变化的结果；单步运行只执行该模块。</p>
       <details className="structure-runtime"><summary>{!runtime ? '正在检查本地运行时…' : runtime.ready ? '本地运行时就绪' : '运行时需要检查'}</summary>{runtime?.error && <p>{runtime.error}</p>}{Object.entries(runtime?.modules || {}).map(([id, item]) => <p key={id}>{STAGES.find(s => s[0] === id)?.[1]}：{item.ready ? '文件就绪' : item.error}</p>)}<button className="btn btn-sm" onClick={() => window.electronAPI.getStructureRuntime().then(setRuntime).catch(e => setNotice(e.message))}>重新检查</button></details>
     </section>
     <section className="reconstruction-card">
