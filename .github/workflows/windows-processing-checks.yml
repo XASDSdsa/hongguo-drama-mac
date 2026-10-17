@@ -2,20 +2,7 @@ name: Windows processing checks
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, 'codex/**']
-    paths:
-      - src/native/quchong.js
-      - scripts/check-quchong.cjs
-      - scripts/setup-ffmpeg.js
-      - scripts/check-ffmpeg-setup.cjs
-      - src/native/faster-whisper.js
-      - src/native/faster_whisper_cli.py
-      - src/native/transcription-manager.js
-      - src/native/srt.js
-      - scripts/check-subtitle-*
-      - scripts/check-transcription-manager.cjs
-      - .github/workflows/windows-processing-checks.yml
+  # Windows development is paused: run this by hand (Actions -> Run workflow) instead of on every push.
 
 permissions:
   contents: read
