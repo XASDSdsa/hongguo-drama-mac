@@ -37,7 +37,9 @@
     "check:structure-bundle": "node scripts/check-video-structure-bundle.cjs",
     "check:structure-ui": "npm run build:react && electron scripts/check-video-structure-ui.cjs",
     "setup:jianying": "node scripts/setup-jianying-runtime.cjs",
-    "check:dialogue": "node scripts/check-dialogue-boundaries.cjs"
+    "check:dialogue": "node scripts/check-dialogue-boundaries.cjs",
+    "format": "npx --yes prettier@3 --write \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\"",
+    "format:check": "npx --yes prettier@3 --check \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\""
   },
   "dependencies": {
     "axios": "^1.13.2"
