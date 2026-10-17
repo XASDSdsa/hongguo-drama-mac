@@ -30,7 +30,7 @@ function load(platform = 'darwin') {
   class Window extends EventEmitter {
     constructor(options) {
       super(); this.options = options; this.destroyed = false;
-      this.webContents = { setWindowOpenHandler() {}, send() {}, once() {} };
+      this.webContents = { setWindowOpenHandler() {}, send() {}, once() {}, on() {} };
       windows.push(this);
     }
     static getAllWindows() { return windows.filter(w => !w.destroyed); }
@@ -53,7 +53,7 @@ function load(platform = 'darwin') {
   const context = vm.createContext({
     require: name => name === 'electron' ? electron : localRequire(name),
     __dirname: root, console, Buffer, URL, Response, setTimeout, clearTimeout,
-    process: { platform, arch: 'arm64', resourcesPath: path.join(root, 'Resources'), env: { PATH: '' } },
+    process: { on() {}, platform, arch: 'arm64', resourcesPath: path.join(root, 'Resources'), env: { PATH: '' } },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   return { root, context, app, windows, ready: () => ready(), menu: () => menu };

@@ -29,8 +29,12 @@ function loadCache() {
   return cache;
 }
 
+let deferredTimer = null;
+const DEFERRED_FLUSH_MS = 1500;
+
 function flush() {
   if (!dataFile) return;
+  if (deferredTimer) { clearTimeout(deferredTimer); deferredTimer = null; }
   const temporary = dataFile + '.tmp';
   try {
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
@@ -102,9 +106,20 @@ function getPlayback() {
   return c.playback;
 }
 
+// 播放进度每几秒就会变化；整份数据同步序列化会阻塞主进程，所以合并写入。
+// 其他保存、退出前的 flushPending 都会把待写内容一并落盘。
 function savePlayback(map) {
   loadCache().playback = map || {};
-  flush();
+  if (deferredTimer) return;
+  deferredTimer = setTimeout(() => {
+    deferredTimer = null;
+    try { flush(); } catch (_) { /* flush 已通过 errorHandler 报告 */ }
+  }, DEFERRED_FLUSH_MS);
+  deferredTimer.unref?.();
+}
+
+function flushPending() {
+  if (deferredTimer) flush();
 }
 
 // ===== 合并任务记录 =====
@@ -116,19 +131,6 @@ function getMergeTasks() {
 
 function saveMergeTasks(list) {
   loadCache().mergeTasks = list || [];
-  flush();
-}
-
-// ===== v2 漫剧重建项目索引 =====
-function getReconstructionProjects() {
-  const c = loadCache();
-  if (!c.reconstructionProjects || typeof c.reconstructionProjects !== 'object') c.reconstructionProjects = {};
-  return c.reconstructionProjects;
-}
-
-function saveReconstructionProject(projectId, record) {
-  const projects = getReconstructionProjects();
-  projects[String(projectId)] = { ...record, projectId: String(projectId), updatedAt: Date.now() };
   flush();
 }
 
@@ -155,10 +157,9 @@ module.exports = {
   saveSeries,
   getPlayback,
   savePlayback,
+  flushPending,
   getMergeTasks,
   saveMergeTasks,
   getStructureProjects,
   saveStructureProject,
-  getReconstructionProjects,
-  saveReconstructionProject,
 };

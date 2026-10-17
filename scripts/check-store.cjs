@@ -24,6 +24,20 @@ try {
   store.saveQuchongTasks([{ id: 'batch-1', status: 'completed', tasks: [{ id: 'task-1', status: 'completed' }] }]);
   assert.deepEqual(store.getQuchongTasks(), [{ id: 'batch-1', status: 'completed', tasks: [{ id: 'task-1', status: 'completed' }] }]);
   assert.deepEqual(fs.readdirSync(dir), ['data.json']);
+  // 播放进度合并写入：多次保存只落一次盘，退出前 flushPending 或任何其他保存都会带上最新进度。
+  const writes = [];
+  fs.writeFileSync = (target, ...args) => { writes.push(target); return write(target, ...args); };
+  store.savePlayback({ s: { currentTime: 1 } }); store.savePlayback({ s: { currentTime: 2 } }); store.savePlayback({ s: { currentTime: 3 } });
+  assert.equal(writes.length, 0, 'playback progress must not write synchronously');
+  store.flushPending();
+  assert.equal(writes.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).playback.s.currentTime, 3);
+  store.flushPending();
+  assert.equal(writes.length, 1, 'nothing pending after flush');
+  store.savePlayback({ s: { currentTime: 4 } });
+  store.saveTasks([{ id: 'other-save' }]);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).playback.s.currentTime, 4, 'other saves carry pending playback');
+  fs.writeFileSync = write;
   console.log('PASS: interrupted save preserves data; task and quchong snapshots recover; no temporary file remains');
 } finally {
   fs.writeFileSync = write;

@@ -33,6 +33,7 @@
     "check:workflow": "node scripts/check-workflow-wiring.cjs",
     "setup:structure": "node scripts/setup-video-structure.cjs",
     "check:structure": "node scripts/check-video-structure.cjs",
+    "check:shots": "python3 scripts/check-shot-boundary-convention.py && python3 scripts/check-shot-algorithm.py",
     "check:structure-bundle": "node scripts/check-video-structure-bundle.cjs",
     "check:structure-ui": "npm run build:react && electron scripts/check-video-structure-ui.cjs",
     "setup:jianying": "node scripts/setup-jianying-runtime.cjs",

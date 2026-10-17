@@ -95,7 +95,7 @@ async function check(name, run) { try { await run(); console.log('PASS ' + name)
     fs.mkdirSync(path.dirname(input.srtPath));
     const text = '1\n00:00:01,000 --> 00:00:02,000\n完整对白。\n\n';
     fs.writeFileSync(input.srtPath, text);
-    h.context.saveSeriesTranscriptionState('S', { episodes: { '1': { ...input, status: 'completed', revision: 'r1', srtFingerprint: h.context.sidecarFingerprint(input.srtPath), srtHash: inspectSubtitle(input.srtPath, 10).hash, validation: { duration: 10 } } } });
+    h.context.saveSeriesTranscriptionState('S', { episodes: { '1': { ...input, status: 'completed', revision: 'r1', srtHash: inspectSubtitle(input.srtPath, 10).hash, validation: { duration: 10 } } } });
     assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 1);
     fs.writeFileSync(input.srtPath, '');
     assert.equal(h.context.getSeriesAnalysisEpisodes('S').length, 0, 'corrupt SRT must not reach AI');

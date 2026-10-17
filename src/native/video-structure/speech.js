@@ -131,14 +131,6 @@ function parsePcm16Wav(buffer) {
   return { buffer, channels, sampleRate, dataStart, dataLength, frameBytes: channels * 2, frames: Math.floor(dataLength / (channels * 2)) };
 }
 
-function pcmFrameRms(wav, frame) {
-  const start = wav.dataStart + frame * wav.frameBytes;
-  const end = Math.min(wav.dataStart + wav.dataLength, start + wav.frameBytes);
-  let sum = 0, count = 0;
-  for (let cursor = start; cursor + 1 < end; cursor += 2) { const value = wav.buffer.readInt16LE(cursor); sum += value * value; count += 1; }
-  return count ? Math.sqrt(sum / count) : 0;
-}
-
 function energiesForRange(wav, start, end, frameSeconds = VOICE_TAIL_FRAME_SECONDS) {
   const first = Math.max(0, Math.floor(start * wav.sampleRate));
   const last = Math.min(wav.frames, Math.ceil(end * wav.sampleRate));

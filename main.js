@@ -516,8 +516,7 @@ function markPipelineDeduped(sourcePath, outputPath) {
     record.updatedAt = now;
     record.error = '';
   }
-  const entries = [...new Set(matches.map(item => item.entry))];
-  for (const entry of entries) { try { saveSeriesRegistry(); } catch (_) {} }
+  try { saveSeriesRegistry(); } catch (_) {}
   return matches.length;
 }
 
@@ -772,13 +771,6 @@ function transcriptionState(entry) {
   if (!entry.transcription || typeof entry.transcription !== 'object') entry.transcription = { version: 1, updatedAt: 0, episodes: {} };
   if (!entry.transcription.episodes || typeof entry.transcription.episodes !== 'object') entry.transcription.episodes = {};
   return entry.transcription;
-}
-
-function sidecarFingerprint(filePath) {
-  try {
-    const stat = fs.statSync(filePath);
-    return stat.isFile() && stat.size > 0 ? `${stat.size}:${Math.round(stat.mtimeMs)}` : null;
-  } catch (_) { return null; }
 }
 
 function getSeriesTranscriptionState(seriesId) {
@@ -3924,18 +3916,6 @@ function aiInputFingerprint(filePath) {
   } catch (_) { return null; }
 }
 
-function aiCompletedEpisodeFile(seriesId, seriesTitle, episodeIndex) {
-  const sid = String(seriesId);
-  const idx = Number(episodeIndex);
-  const task = downloadTasks
-    .filter(t => t.hongguoInfo && String(t.hongguoInfo.series_id) === sid && Number(t.hongguoInfo.vid_index) === idx)
-    .sort((a, b) => (b.startTime || 0) - (a.startTime || 0))
-    .find(hasCompleteTaskFile);
-  if (task) return task.savePath;
-  try { return collectSeriesEpisodeFiles(sid, seriesTitle).ordered.find(item => Number(item.vid_index) === idx)?.path || null; }
-  catch (_) { return null; }
-}
-
 // AI 文案只能读取“最终成品”。原始下载文件、单独去重输出或仍在合并中的
 // 中间文件都不满足条件；getPipelineStatus 同时会检查成品指纹，文件被移动/修改后立即失效。
 function aiReadyEpisodeProduct(seriesId, episodeIndex) {
@@ -4468,9 +4448,7 @@ function isFileInUse(file) {
       (batch.bgm && quchongPathKey(batch.bgm) === key)))) return true;
   // AI 文案提取只读取已下载源文件，任务在 queued/running 阶段也不能删除输入。
   try {
-    const aiTasks = typeof listAiMaterialTasks === 'function'
-      ? listAiMaterialTasks()
-      : typeof aiTaskList === 'function' ? aiTaskList() : [];
+    const aiTasks = aiTaskList();
     if (aiTasks.some(task =>
       ['queued', 'running', 'extracting', 'transcribing'].includes(task.status) && task.inputPath && quchongPathKey(task.inputPath) === key
     )) return true;
@@ -4929,6 +4907,13 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, 'dist-react', 'index.html'));
   }
 
+  // 渲染进程崩溃（内存不足等）时重新加载页面；后台下载/处理任务不受影响。
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Window] 渲染进程退出:', details?.reason);
+    if (details?.reason === 'clean-exit' || createdWindow.isDestroyed()) return;
+    try { createdWindow.webContents.reload(); } catch (_) {}
+  });
+
   createdWindow.on('close', () => {
     if (mainWindow === createdWindow) rendererClosing = true;
   });
@@ -4948,21 +4933,25 @@ function createWindow() {
 
 // ===== 应用生命周期 =====
 app.whenReady().then(async () => {
+  // 主进程里的未捕获错误只记录，不弹出 Electron 的致命错误对话框，也不让正在运行的下载/处理任务陪葬。
+  process.on('unhandledRejection', reason => console.error('[Main] 未处理的 Promise 拒绝:', reason?.stack || reason));
+  process.on('uncaughtException', error => console.error('[Main] 未捕获异常:', error?.stack || error));
   const dataFile = path.join(app.getPath('userData'), 'data.json');
   store.init(dataFile);
-  loadDownloadTasks();
-  loadQuchongTasks();
-  loadSeriesRegistry();
+  // 任何一项历史数据加载失败都不能让应用没有窗口；失败项按空数据启动并留下日志。
+  for (const [label, load] of [['下载任务', loadDownloadTasks], ['去重任务', loadQuchongTasks], ['短剧档案', loadSeriesRegistry]]) {
+    try { load(); } catch (e) { console.error(`[Startup] 读取${label}失败:`, e.message); }
+  }
   try { rebuildSeriesRegistryFromTasks(); } catch (_) { /* storage-error reports the failed write when the window opens. */ }
   // 任务记录可能缺失（被清空/跨会话），从磁盘补回，保证下载列表与文件一致
   try { rescanDownloadsFromDisk(); } catch (e) { console.warn('[Rescan] 启动补登记失败:', e.message); }
-  loadMergeTasks();
+  try { loadMergeTasks(); } catch (e) { console.error('[Startup] 读取合并任务失败:', e.message); }
   registerStreamProtocol();
   registerLocalProtocol();
   const settings = getCurrentSettings();
 
   // 代理必须在创建窗口、发起任何请求之前生效
-  await applyProxySettings(settings);
+  try { await applyProxySettings(settings); } catch (e) { console.error('[Proxy] 启动时应用代理失败，使用直连:', e.message); }
 
   // 启动后自动接着跑「等待中」的任务（上次未下完的队列），无需手动点启动
   const resumed = enqueuePendingTasks();
@@ -5010,7 +4999,7 @@ app.whenReady().then(async () => {
       ] },
     ]));
   }
-  await rememberWindowsEncoder();
+  try { await rememberWindowsEncoder(); } catch (e) { console.warn('[Encoder] 检测失败:', e.message); }
   createWindow();
 });
 
@@ -5051,6 +5040,7 @@ app.on('window-all-closed', () => {
 
 let waitingForSubtitles = false;
 app.on('before-quit', event => {
+  try { store.flushPending(); } catch (_) {}
   if (!transcriptionManager?.hasActive() && !reconstructionPipeline?.hasActive()) return;
   event.preventDefault();
   if (waitingForSubtitles) return;
