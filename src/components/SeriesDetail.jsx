@@ -15,8 +15,12 @@ const DEFAULT_SPLIT = { min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2
 const DEFAULT_SPEED = { speed_min: 1.03, speed_max: 1.21 };
 const EPISODE_PAGE_SIZES = [30, 60, 100, 200];
 const DRAFT_MODES = [
-  ['simple', '3 分轨', '文案 · 视频 · 音频各一条轨道，按已有分镜直接切'],
-  ['multi', '多分轨', '人声、背景、音效等拆成多条轨道，更细'],
+  ['simple', '3 分轨', '文案、视频、音频各一条轨道，直接用分镜解析结果切原视频'],
+  [
+    'multi',
+    '多分轨',
+    '走完整的视频结构化拆解（分镜、人声/背景分离、台词识别、分镜导出），生成视频片段、文案、字幕、配音、背景声、特效声等多条轨道',
+  ],
 ];
 
 function readJson(key) {

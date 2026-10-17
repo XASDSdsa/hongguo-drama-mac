@@ -3674,9 +3674,9 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
 
 // ===== 管理剧集的支线任务：生成剪映草稿 =====
 // 对「去重」成品逐集做结构化拆解（分镜 + 文案），再生成剪映草稿。多分轨沿用完整草稿；
-// 三分轨（文案 / 视频 / 音频）直接用现成的分镜和字幕切原视频，不另外渲染分镜文件、不分离人声。
+// 三分轨（文案 / 视频 / 音频）直接用现成的分镜和字幕切原视频，不另外渲染分镜文件。两种方式前面的结构化分析步骤相同。
 const libraryDraftJobs = new Map(); // 剧文件夹 -> 当前/最近一次草稿任务
-const DRAFT_MODE_TEXT = { simple: '三分轨（文案·视频·音频）', multi: '多分轨' };
+const DRAFT_MODE_TEXT = { simple: '三分轨（文案·视频·音频）', multi: '多分轨（完整结构化拆解）' };
 const DRAFT_STAGE_TEXT = {
   media: '读取视频信息',
   audio: '提取音频',

@@ -1,5 +1,5 @@
 'use strict';
-// 三分轨（文案 / 视频 / 音频）剪映草稿：直接用结构项目的分镜和字幕切原视频，不渲染分镜文件，不分离人声。
+// 三分轨（文案 / 视频 / 音频）剪映草稿：直接用结构项目的分镜和字幕切原视频，不渲染分镜文件，不拆人声/背景/特效轨。
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');

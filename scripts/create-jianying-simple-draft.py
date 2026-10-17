@@ -3,8 +3,8 @@
 
 The simple scheme does no extra processing: it reuses the structure project's
 final shot list and subtitle cues and cuts the original video directly in the
-draft.  No clip files are rendered, and no voice / background / effect stems
-are separated.
+draft.  No clip files are rendered and no voice / background / effect tracks
+are built (the structure analysis itself still ran before this script).
 
   视频  one segment per final shot, taken from the original video
   音频  the original audio, one full-length segment
