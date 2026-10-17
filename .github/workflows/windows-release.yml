@@ -153,10 +153,19 @@ jobs:
           node scripts/make-zip.js
           node scripts/prepare-release-assets.js
 
+      - name: List build output
+        shell: bash
+        run: |
+          ls -la dist dist/release || true
+
       - uses: actions/upload-artifact@v6
         with:
           name: hongguo-windows
-          path: dist/release/*
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/release/*
+          if-no-files-found: error
 
       - name: Check packaged subtitle engine without system Python
         continue-on-error: true
