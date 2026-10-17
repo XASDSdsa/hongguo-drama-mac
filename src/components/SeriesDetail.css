@@ -407,3 +407,8 @@ button.lib-ep.is-missing {
 button.lib-ep.is-missing:hover {
   background: var(--accent-soft);
 }
+
+.proc-nums input {
+  width: 64px;
+  text-align: center;
+}

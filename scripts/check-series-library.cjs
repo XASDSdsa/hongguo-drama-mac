@@ -328,7 +328,7 @@ async function check(name, fn) {
         vm.runInContext(
           `JSON.stringify((() => { const r = selectDraftFiles(${JSON.stringify(
             [6, 1, 2, 10, 3, 4, 5].map((n) => `/s/去重/剧_第${String(n).padStart(3, '0')}集.mp4`),
-          )}, ${JSON.stringify(scope ?? null)}); return { files: r.files.map((f) => f.split('/').pop()), missing: r.missing }; })())`,
+          )}, ${JSON.stringify(scope ?? null)}); return { files: r.files.map((f) => f.split('/').pop()), missing: r.missing, numbers: r.numbers }; })())`,
           context,
         ),
       );
@@ -339,17 +339,21 @@ async function check(name, fn) {
       '剧_第003集.mp4',
       '剧_第004集.mp4',
     ]);
-    assert.deepEqual(names(pickFiles({ count: 2 })), ['剧_第001集.mp4', '剧_第002集.mp4']);
-    assert.deepEqual(names(pickFiles({ from: 4, count: 3 })), ['剧_第004集.mp4', '剧_第005集.mp4', '剧_第006集.mp4']);
-    assert.deepEqual(names(pickFiles({ from: 6, count: 9 })), ['剧_第006集.mp4', '剧_第010集.mp4']);
-    assert.deepEqual(names(pickFiles({ from: 11, count: 4 })), []);
+    assert.deepEqual(names(pickFiles({ numbers: [10, 3] })), ['剧_第003集.mp4', '剧_第010集.mp4']);
+    assert.deepEqual(pickFiles({ numbers: [3, 99] }).missing, [99]);
+    assert.deepEqual(
+      names(pickFiles({ numbers: [1, 2, 3, 4, 5, 6] })),
+      ['剧_第001集.mp4', '剧_第002集.mp4', '剧_第003集.mp4', '剧_第004集.mp4'],
+      'at most four',
+    );
+    assert.deepEqual(pickFiles({ numbers: [] }).numbers, []);
     assert.equal(
-      vm.runInContext("JSON.stringify(normalizeDraftScope({ from: 'x', count: 0 }))", context),
-      JSON.stringify({ from: 1, count: 4 }),
+      vm.runInContext("JSON.stringify(normalizeDraftScope({ numbers: ['x', 2, 2, 0, -1] }))", context),
+      JSON.stringify({ numbers: [2] }),
     );
     const noneMatched = await handlers['library-draft'](
       {},
-      { dir: series.path, mode: 'simple', scope: { from: 7, count: 2 } },
+      { dir: series.path, mode: 'simple', scope: { numbers: [7] } },
     );
     assert.equal(noneMatched.success, false);
     // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。

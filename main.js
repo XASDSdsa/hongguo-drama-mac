@@ -3711,29 +3711,29 @@ function normalizeSideTasks(value) {
   };
 }
 
-const DEFAULT_DRAFT_COUNT = 4;
+const DRAFT_SLOTS = 4;
 
-/** 草稿只做几集：从成品第 from 集起，连续做 count 集（默认从第 1 集起做 4 集）。 */
+/** 草稿只做指定的几集（最多 4 集，填的是成品集号）；没填就默认第 1–4 集。 */
 function normalizeDraftScope(value) {
-  const from = Math.floor(Number(value?.from));
-  const count = Math.floor(Number(value?.count));
-  return {
-    from: from >= 1 && from < 10000 ? from : 1,
-    count: count >= 1 && count <= 999 ? count : DEFAULT_DRAFT_COUNT,
-  };
+  const numbers = [...new Set((Array.isArray(value?.numbers) ? value.numbers : []).map(Number))]
+    .filter((n) => Number.isInteger(n) && n >= 1 && n < 10000)
+    .sort((a, b) => a - b)
+    .slice(0, DRAFT_SLOTS);
+  return { numbers: numbers.length || Array.isArray(value?.numbers) ? numbers : [1, 2, 3, 4] };
 }
 
 /**
- * 从去重成品里挑出要做草稿的几集，按成品文件名里的集号（重新拆分后的新集号）判断：
- * 取集号不小于 from 的前 count 个。认不出集号的文件不参与。
+ * 从去重成品里挑出要做草稿的集，按成品文件名里的集号（重新拆分后的新集号）判断；
+ * 名单里成品里没有的集号放进 missing。
  */
 function selectDraftFiles(files, scope) {
-  const rule = normalizeDraftScope(scope);
+  const { numbers } = normalizeDraftScope(scope);
   const rows = files
     .map((file) => ({ file, index: seriesLibrary.parseEpisodeIndex(path.basename(file)) }))
-    .filter((row) => row.index != null && row.index >= rule.from)
+    .filter((row) => numbers.includes(row.index))
     .sort((a, b) => a.index - b.index || a.file.localeCompare(b.file, 'zh-CN', { numeric: true }));
-  return { files: rows.slice(0, rule.count).map((row) => row.file), from: rule.from };
+  const have = new Set(rows.map((row) => row.index));
+  return { files: rows.map((row) => row.file), missing: numbers.filter((n) => !have.has(n)), numbers };
 }
 
 function normalizeDraftMode(value) {
@@ -3836,8 +3836,13 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   if (running?.status === 'running') return { success: false, error: '这部剧的剪映草稿正在生成' };
   if (!candidates.length)
     return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
-  const { files, from } = selectDraftFiles(candidates, scope);
-  if (!files.length) return { success: false, error: `去重成品里没有第 ${from} 集起的视频，没法生成剪映草稿` };
+  const { files, missing, numbers } = selectDraftFiles(candidates, scope);
+  if (!numbers.length) return { success: false, error: '请填要做草稿的成品集号' };
+  if (!files.length) {
+    return { success: false, error: `去重成品里没有第 ${missing.join('、')} 集，没法生成剪映草稿` };
+  }
+  if (missing.length)
+    libLog(path.resolve(dir), 'warn', `剪映草稿：成品里没有第 ${missing.join('、')} 集，已跳过`, 'side');
   const kind = normalizeDraftMode(mode);
   const problem = await libraryDraftReadiness(kind);
   if (problem) {

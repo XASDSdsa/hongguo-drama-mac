@@ -78,8 +78,10 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
-  const [draftFrom, setDraftFrom] = useState(Math.max(1, Math.floor(Number(saved.draftFrom)) || 1));
-  const [draftCount, setDraftCount] = useState(Math.max(1, Math.floor(Number(saved.draftCount)) || 4));
+  // 草稿最多做 4 集，每格自由填成品集号（默认 1–4）。
+  const [draftNums, setDraftNums] = useState(
+    Array.isArray(saved.draftNums) && saved.draftNums.length === 4 ? saved.draftNums.map(String) : ['1', '2', '3', '4'],
+  );
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
@@ -196,8 +198,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   }, [saved]);
 
   useEffect(() => {
-    if (opts) writeJson(STORAGE_KEY, { opts, split, dedupOn, draftOn, draftMode, draftFrom, draftCount });
-  }, [opts, split, dedupOn, draftOn, draftMode, draftFrom, draftCount]);
+    if (opts) writeJson(STORAGE_KEY, { opts, split, dedupOn, draftOn, draftMode, draftNums });
+  }, [opts, split, dedupOn, draftOn, draftMode, draftNums]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
   }, [pageSize]);
@@ -336,8 +338,10 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
         : activity?.draft?.status === 'running'
           ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
           : '';
-  const draftScopeValue = { from: draftFrom, count: draftCount };
+  const draftNumbers = [...new Set(draftNums.map((n) => Math.floor(Number(n))).filter((n) => n >= 1 && n < 10000))];
+  const draftScopeValue = { numbers: draftNumbers };
   const nothingToDo = dedupOn ? !selectedCount : !draftOn;
+  const draftBlocked = draftOn && draftNumbers.length === 0;
 
   const hopeless = (decision?.blocking || [])
     .filter((item) => item.reason && item.reason.retryHelps === false)
@@ -578,31 +582,24 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                       </label>
                     ))}
                   </div>
-                  <label className="lib-number">
-                    成品从第
-                    <input
-                      className="input-field"
-                      type="number"
-                      min="1"
-                      max="9999"
-                      value={draftFrom}
-                      onChange={(e) => setDraftFrom(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
-                      disabled={submitting}
-                      aria-label="从成品第几集开始"
-                    />
-                    集起，做
-                    <input
-                      className="input-field"
-                      type="number"
-                      min="1"
-                      max="999"
-                      value={draftCount}
-                      onChange={(e) => setDraftCount(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
-                      disabled={submitting}
-                      aria-label="做几集"
-                    />
+                  <div className="lib-number proc-nums" role="group" aria-label="要做草稿的成品集号">
+                    做成品第
+                    {draftNums.map((value, slot) => (
+                      <input
+                        key={slot}
+                        className="input-field"
+                        type="number"
+                        min="1"
+                        max="9999"
+                        value={value}
+                        placeholder="—"
+                        onChange={(e) => setDraftNums(draftNums.map((old, i) => (i === slot ? e.target.value : old)))}
+                        disabled={submitting}
+                        aria-label={`第 ${slot + 1} 个集号`}
+                      />
+                    ))}
                     集
-                  </label>
+                  </div>
                 </div>
               )}
             </div>
@@ -627,7 +624,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               <button
                 className="btn btn-primary proc-start"
                 onClick={() => (dedupOn ? setPreview(true) : submit(undefined))}
-                disabled={submitting || !!activity?.planning || nothingToDo || (dedupOn && !opts)}
+                disabled={submitting || !!activity?.planning || nothingToDo || draftBlocked || (dedupOn && !opts)}
               >
                 {startLabel}
               </button>
