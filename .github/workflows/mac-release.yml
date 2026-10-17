@@ -72,6 +72,7 @@ jobs:
         run: |
           "$FFMPEG_PATH" -version
           node scripts/check-quchong.cjs
+          node scripts/check-quchong-size.cjs
           npm run check:subtitles
           python scripts/check-subtitle-alignment.py
           npm run check:premium

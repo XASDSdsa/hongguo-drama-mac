@@ -20,7 +20,6 @@ const fallbackDefaults = {
   eq_enable: true,
   orig_volume: 0.5,
   bgm_volume: 0.15,
-  resolution: '1080x1920',
   encoder: 'auto',
   quality: 'standard',
   jobs: 2,
@@ -465,13 +464,6 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
           <span className="qc-hint">默认值与本地版一致</span>
         </div>
         <div className="qc-options">
-          <label>
-            分辨率
-            <select value={opts.resolution} onChange={(event) => update('resolution', event.target.value)}>
-              <option value="1080x1920">1080 × 1920</option>
-              <option value="720x1280">720 × 1280</option>
-            </select>
-          </label>
           <label>
             编码器
             <select value={opts.encoder} onChange={(event) => update('encoder', event.target.value)}>

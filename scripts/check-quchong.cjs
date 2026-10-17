@@ -310,7 +310,6 @@ async function main() {
       ...quchong.DEFAULTS,
       encoder: 'cpu',
       quality: 'lean',
-      resolution: '720x1280',
       speed_min: 1,
       speed_max: 1,
       pitch_min: 1,
@@ -355,8 +354,9 @@ async function main() {
     });
     const output = await quchong.probeMedia(ffprobe, dst);
     if (!output.has_video || !output.has_audio) throw new Error('合成输出缺少音视频轨道');
-    if (output.video_width !== 720 || output.video_height !== 1280)
-      throw new Error(`输出尺寸错误：${output.video_width}x${output.video_height}`);
+    const sourceSize = await quchong.probeMedia(ffprobe, src);
+    if (output.video_width !== sourceSize.video_width || output.video_height !== sourceSize.video_height)
+      throw new Error(`输出必须保持原分辨率：${output.video_width}x${output.video_height}`);
     await runJobCase('silent video with looping BGM', {
       ffmpegPath: ffmpeg,
       ffprobePath: ffprobe,
@@ -441,8 +441,9 @@ async function main() {
           },
         });
         const info = await quchong.probeMedia(ffprobe, target);
-        assert.equal(info.video_width, 1080);
-        assert.equal(info.video_height, 1920);
+        const sourceInfo = await quchong.probeMedia(ffprobe, portrait);
+        assert.equal(info.video_width, sourceInfo.video_width, '不改分辨率');
+        assert.equal(info.video_height, sourceInfo.video_height, '不改分辨率');
         assert.equal(info.has_audio, true);
         assert.equal(progress.at(-1), 100);
         assert.deepEqual(stages, ['probing', 'encoding', 'finalizing', 'validating', 'saving']);

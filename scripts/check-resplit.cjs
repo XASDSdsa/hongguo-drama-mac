@@ -194,7 +194,7 @@ const plan = (sources, split = {}, overrides = {}) =>
 
     await check('real ffmpeg: a piece cut from two episodes is joined, sped up by the planned factor', async () => {
       const dst = path.join(tmp, 'out', 'piece.mp4');
-      const options = { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false, resolution: '720x1280' };
+      const options = { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false };
       // 第一集 8–12 秒（4 秒）+ 第二集 0–6 秒（6 秒）= 10 秒，变速 1.25 倍 => 8 秒。
       await quchong.runJob({
         ffmpegPath: 'ffmpeg',
@@ -222,7 +222,8 @@ const plan = (sources, split = {}, overrides = {}) =>
       const kinds = probe.streams.map((stream) => stream.codec_type).sort();
       assert.deepEqual(kinds, ['audio', 'video']);
       const video = probe.streams.find((stream) => stream.codec_type === 'video');
-      assert.equal(video.width, 720);
+      assert.equal(video.width, 270, 'joined pieces keep the source resolution');
+      assert.equal(video.height, 480);
       assert.ok(Math.abs(Number(probe.format.duration) - 8) < 0.5, `duration ${probe.format.duration}`);
     });
 
@@ -235,7 +236,7 @@ const plan = (sources, split = {}, overrides = {}) =>
         dst,
         segments: [{ src: a, start: 2, duration: 5 }],
         speed: 1,
-        opts: { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false, resolution: '720x1280' },
+        opts: { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false },
       });
       const duration = Number(
         execFileSync('ffprobe', [

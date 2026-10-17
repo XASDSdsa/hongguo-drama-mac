@@ -40,7 +40,6 @@ const DEFAULTS = Object.freeze({
   orig_volume: 0.5,
   bgm_volume: 0.15,
   eq_enable: true,
-  resolution: '1080x1920',
   encoder: DEFAULT_ENCODER,
   quality: 'standard',
   jobs: DEFAULT_JOBS,
@@ -79,7 +78,6 @@ function validateOptions(input = {}) {
   if (opts.speed_min > opts.speed_max || opts.pitch_min > opts.pitch_max || opts.noise_min > opts.noise_max) {
     throw new Error('参数下限不能大于上限');
   }
-  if (!['1080x1920', '720x1280'].includes(opts.resolution)) throw new Error('分辨率无效');
   if (!['auto', 'cpu', 'videotoolbox', 'nvenc', 'amf', 'qsv'].includes(opts.encoder)) throw new Error('编码器无效');
   if (!['standard', 'lean'].includes(opts.quality)) throw new Error('画质选项无效');
   for (const key of ['vignette', 'black_intro', 'eq_enable']) {
@@ -150,14 +148,16 @@ function encoderArgs(name, lean, width, height) {
 function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, segments }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
-  const [width, height] = opts.resolution.split('x').map(Number);
+  // 不改分辨率：成品和原视频一样大（宽高取偶数）。裁掉边缘后再放回原尺寸，不加黑边、不横竖屏改构图。
+  const even = (value) => Math.max(2, Math.floor(Number(value) / 2) * 2);
+  const width = even(media.video_width);
+  const height = even(media.video_height);
   const speed = r.SPEED;
   const intro = opts.black_intro ? 0.3 : 0;
   const hasAudio = media.has_audio;
   const origin = hasAudio ? Math.min(media.video_start, media.audio_start) : media.video_start;
   const videoDelay = Math.max(0, (media.video_start - origin) / speed + intro);
   const audioDelay = Math.max(0, (media.audio_start - origin) / speed + intro);
-  const horizontal = media.video_width > media.video_height;
   const sourceDuration = media.video_duration > 0 ? media.video_duration : media.duration;
   const outputDuration = sourceDuration / speed + videoDelay;
   const vf = [
@@ -185,28 +185,10 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   }
   const sourceVideo = joined ? '[cv]' : '[0:V:0]';
   const sourceAudio = joined ? '[ca]' : '[0:a:0]';
-  let videoInput = sourceVideo;
-  if (horizontal) {
-    // Keep the source's landscape composition while filling the portrait canvas.
-    filters.push(`${sourceVideo}split=2[bgsrc][fgsrc]`);
-    filters.push(
-      `[bgsrc]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:1,setsar=1[bg]`,
-    );
-    filters.push(`[fgsrc]${vf.join(',')},scale=${width}:-2,setsar=1[fg]`);
-    filters.push('[bg][fg]overlay=(W-w)/2:(H-h)/2[vbase]');
-    videoInput = '[vbase]';
-    vf.length = 0;
-  }
-  if (!horizontal) {
-    if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
-    vf.push(`scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`, 'setsar=1');
-  } else if (r.ROT > 0) {
-    vf.push(
-      `rotate=${r.ROT.toFixed(6)}:fillcolor=black`,
-      `scale=w='trunc(min(${width},${height}*dar)/2)*2':h='trunc(min(${height},${width}/dar)/2)*2'`,
-      'setsar=1',
-    );
-  }
+  const videoInput = sourceVideo;
+  if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
+  // 裁剪和旋转会改变尺寸，这里统一缩回原来的大小。
+  vf.push(`scale=${width}:${height}`, 'setsar=1');
   // rgbashift 只能在 RGB 里做，噪点也留在 RGB 里加（和以前的画面效果、码率一致），
   // 加完立刻转回 yuv420p：以前整条后续滤镜链都按 4:4:4 全分辨率在跑，数据量翻倍，白白变慢。
   if (opts.rgb_shift > 0) vf.push(`rgbashift=rh=${opts.rgb_shift}:rv=1:gh=0:gv=0:bh=-${opts.rgb_shift}:bv=1`);
@@ -217,7 +199,6 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   vf.push(`eq=contrast=${opts.contrast}:saturation=${opts.saturation},hue=h=${r.HUE}`);
   // dither=0：关掉暗角自带的逐像素抖动，肉眼看不出，但每帧省不少计算。
   if (opts.vignette) vf.push('vignette=PI/5:dither=0');
-  vf.push(`pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`);
   if (videoDelay > 0) vf.push(`tpad=start_duration=${videoDelay.toFixed(6)}:color=black`);
   if (opts.black_intro) vf.push(`fade=t=in:st=${videoDelay.toFixed(6)}:d=0.3`);
 

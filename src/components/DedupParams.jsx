@@ -115,17 +115,6 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
       {(!tabbed || tab === 'picture') && (
         <div className="dedup-grid">
           <label>
-            分辨率
-            <select
-              value={opts.resolution}
-              onChange={(e) => onChange('resolution', e.target.value)}
-              disabled={disabled}
-            >
-              <option value="1080x1920">1080×1920</option>
-              <option value="720x1280">720×1280</option>
-            </select>
-          </label>
-          <label>
             画质
             <select value={opts.quality} onChange={(e) => onChange('quality', e.target.value)} disabled={disabled}>
               <option value="standard">标准</option>
