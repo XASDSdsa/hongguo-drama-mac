@@ -297,6 +297,8 @@ function normalizeEpisodeAnalysis(value = {}) {
     })
     .filter(item => item && item.description)
     .slice(0, 20);
+  // 模型如果仍返回时间，只按时间整理。镜头切断不读这份列表，
+  // 保存前会用画面切镜和气口重写 split_points。
   const splitPoints = (Array.isArray(source.split_points) ? source.split_points : [])
     .map(item => {
       const value = typeof item === 'number' ? item : item?.time ?? item?.at ?? item?.seconds;
@@ -305,8 +307,7 @@ function normalizeEpisodeAnalysis(value = {}) {
       return { time, reason: String(typeof item === 'object' ? item.reason ?? item.description ?? '' : '').trim() };
     })
     .filter(Boolean)
-    .sort((a, b) => a.time - b.time)
-    .slice(0, 2);
+    .sort((a, b) => a.time - b.time);
   const hookRange = range(source.best_hook);
   const bestHook = hookRange ? {
     ...hookRange,
@@ -336,7 +337,7 @@ async function analyzeEpisode(transcriptSrt, metadata = {}, baseConfig = {}) {
       messages: [
         {
           role: 'system',
-          content: '你是短剧剪辑导演。只根据输入的 SRT 理解剧情，转写可能有错别字，按语义理解，不要编造。输出严格 JSON，且只能包含 summary、climaxes、split_points、best_hook、arc_end 五个字段。summary 是 200 字以内梗概；climaxes 是数组，每项包含 start、end、description、score(1-10)；split_points 是数组，最多 2 项，每项包含 time、reason，只标场景或话题转换处，禁止标在对话中间；best_hook 是 {start,end,description} 或 null，时长 5-15 秒；arc_end 是布尔值。不要输出 fillers、废话段或其他字段。',
+          content: '你是短剧剪辑导演。只根据输入的 SRT 理解剧情，转写可能有错别字，按语义理解，不要编造。输出严格 JSON，且只能包含 summary、climaxes、split_points、best_hook、arc_end 五个字段。summary 是 200 字以内梗概；climaxes 是数组，每项包含 start、end、description、score(1-10)；split_points 必须是空数组，镜头在哪里切断由画面切镜和语音气口决定，不要根据场景、话题、标点或字幕条目标切点；best_hook 是 {start,end,description} 或 null，时长 5-15 秒；arc_end 是布尔值。不要输出 fillers、废话段或其他字段。',
         },
         {
           role: 'user',

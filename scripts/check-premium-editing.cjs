@@ -29,9 +29,9 @@ const { refineAnalysisCutPoints } = require('../src/native/cut-candidates');
   assert.equal(Object.hasOwn(analysis, 'fillers'), false);
   assert.deepEqual(Object.keys(analysis), ['summary', 'climaxes', 'split_points', 'best_hook', 'arc_end']);
   assert.equal(analysis.climaxes[0].score, 10);
-  assert.equal(analysis.split_points.length, 2);
-  const warned = await refineAnalysisCutPoints({ ...analysis, split_points: [{ time: 10, reason: '场景转换' }] }, {});
-  assert.equal(warned.split_points[0].boundary_status, 'warn');
+  assert.equal(analysis.split_points.length, 3);
+  const cleared = await refineAnalysisCutPoints({ ...analysis, split_points: [{ time: 10, reason: '场景转换' }] }, {});
+  assert.deepEqual(cleared.split_points, []);
 
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'hongguo-premium-check-'));
   try {
