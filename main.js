@@ -21,6 +21,7 @@ const hongguo = require('./src/native/hongguo');
 const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
+const seriesInfo = require('./src/native/series-info');
 const whisper = require('./src/native/whisper');
 const fasterWhisper = require('./src/native/faster-whisper');
 const { createTranscriptionManager, isCompleted: isSubtitleCompleted } = require('./src/native/transcription-manager');
@@ -1620,6 +1621,11 @@ async function refreshOneSeries(entry) {
     // 只有拿到完整且非空列表才写入；upsert 内部还会保留空标题/封面时的旧值。
     upsertSeriesRegistry(data);
     const latest = seriesRegistry.find((item) => String(item.series_id) === seriesId) || entry;
+    // 更新剧集时，给已经下载过的剧补上缺的封面/简介（没下载过的剧不建文件夹）。
+    const claimed = claimedSeriesFolder(seriesId);
+    if (claimed && fs.existsSync(path.join(downloadRoot(), claimed))) {
+      void writeSeriesInfoFiles(seriesId, path.join(downloadRoot(), claimed));
+    }
     const latestEpisodes = Array.isArray(latest.episodes) ? latest.episodes : [];
     const latestIndices = seriesEpisodeIndices(latestEpisodes);
     let addedCount = 0;
@@ -1844,7 +1850,7 @@ async function executeHongguoDownload(task) {
     task.cancelled = false;
     task.progress = 0;
     sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
-    const downloadDir = task.customDir || seriesFolder(series_title);
+    const downloadDir = task.customDir || seriesFolder(series_title, hongguoInfo?.series_id);
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
     task.savePath = finalPath;
@@ -2977,9 +2983,87 @@ function downloadRoot() {
   return path.resolve(configured || app.getPath('downloads'));
 }
 
-/** 下载时为每部剧建一个以剧名命名的文件夹：下载目录/剧名/，不再有来源、ID 摘要或阶段子目录。 */
-function seriesFolder(seriesTitle) {
-  return path.join(downloadRoot(), sanitizeFolderName(seriesTitle) || '未命名短剧');
+/**
+ * 这部剧已经占用的文件夹名：先看剧档案里记的，再看它已有下载任务落在下载目录下的哪个文件夹。
+ * 找不到说明这部剧还没下载过，返回 null。
+ */
+function claimedSeriesFolder(seriesId) {
+  const id = String(seriesId ?? '');
+  if (!id) return null;
+  const entry = seriesRegistry.find((s) => String(s.series_id) === id);
+  if (entry?.folder) return path.basename(String(entry.folder));
+  const root = downloadRoot();
+  for (const task of downloadTasks) {
+    if (String(task.hongguoInfo?.series_id ?? '') !== id || !task.customDir) continue;
+    const dir = path.resolve(task.customDir);
+    if (path.dirname(dir) === root) return path.basename(dir);
+  }
+  return null;
+}
+
+/** 下载目录下已被各部剧占用的文件夹名（小写）-> 剧 ID。 */
+function seriesFolderOwners() {
+  const root = downloadRoot();
+  const owners = new Map();
+  for (const entry of seriesRegistry) {
+    if (entry.folder) owners.set(path.basename(String(entry.folder)).toLowerCase(), String(entry.series_id));
+  }
+  for (const task of downloadTasks) {
+    const id = task.hongguoInfo?.series_id;
+    if (id === undefined || id === null || !task.customDir) continue;
+    const dir = path.resolve(task.customDir);
+    if (path.dirname(dir) !== root) continue;
+    const name = path.basename(dir).toLowerCase();
+    if (!owners.has(name)) owners.set(name, String(id));
+  }
+  return owners;
+}
+
+/**
+ * 下载时为每部剧建一个以剧名命名的文件夹：下载目录/剧名/，不再有来源、ID 摘要或阶段子目录。
+ * 传入剧 ID 时：这部剧已经有文件夹就沿用；不同来源的两部剧同名，后来的加来源后缀，不会混进同一个文件夹。
+ */
+function seriesFolder(seriesTitle, seriesId) {
+  const root = downloadRoot();
+  const base = sanitizeFolderName(seriesTitle) || '未命名短剧';
+  if (seriesId === undefined || seriesId === null || seriesId === '') return path.join(root, base);
+  const claimed = claimedSeriesFolder(seriesId);
+  if (claimed) return path.join(root, claimed);
+  return path.join(root, seriesInfo.pickFolderName({ title: base, seriesId, owners: seriesFolderOwners() }));
+}
+
+/** 把剧文件夹名记进剧档案，之后这部剧一直用它（剧名后来变了也不会换文件夹）。 */
+function rememberSeriesFolder(seriesId, dir) {
+  const entry = seriesRegistry.find((s) => String(s.series_id) === String(seriesId));
+  const name = path.basename(dir);
+  if (!entry || entry.folder === name) return;
+  entry.folder = name;
+  try {
+    saveSeriesRegistry();
+  } catch (_) {}
+}
+
+async function fetchCoverImage(url) {
+  const response = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 15000,
+    maxContentLength: 15 * 1024 * 1024,
+    headers: { 'User-Agent': hongguo.UA },
+  });
+  return Buffer.from(response.data);
+}
+
+/** 把来源平台的封面和简介存进剧文件夹（已有的不覆盖），失败只记日志，不影响下载。 */
+function writeSeriesInfoFiles(seriesId, dir, coverHint) {
+  const entry = seriesRegistry.find((s) => String(s.series_id) === String(seriesId));
+  return seriesInfo
+    .saveSeriesInfo({
+      dir,
+      cover: coverHint || entry?.cover || '',
+      synopsis: entry?.synopsis || '',
+      fetchImage: fetchCoverImage,
+    })
+    .catch((error) => console.warn('[SeriesInfo] 保存封面/简介失败:', error.message));
 }
 
 /** 输出目录：先用本次操作明确给出的目录，其次是设置里指定的目录；都没有就报错，绝不自动推导。 */
@@ -3025,7 +3109,7 @@ function repairTaskDestination(task) {
   if (!task.pathConflict) return;
   const settings = getCurrentSettings(),
     info = task.hongguoInfo || {};
-  task.customDir = seriesFolder(info.series_title);
+  task.customDir = seriesFolder(info.series_title, info.series_id);
   const filename = uniqueEpisodeFilename(settings, info.series_title, {
     vid_index: info.vid_index,
     title: info.ep_title,
@@ -4459,10 +4543,13 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
 
   const settings = getCurrentSettings();
   const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
-  const downloadDir = seriesFolder(cleanSeriesTitle);
+  const downloadDir = seriesFolder(cleanSeriesTitle, seriesId);
   try {
     fs.mkdirSync(downloadDir, { recursive: true });
   } catch (_) {}
+  rememberSeriesFolder(seriesId, downloadDir);
+  // 封面和简介跟着下载一起存进剧文件夹；不等它完成，也不让它影响下载。
+  void writeSeriesInfoFiles(seriesId, downloadDir, cover || (episodes[0] && episodes[0].cover));
 
   const batchId = 'hongguobatch_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
   const firstCover = cover || (episodes[0] && episodes[0].cover) || '';
