@@ -143,15 +143,24 @@ jobs:
           node scripts/check-whisper-adapter.cjs
           npm run check:ai
 
-      - name: Build installer, portable and unpacked zip
+      - name: Build React assets and title fonts
         run: |
           npm run setup:title-fonts
           npm run build:react
-          npx electron-builder --win nsis --x64 --publish never
-          npx electron-builder --win portable --x64 --publish never
+
+      - name: Build NSIS installer
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Build portable executable
+        run: npx electron-builder --win portable --x64 --publish never
+
+      - name: Build unpacked directory and zip
+        run: |
           npx electron-builder --win --dir --x64 --publish never
           node scripts/make-zip.js
-          node scripts/prepare-release-assets.js
+
+      - name: Prepare release assets
+        run: node scripts/prepare-release-assets.js
 
       - name: List build output
         shell: bash
@@ -168,5 +177,4 @@ jobs:
           if-no-files-found: error
 
       - name: Check packaged subtitle engine without system Python
-        continue-on-error: true
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
