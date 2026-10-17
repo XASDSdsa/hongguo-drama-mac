@@ -37,7 +37,11 @@ async function testProcessTreeCancellation() {
   const task = run(process.execPath, ['-e', parentCode], { signal: controller.signal, killProcessTree: true });
   const cancelled = assert.rejects(task, error => error?.code === 'ABORT_ERR');
   let pids = [];
-  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
+  // 已退出但尚未被回收的僵尸进程不算存活（容器里没有 init 回收时会一直留在进程表）。
+  const alive = pid => {
+    try { process.kill(pid, 0); } catch (error) { return error.code !== 'ESRCH'; }
+    try { return !/^\d+ \(.*\) Z /.test(require('node:fs').readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return true; }
+  };
   try {
     const deadline = Date.now() + 3000;
     while (!(await fs.stat(marker).then(stat => stat.size > 0).catch(() => false)) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));

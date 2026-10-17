@@ -1140,6 +1140,8 @@ async function runEpisodeWorkflow(seriesId, episodeIndex, options = {}) {
     updateWorkflowRecord(entry, index, { status: 'running', stage: 'structure', progress: 0, message: '开始结构化拆解', error: null, inputPath, inputFingerprint: pipelineFingerprint(inputPath), projectId: run.projectId, draftPath: record.draftPath || null });
     if (run.cancelled) throw workflowError('工作流已停止', 'WORKFLOW_STOPPED');
     await getReconstructionPipeline().start({ inputPath, projectId: run.projectId, outputRoot: structureRoot, force: options.force === true });
+    // 停止请求若发生在 start() 的异步准备阶段，流水线里还没有任务可取消；任务入队后补发一次。
+    if (run.cancelled) getReconstructionPipeline().cancel(run.projectId);
     const structure = await getReconstructionPipeline().wait(run.projectId);
     if (run.cancelled || structure?.status === 'stopped') throw workflowError('工作流已停止', 'WORKFLOW_STOPPED');
     const moduleIds = ['media', 'audio', 'shots', 'clips', 'separation', 'transcript', 'alignment', 'export', 'jianying'];

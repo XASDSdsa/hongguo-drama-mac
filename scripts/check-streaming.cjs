@@ -75,7 +75,8 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     assert.equal((await pending).success, false);
   });
   await check('encrypted fallback retains bytes and correct suffix/invalid Range', async () => {
-    const h = hload(async () => ({ url: base + '/range', spadeA: 'encrypted' }));
+    // 解密在 worker 线程中使用真实原生模块；夹具用恒等解密桩，只验证缓冲与 Range 逻辑。
+    const h = hload(async () => ({ url: base + '/range', spadeA: 'encrypted' }), { './src/native/decrypt-worker.cjs': { decryptInWorker: async ({ buffer }) => buffer } });
     const p = await h.handlers['prepare-online-play']({}, { vid: 'encrypted' });
     let r = await h.protocols['hongguo-stream'](new Request(p.url, { headers: { range: 'bytes=-3' } }));
     assert.equal(await r.text(), '789');

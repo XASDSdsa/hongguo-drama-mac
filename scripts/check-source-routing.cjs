@@ -12,10 +12,12 @@ function extract(name) {
 const checks = [
   ['compatibility cache rechecks access before sharing or reusing results', async () => {
     const handlers = {};
-    const context = { ipcMain: { handle: (name, fn) => handlers[name] = fn },
+    const context = { ipcMain: { handle: (name, fn) => handlers[name] = fn }, AbortController, randomUUID: require('node:crypto').randomUUID,
       hongguo: { fetchEpisodeList: async () => ({ episodes: [{ vid: 'xifan:huabo:a:2', vid_index: 2, locked: true }] }) },
-      compatPreparing: new Map([['cached', Promise.resolve({ success: true })]]), compatPathFor: () => 'cached',
-      transcodeForPlayback: () => Promise.resolve({ success: true }) };
+      compatPreparing: new Map(), compatRequests: new Map(), compatClearing: null,
+      compatCancelled: () => ({ success: false, cancelled: true }), compatPathFor: () => 'cached' };
+    // 锁定判断位于转码任务本身：即使磁盘上已有缓存路径，也必须先复查来源权限。
+    vm.runInNewContext(extract('transcodeForPlayback'), context);
     const start = source.indexOf("ipcMain.handle('transcode-for-playback'");
     vm.runInNewContext(source.slice(start, source.indexOf('\n});', start) + 4), context);
     const result = await handlers['transcode-for-playback']({}, { seriesId: 'xifan:huabo:a', vidIndex: 2, vid: 'xifan:huabo:a:2', filePath: '/cached.mp4' });
@@ -32,7 +34,10 @@ const checks = [
     const context = { path, createHash, sanitizeFolderName: value => value };
     vm.runInNewContext(extract('seriesDownloadDir'), context);
     const resolve = context.seriesDownloadDir;
-    assert.equal(resolve('/downloads', '123', '同名剧'), '/downloads/红果短剧/同名剧');
+    // 目录名 = 标题 + 剧 ID 的 SHA-256 前 12 位，所以同名剧不会共用目录。
+    const suffix = id => createHash('sha256').update(id).digest('hex').slice(0, 12);
+    assert.equal(resolve('/downloads', '123', '同名剧'), `/downloads/红果短剧/同名剧-${suffix('123')}`);
+    assert.equal(resolve('/downloads', 'xifan:huabo:a', '同名剧'), `/downloads/西饭短剧/同名剧-${suffix('xifan:huabo:a')}`);
     const a = resolve('/downloads', 'xifan:huabo:a', '同名剧');
     assert.notEqual(a, resolve('/downloads', '123', '同名剧'));
     assert.notEqual(a, resolve('/downloads', 'xifan:huabo:b', '同名剧'));

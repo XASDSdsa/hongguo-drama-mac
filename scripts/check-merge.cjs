@@ -21,6 +21,10 @@ async function merge(label, files, compatible, mode = '') {
   vm.runInContext(fs.readFileSync(source, 'utf8'), context);
   context.resolveFfmpeg = bin;
   context.pickH264Encoder = async () => mode === 'fallback' ? 'unavailable_test_encoder' : process.env.MERGE_ENCODER || 'libx264';
+  // 合并只接受已完成去重的输入（见 merge-series 的门禁），夹具直接把测试文件当作有效去重成品。
+  context.getPipelineStatus = () => ({ success: true });
+  context.pipelineEpisode = (_entry, index) => ({ status: 'deduped', dedupPath: files[Number(index) - 1], dedupFingerprint: 'fixture' });
+  context.pipelineFileValid = () => true;
   context.collectSeriesEpisodeFiles = () => ({ dir: root, ordered: files.map((file, i) => ({ path: file, vid_index: i + 1 })) });
   let finish;
   const settled = new Promise(resolve => { finish = resolve; });
