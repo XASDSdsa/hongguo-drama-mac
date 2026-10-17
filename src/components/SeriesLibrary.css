@@ -219,3 +219,21 @@
     flex-direction: column;
   }
 }
+
+.lib-state {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  background: var(--accent);
+  border-radius: 5px;
+}
+.lib-state.is-failed {
+  background: var(--primary);
+}
+.lib-state.is-queued {
+  background: #1e1d1bbf;
+}

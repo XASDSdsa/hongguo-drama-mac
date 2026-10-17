@@ -347,11 +347,7 @@ export default function Quchong({ active = true, target = null, onNavigate }) {
       {seriesContext && (
         <div className="qc-flow-note">
           <b>流程第 2 步：去重</b>
-          <span>
-            {seriesLoading
-              ? '正在读取本剧已下载集…'
-              : `已带入 ${files.length} 集。处理完成后返回本剧查看。`}
-          </span>
+          <span>{seriesLoading ? '正在读取本剧已下载集…' : `已带入 ${files.length} 集。处理完成后返回本剧查看。`}</span>
           <button
             className="btn btn-ghost btn-sm"
             onClick={() => onNavigate?.('library', { seriesId: seriesContext.seriesId })}

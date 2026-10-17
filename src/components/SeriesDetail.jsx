@@ -4,6 +4,8 @@ import { Check, ChevronRight, Film, RefreshCw } from './icons';
 import DedupParams from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
+import SeriesProgress, { isActiveBatch } from './SeriesProgress';
+import useLiveData from './useLiveData';
 import useDialogKeyboard from './useDialogKeyboard';
 import { clampPage, slicePage } from './pagination';
 
@@ -56,7 +58,7 @@ function ghostLabel(item) {
 }
 
 /** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、下载问题、AI 发布素材和去重处理。 */
-export default function SeriesDetail({ folder, active = true, onBack, onNavigate }) {
+export default function SeriesDetail({ folder, active = true, onBack }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -67,11 +69,9 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
   const [opts, setOpts] = useState(null);
   const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
   const [mode, setMode] = useState(saved.mode === 'episode' ? 'episode' : 'resplit');
-  const [progress, setProgress] = useState(null);
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
-  const [queued, setQueued] = useState(false);
   const [decision, setDecision] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(
@@ -82,9 +82,24 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
   const [publish, setPublish] = useState(null); // AI 发布素材的最新结果（新海报、新剧名）
   const requestId = useRef(0);
   const paramsRef = useRef(null);
+  const progressRef = useRef(null);
   const reloadTimer = useRef(null);
   const detailRef = useRef(null);
   detailRef.current = detail;
+
+  // 处理进度、补下载任务和日志都存在主进程里：切到别的页面再回来、重启应用后读到的还是同一份。
+  const [activity, refreshActivity] = useLiveData({
+    load: async () => {
+      const result = await window.electronAPI.libraryActivity(folder.path);
+      return result?.success ? result : null;
+    },
+    isBusy: (data) =>
+      !!data.planning ||
+      data.batches.some(isActiveBatch) ||
+      data.jobs.some((job) => ['waiting', 'starting'].includes(job.status)),
+    active,
+    watch: folder.path,
+  });
 
   // 读取这部剧：先用本地记录显示，再向来源平台核对最新集数。
   const open = useCallback(async () => {
@@ -164,10 +179,8 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
     window.electronAPI.quchongDefaults?.().then((defaults) => {
       if (alive && defaults) setOpts({ ...defaults, ...DEFAULT_SPEED, ...(saved.opts || {}) });
     });
-    const off = window.electronAPI.onLibraryPlanProgress?.((data) => alive && setProgress(data));
     return () => {
       alive = false;
-      off?.();
     };
   }, [saved]);
 
@@ -244,8 +257,6 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
   const submit = async (gapPolicy) => {
     setSubmitting(true);
     setNotice('');
-    setQueued(false);
-    setProgress(null);
     setDecision(null);
     const result = await window.electronAPI.libraryDedup({
       dir: detail.dir,
@@ -256,31 +267,30 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
       gapPolicy,
     });
     setSubmitting(false);
-    setProgress(null);
     if (result?.needsDecision) return setDecision(result);
-    if (result?.success && result.waitingForDownload) {
-      setQueued(false);
-      setNotice(`${result.job.message}。进度见页面上方，可以先离开这个页面。`);
-    } else if (result?.success) {
-      setQueued(true);
-      const summary = result.summary;
-      const lines = [
-        mode === 'resplit' && summary
-          ? `已加入去重队列：将生成 ${summary.count} 集，成品约 ${Math.round(summary.minSeconds)}–${Math.round(summary.maxSeconds)} 秒，放进「去重」文件夹。`
-          : `已加入去重队列（${result.tasks?.length ?? selectedCount} 集），成品会放进「去重」文件夹。`,
-        ...(result.notes || []).map((item) =>
-          item.forced
-            ? `第 ${item.index} 集${item.text}，已按你的选择强制拼接`
-            : `第 ${item.index} 集${item.text}，已直接拼接`,
-        ),
-        ...(result.warnings || []),
-      ];
-      setNotice(lines.join('\n'));
-    } else setNotice(result?.error || '提交失败');
+    // 成功后的进度、提示和日志都在「处理进度」里（来自主进程），这里只在失败时提示。
+    if (!result?.success) setNotice(result?.error || '提交失败');
+    await refreshActivity();
+    if (result?.success) progressRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   };
 
   // 强提示窗打开时，键盘焦点和 Esc 都归它。
   useDialogKeyboard(active && !!decision, () => setDecision(null), '.lib-confirm');
+
+  const activeBatches = (activity?.batches || []).filter(isActiveBatch);
+  const busyText = activity?.planning
+    ? `正在分析切点${activity.planning.total ? `：${activity.planning.done}/${activity.planning.total}` : '…'}`
+    : submitting
+      ? '正在准备…'
+      : activeBatches.length
+        ? `正在处理：已完成 ${activeBatches.reduce((n, b) => n + b.done, 0)}/${activeBatches.reduce((n, b) => n + b.total, 0)} 集`
+        : '';
+
+  const hopeless = (decision?.blocking || [])
+    .filter((item) => item.reason && item.reason.retryHelps === false)
+    .map((item) => item.index);
+  const unretryable =
+    decision?.kind === 'download' && decision.blocking.length > 0 && hopeless.length === decision.blocking.length;
 
   const title = detail?.name || folder.name;
   const shownIssues = showAllIssues ? issueRows : issueRows.slice(0, ISSUE_PREVIEW);
@@ -343,86 +353,6 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
       {detail && (
         <>
           <PublishPanel dir={detail.dir} onResult={setPublish} showPoster={false} />
-
-          {(issueRows.length > 0 || platformGaps.length > 0) && (
-            <section className="lib-issues" aria-label="下载状态">
-              <div className="lib-issues-head">
-                <strong>
-                  {failed.length > 0 && `${failed.length} 集下载失败`}
-                  {failed.length > 0 && (downloading.length > 0 || notDownloaded.length > 0) && '，'}
-                  {downloading.length > 0 && `${downloading.length} 集下载中`}
-                  {downloading.length > 0 && notDownloaded.length > 0 && '，'}
-                  {notDownloaded.length > 0 && `${notDownloaded.length} 集没下载`}
-                  {issueRows.length === 0 && '缺集情况'}
-                </strong>
-                <span className="lib-issues-actions">
-                  {failed.length > 1 && (
-                    <button className="btn btn-sm" onClick={retryAll}>
-                      全部重试（{failed.length}）
-                    </button>
-                  )}
-                  {notDownloaded.length > 0 && detail.linked && (
-                    <button className="btn btn-sm" onClick={downloadAll}>
-                      下载没下的（{notDownloaded.length}）
-                    </button>
-                  )}
-                </span>
-              </div>
-              {shownIssues.map((item) => (
-                <div key={item.index} className={`lib-issue is-${item.state}`}>
-                  <span className="lib-issue-no">第 {item.index} 集</span>
-                  <span className="lib-issue-text">
-                    {item.state === 'failed' && item.task?.status === 'failed' && (
-                      <>
-                        <b>{item.task.reason?.label || '下载失败'}</b>：{item.task.reason?.text}
-                        {item.task.reason?.detail && (
-                          <em title={item.task.reason.detail}>（{item.task.reason.detail}）</em>
-                        )}
-                      </>
-                    )}
-                    {item.state === 'failed' && item.task?.status === 'stopped' && <b>已暂停，点继续接着下</b>}
-                    {item.state === 'downloading' && (
-                      <b>{item.task?.status === 'pending' ? '排队中' : `下载中 ${item.task?.progress ?? 0}%`}</b>
-                    )}
-                    {item.state === 'notDownloaded' && <b>平台有这一集，还没下载</b>}
-                  </span>
-                  <span className="lib-issue-btns">
-                    {item.state === 'failed' && (
-                      <button className="btn btn-sm" onClick={() => retryOne(item)}>
-                        {item.task?.status === 'stopped'
-                          ? '继续'
-                          : item.task?.reason?.retryHelps === false
-                            ? '仍然重试'
-                            : '重试'}
-                      </button>
-                    )}
-                    {item.state === 'downloading' && item.task && (
-                      <button className="btn btn-sm" onClick={() => stopOne(item)}>
-                        停止
-                      </button>
-                    )}
-                    {item.state === 'notDownloaded' && detail.linked && (
-                      <button className="btn btn-sm" onClick={() => downloadOne(item)}>
-                        下载
-                      </button>
-                    )}
-                  </span>
-                </div>
-              ))}
-              {issueRows.length > ISSUE_PREVIEW && (
-                <button className="lib-link" onClick={() => setShowAllIssues((value) => !value)}>
-                  {showAllIssues ? '收起' : `展开全部 ${issueRows.length} 条`}
-                </button>
-              )}
-              {platformGaps.length > 0 && (
-                <p className="lib-platform-gaps">
-                  平台本来就没有：{platformGaps.map((item) => `第 ${item.index} 集（${item.text}）`).join('、')}
-                  。拼接时直接跳过。
-                </p>
-              )}
-              {actionError && <p className="lib-error">{actionError}</p>}
-            </section>
-          )}
 
           <section className="lib-section" aria-label="剧集">
             <div className="lib-toolbar">
@@ -505,6 +435,90 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
             />
           </section>
 
+          {(issueRows.length > 0 || platformGaps.length > 0) && (
+            <section className="lib-issues" aria-label="下载状态">
+              <div className="lib-issues-head">
+                <strong>
+                  {failed.length > 0 && `${failed.length} 集下载失败`}
+                  {failed.length > 0 && (downloading.length > 0 || notDownloaded.length > 0) && '，'}
+                  {downloading.length > 0 && `${downloading.length} 集下载中`}
+                  {downloading.length > 0 && notDownloaded.length > 0 && '，'}
+                  {notDownloaded.length > 0 && `${notDownloaded.length} 集没下载`}
+                  {issueRows.length === 0 && '缺集情况'}
+                </strong>
+                <span className="lib-issues-actions">
+                  {failed.length > 1 && (
+                    <button className="btn btn-sm" onClick={retryAll}>
+                      全部重试（{failed.length}）
+                    </button>
+                  )}
+                  {notDownloaded.length > 0 && detail.linked && (
+                    <button className="btn btn-sm" onClick={downloadAll}>
+                      下载没下的（{notDownloaded.length}）
+                    </button>
+                  )}
+                </span>
+              </div>
+              {shownIssues.map((item) => (
+                <div key={item.index} className={`lib-issue is-${item.state}`}>
+                  <span className="lib-issue-no">第 {item.index} 集</span>
+                  <span className="lib-issue-text">
+                    {item.state === 'failed' && item.task?.status === 'failed' && (
+                      <>
+                        <b>{item.task.reason?.label || '下载失败'}</b>：{item.task.reason?.text}
+                        {item.task.reason?.detail && (
+                          <em title={item.task.reason.detail}>（{item.task.reason.detail}）</em>
+                        )}
+                      </>
+                    )}
+                    {item.state === 'failed' && item.task?.status === 'stopped' && <b>已暂停，点继续接着下</b>}
+                    {item.state === 'downloading' && (
+                      <b>{item.task?.status === 'pending' ? '排队中' : `下载中 ${item.task?.progress ?? 0}%`}</b>
+                    )}
+                    {item.state === 'notDownloaded' && <b>平台有这一集，还没下载</b>}
+                  </span>
+                  <span className="lib-issue-btns">
+                    {item.state === 'failed' && (
+                      <button className="btn btn-sm" onClick={() => retryOne(item)}>
+                        {item.task?.status === 'stopped'
+                          ? '继续'
+                          : item.task?.reason?.retryHelps === false
+                            ? '仍然重试'
+                            : '重试'}
+                      </button>
+                    )}
+                    {item.state === 'downloading' && item.task && (
+                      <button className="btn btn-sm" onClick={() => stopOne(item)}>
+                        停止
+                      </button>
+                    )}
+                    {item.state === 'notDownloaded' && detail.linked && (
+                      <button className="btn btn-sm" onClick={() => downloadOne(item)}>
+                        下载
+                      </button>
+                    )}
+                  </span>
+                </div>
+              ))}
+              {issueRows.length > ISSUE_PREVIEW && (
+                <button className="lib-link" onClick={() => setShowAllIssues((value) => !value)}>
+                  {showAllIssues ? '收起' : `展开全部 ${issueRows.length} 条`}
+                </button>
+              )}
+              {platformGaps.length > 0 && (
+                <p className="lib-platform-gaps">
+                  平台本来就没有：{platformGaps.map((item) => `第 ${item.index} 集（${item.text}）`).join('、')}
+                  。拼接时直接跳过。
+                </p>
+              )}
+              {actionError && <p className="lib-error">{actionError}</p>}
+            </section>
+          )}
+
+          <div ref={progressRef}>
+            <SeriesProgress dir={detail.dir} activity={activity} onChanged={refreshActivity} />
+          </div>
+
           {showParams && opts && (
             <div ref={paramsRef} className="lib-params-card">
               <DedupParams
@@ -520,7 +534,12 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
 
           <div className="lib-bar">
             <div className="lib-foot-info">
-              <div className="lib-modes" role="radiogroup" aria-label="处理方式">
+              <div
+                className="lib-modes"
+                role="radiogroup"
+                aria-label="处理方式"
+                title={`成品放进：${detail.outputDir}`}
+              >
                 {[
                   ['resplit', '重新拆分', '选中的集接起来，按成品时长重新切成新的集，再去重'],
                   ['episode', '按原集去重', '一集出一集，不改变集数'],
@@ -555,29 +574,25 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
                   </label>
                 )}
               </div>
-              <div className="lib-path" title={detail.outputDir}>
-                输出：{detail.outputDir}
-              </div>
-              {submitting && (
-                <div className="lib-notice">
-                  {progress?.stage === 'analyze' ? `正在分析切点：${progress.done}/${progress.total}` : '正在准备…'}
-                </div>
-              )}
+              {busyText && <div className="lib-status">{busyText}</div>}
               {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
             </div>
             <div className="lib-foot-actions">
               <button className="btn btn-sm" onClick={() => setShowParams((value) => !value)}>
                 去重参数…
               </button>
-              {queued && onNavigate && (
-                <button className="btn" onClick={() => onNavigate('quchong')}>
+              {busyText && (
+                <button
+                  className="btn"
+                  onClick={() => progressRef.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}
+                >
                   查看进度
                 </button>
               )}
               <button
                 className="btn btn-primary"
                 onClick={() => submit(undefined)}
-                disabled={submitting || !selectedCount || !opts}
+                disabled={submitting || !!activity?.planning || !selectedCount || !opts}
               >
                 开始处理（{selectedCount} 集）
               </button>
@@ -599,14 +614,27 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
             <ul className="lib-confirm-list">
               {decision.blocking.map((item) => (
                 <li key={item.index}>
-                  第 {item.index} 集：{item.text}
+                  第 {item.index} 集：
+                  {item.reason ? (
+                    <>
+                      <b>{item.reason.label}</b>，{item.reason.text}
+                      {item.reason.detail && <em>（{item.reason.detail}）</em>}
+                    </>
+                  ) : (
+                    item.text
+                  )}
                 </li>
               ))}
             </ul>
             {decision.kind === 'download' ? (
-              <p>
-                拼接时会直接跳过它们，前后两集接在一起，剧情会有跳跃。可以先补下载，下完自动继续处理；也可以不管，强制拼接。
-              </p>
+              unretryable ? (
+                <p>这几集平台提供不了，补下载也不会成功。建议直接强制拼接：前后两集会接在一起，剧情会有跳跃。</p>
+              ) : (
+                <p>
+                  拼接时会直接跳过它们，前后两集接在一起，剧情会有跳跃。可以先补下载，下完自动继续处理；也可以不管，强制拼接。
+                  {hopeless.length > 0 && `其中第 ${hopeless.join('、')} 集是资源缺失，补下载大概率还是会失败。`}
+                </p>
+              )
             ) : (
               <p>
                 这是导入的文件夹，软件不知道这几集是平台本来就没有，还是你还没下。如果本来就缺，直接拼接就行（下次不会再问）；如果只是没下，先去补上再处理。
@@ -620,14 +648,25 @@ export default function SeriesDetail({ folder, active = true, onBack, onNavigate
             )}
             <div className="lib-confirm-actions">
               {decision.kind === 'download' ? (
-                <>
-                  <button className="btn btn-primary" onClick={() => submit('download')}>
-                    先补下载，下完自动继续
-                  </button>
-                  <button className="btn" onClick={() => submit('force')}>
-                    不管，强制拼接
-                  </button>
-                </>
+                unretryable ? (
+                  <>
+                    <button className="btn btn-primary" onClick={() => submit('force')}>
+                      强制拼接（跳过这几集）
+                    </button>
+                    <button className="btn" onClick={() => submit('download')}>
+                      仍然试试补下载
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn btn-primary" onClick={() => submit('download')}>
+                      先补下载，下完自动继续
+                    </button>
+                    <button className="btn" onClick={() => submit('force')}>
+                      不管，强制拼接
+                    </button>
+                  </>
+                )
               ) : (
                 <button className="btn btn-primary" onClick={() => submit('confirm')}>
                   本来就缺，直接拼

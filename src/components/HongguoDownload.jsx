@@ -350,7 +350,10 @@ function HongguoDownload({ onNavigate, active = true }) {
                 </span>
               </button>
               {onNavigate && (
-                <button className="btn btn-outline" onClick={() => onNavigate('library', { seriesId: seriesData.series_id })}>
+                <button
+                  className="btn btn-outline"
+                  onClick={() => onNavigate('library', { seriesId: seriesData.series_id })}
+                >
                   <Folder size={16} />
                   <span>到管理剧集查看</span>
                 </button>

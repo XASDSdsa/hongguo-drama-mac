@@ -352,3 +352,13 @@
     flex-wrap: wrap;
   }
 }
+
+.lib-status {
+  margin-top: 6px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.lib-confirm-list em {
+  font-style: normal;
+  color: var(--text-tertiary);
+}

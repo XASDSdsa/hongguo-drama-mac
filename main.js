@@ -26,6 +26,7 @@ const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
 const seriesGaps = require('./src/native/series-gaps');
 const downloadErrors = require('./src/native/download-errors');
+const libraryActivity = require('./src/native/library-activity');
 const publishMaterials = require('./src/native/publish-materials');
 const posterTitle = require('./src/native/poster-title');
 const posterStyles = require('./src/native/poster-styles');
@@ -1969,11 +1970,32 @@ async function executeHongguoDownload(task) {
       task.errorStatus = error.response?.status || 0;
       task.endTime = Date.now();
       sendToRenderer('download-failed', { id, error: error.message });
+      logDownloadFailure(task);
     }
     saveDownloadTasks();
   } finally {
     if (task.cancelSource === source) delete task.cancelSource;
     if (task.writer === writer) delete task.writer;
+  }
+}
+
+/** 下载失败写进这部剧的日志，原因用人话：资源缺失 / 网络失败 / … */
+function logDownloadFailure(task) {
+  try {
+    const claimed = claimedSeriesFolder(task.hongguoInfo?.series_id);
+    if (!claimed) return;
+    const reason = downloadErrors.classifyDownloadError({
+      message: task.error,
+      code: task.errorCode,
+      status: task.errorStatus,
+    });
+    libLog(
+      path.join(downloadRoot(), claimed),
+      'error',
+      `第 ${task.hongguoInfo?.vid_index ?? '?'} 集下载失败：${reason.label}。${reason.text}${reason.detail ? `（${reason.detail}）` : ''}`,
+    );
+  } catch (_) {
+    /* 记日志失败不影响下载。 */
   }
 }
 
@@ -2413,6 +2435,28 @@ function findFileRecursive(dir, fileName, depth) {
   return null;
 }
 
+// ===== 管理剧集的处理日志：按剧文件夹记录，存在应用数据目录，切页面、重启后还在 =====
+let activityLogStore = null;
+function libraryLog() {
+  if (!activityLogStore) {
+    activityLogStore = libraryActivity.createActivityLog({
+      file: path.join(app.getPath('userData'), 'library-activity.json'),
+    });
+  }
+  return activityLogStore;
+}
+function libLog(dir, level, text) {
+  if (!dir) return;
+  try {
+    libraryLog().add(dir, level, text);
+  } catch (_) {
+    /* 日志写不进去不影响处理本身。 */
+  }
+  sendToRenderer('library-activity', { dir: path.resolve(String(dir)) });
+}
+/** 正在分析切点的剧：dir -> { done, total }。分析发生在任务入队之前，单独记一份。 */
+const libraryPlanning = new Map();
+
 // ===== 视频处理（quchong_app 逻辑的 Node/FFmpeg 实现） =====
 // 处理任务独立于下载任务，避免把长时间转码误显示成下载进度。
 const quchongBatches = new Map();
@@ -2493,6 +2537,8 @@ function quchongTaskPayload(task) {
     status: task.status,
     // 阶段与时间戳用于区分排队、处理和收尾，避免只看百分比误判任务状态。
     stage: task.stage || (task.status === 'completed' ? 'completed' : task.status),
+    // 这一集由哪些原集拼成（重新拆分时可能是几集）。
+    episodes: task.episodes || [],
     progress: task.progress || 0,
     error: task.error || '',
     startedAt: task.startedAt || null,
@@ -2512,6 +2558,8 @@ function serializeQuchongBatch(batch) {
     startedAt: batch.startedAt || null,
     endTime: batch.endTime || null,
     outputDir: batch.outputDir || '',
+    libraryDir: batch.libraryDir || '',
+    modeText: batch.modeText || '',
     concurrency: batch.concurrency,
     total: tasks.length,
     done,
@@ -2609,6 +2657,10 @@ function pumpAllQuchongBatches() {
   for (const batch of quchongBatches.values()) pumpQuchongBatch(batch);
 }
 
+function logQuchongTask(batch, task, level, text) {
+  libLog(batch.libraryDir, level, `${task.label || path.basename(String(task.src || ''))}：${text}`);
+}
+
 function emitQuchongTask(batch, task) {
   sendToRenderer('quchong-task', { batchId: batch.id, task: quchongTaskPayload(task) });
 }
@@ -2633,6 +2685,16 @@ function finishQuchongBatch(batch) {
   batch.endTime = Date.now();
   persistQuchongBatch(batch);
   const tasks = batch.tasks.map(quchongTaskPayload);
+  {
+    const count = (status) => tasks.filter((task) => task.status === status).length;
+    const failed = count('failed');
+    const stopped = count('stopped');
+    libLog(
+      batch.libraryDir,
+      failed ? 'error' : stopped ? 'warn' : 'ok',
+      `这一批处理${batch.status === 'completed' ? '全部完成' : '结束'}：成功 ${count('completed')} 集${failed ? `，失败 ${failed} 集` : ''}${stopped ? `，停止 ${stopped} 集` : ''}`,
+    );
+  }
   sendToRenderer('quchong-complete', {
     batchId: batch.id,
     cancelled: batch.cancelled,
@@ -2662,6 +2724,12 @@ function pumpQuchongBatch(batch) {
     const controller = new AbortController();
     batch.controllers.set(task.id, controller);
     emitQuchongTask(batch, task);
+    logQuchongTask(
+      batch,
+      task,
+      'info',
+      task.episodes?.length ? `开始处理（原第 ${task.episodes.join('、')} 集）` : '开始处理',
+    );
     quchong
       .runJob({
         ffmpegPath: batch.ffmpegPath,
@@ -2674,6 +2742,7 @@ function pumpQuchongBatch(batch) {
         opts: batch.opts,
         signal: controller.signal,
         onStage: (stage) => {
+          if (stage === 'encoding' && task.stage !== 'encoding') logQuchongTask(batch, task, 'info', '开始编码');
           task.stage = stage;
           task.updatedAt = Date.now();
           emitQuchongTask(batch, task);
@@ -2704,6 +2773,12 @@ function pumpQuchongBatch(batch) {
         task.stage = 'completed';
         task.progress = 100;
         task.path = result.path;
+        logQuchongTask(
+          batch,
+          task,
+          'ok',
+          `完成，用时 ${Math.max(1, Math.round((Date.now() - (task.startedAt || Date.now())) / 1000))} 秒 → 去重/${path.basename(task.dst)}`,
+        );
         if (!task.segments) markPipelineDeduped(task.src, task.dst);
       })
       .catch((error) => {
@@ -2713,6 +2788,8 @@ function pumpQuchongBatch(batch) {
         task.error = error?.message || String(error);
         task.logBuffer = task.logBuffer || [];
         task.logBuffer.push(`[${task.status === 'failed' ? '失败' : '停止'}] ${task.error}`);
+        if (task.status === 'failed') logQuchongTask(batch, task, 'error', `失败：${task.error}`);
+        else logQuchongTask(batch, task, 'warn', '已停止');
       })
       .finally(() => {
         task.endTime = Date.now();
@@ -2829,13 +2906,24 @@ ipcMain.handle('oneclick-select-image', async () => {
 });
 
 /** 建一个去重批次并放进队列。tasks 里每项至少有 src、dst，重新拆分的还有 segments、speed、label。 */
-function registerQuchongBatch({ opts, bgm = null, outputDir, ffmpegPath, ffprobePath, tasks }) {
+function registerQuchongBatch({
+  opts,
+  bgm = null,
+  outputDir,
+  ffmpegPath,
+  ffprobePath,
+  tasks,
+  libraryDir = '',
+  modeText = '',
+}) {
   const id = randomUUID();
   const batch = {
     id,
     opts,
     bgm,
     outputDir,
+    libraryDir,
+    modeText,
     ffmpegPath,
     ffprobePath,
     concurrency: Math.min(opts.jobs, QUCHONG_MAX_ACTIVE),
@@ -2857,12 +2945,18 @@ function registerQuchongBatch({ opts, bgm = null, outputDir, ffmpegPath, ffprobe
       startedAt: null,
       endTime: null,
       updatedAt: Date.now(),
+      episodes: libraryActivity.sourceEpisodes(task, seriesLibrary.parseEpisodeIndex),
       ...task,
     })),
   };
   batch.queue = [...batch.tasks];
   quchongBatches.set(id, batch);
   persistQuchongBatch(batch);
+  libLog(
+    libraryDir,
+    'info',
+    `已加入去重队列：${batch.tasks.length} 集${modeText ? `（${modeText}）` : ''}，成品放进「去重」文件夹`,
+  );
   batch.tasks.forEach((task) => emitQuchongTask(batch, task));
   // 先把 batchId 返回给渲染进程，再开始跑第一条任务，避免极短视频的完成事件抢在响应之前。
   setImmediate(() => pumpAllQuchongBatches());
@@ -2878,7 +2972,32 @@ function registerQuchongBatch({ opts, bgm = null, outputDir, ffmpegPath, ffprobe
  * 重新拆分：把选中的集接成连续时间线，按成品时长范围切成新的集，每一集交给去重队列处理。
  * 规划阶段会先分析切点（镜头切换、说话停顿），分析结果缓存在应用私有目录。
  */
-async function startResplitBatch({ dir, files, split, opts, outputDir }) {
+async function startResplitBatch(args) {
+  const dir = args.dir;
+  libraryPlanning.set(dir, { done: 0, total: args.files.length });
+  libLog(dir, 'info', `开始规划重新拆分：${args.files.length} 集，先分析切点`);
+  try {
+    const result = await planAndQueueResplit(args);
+    if (result.success) {
+      const summary = result.summary;
+      libLog(
+        dir,
+        'ok',
+        `切点分析完成：将生成 ${summary.count} 集，成品约 ${Math.round(summary.minSeconds)}–${Math.round(summary.maxSeconds)} 秒`,
+      );
+      for (const warning of result.warnings || []) libLog(dir, 'warn', warning);
+    } else libLog(dir, 'error', `没有开始处理：${result.error || '规划失败'}`);
+    return result;
+  } catch (error) {
+    libLog(dir, 'error', `没有开始处理：${error?.message || error}`);
+    throw error;
+  } finally {
+    libraryPlanning.delete(dir);
+    sendToRenderer('library-activity', { dir });
+  }
+}
+
+async function planAndQueueResplit({ dir, files, split, opts, outputDir }) {
   const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...opts });
   const splitOptions = resplit.validateSplit(split);
   const ffmpegPath = resolveFfmpeg('ffmpeg');
@@ -2894,7 +3013,10 @@ async function startResplitBatch({ dir, files, split, opts, outputDir }) {
       return a.index !== b.index ? a.index - b.index : a.file.localeCompare(b.file, 'zh-CN', { numeric: true });
     });
 
-  const progress = (done, total) => sendToRenderer('library-plan-progress', { stage: 'analyze', done, total });
+  const progress = (done, total) => {
+    libraryPlanning.set(dir, { done, total });
+    sendToRenderer('library-plan-progress', { stage: 'analyze', dir, done, total });
+  };
   progress(0, ordered.length);
   const durations = new Map();
   for (const item of ordered) {
@@ -2944,6 +3066,8 @@ async function startResplitBatch({ dir, files, split, opts, outputDir }) {
   const result = registerQuchongBatch({
     opts: options,
     outputDir,
+    libraryDir: dir,
+    modeText: '重新拆分',
     ffmpegPath,
     ffprobePath,
     tasks: plan.pieces.map((piece, index) => ({
@@ -3004,10 +3128,17 @@ async function startQuchongBatch(payload = {}) {
     if (duplicate) return { success: false, error: `视频已在去重队列中：${path.basename(duplicate)}` };
 
     const destinations = allocateQuchongDestinations(sources, outputDirs);
+    const libraryDir =
+      typeof payload.libraryDir === 'string' &&
+      seriesLibrary.isLibraryFolder(payload.libraryDir, downloadRoot(), libraryFolders().list())
+        ? path.resolve(payload.libraryDir)
+        : '';
     return registerQuchongBatch({
       opts,
       bgm,
       outputDir,
+      libraryDir,
+      modeText: libraryDir ? '按原集去重' : '',
       ffmpegPath,
       ffprobePath,
       tasks: sources.map((src, index) => ({ src, dst: destinations[index] })),
@@ -3038,23 +3169,92 @@ function linkedSeriesEntries() {
   return result;
 }
 
+function libraryFolderRecords() {
+  const linked = linkedSeriesEntries();
+  return seriesLibrary.scanLibrary(downloadRoot(), libraryFolders().list()).map((folder) => {
+    const entry = !folder.imported ? linked.get(folder.name.toLowerCase()) : null;
+    const { coverPath, ...rest } = folder;
+    return {
+      ...rest,
+      coverUrl: coverPath ? localAssetUrl(coverPath) : entry?.cover || '',
+      source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
+      seriesId: entry ? String(entry.series_id) : '',
+      totalEpisodes: entry ? Number(entry.total) || 0 : 0,
+      linked: !!entry,
+    };
+  });
+}
+
 ipcMain.handle('library-list', () => {
   try {
-    const root = downloadRoot();
-    const linked = linkedSeriesEntries();
-    const folders = seriesLibrary.scanLibrary(root, libraryFolders().list()).map((folder) => {
-      const entry = !folder.imported ? linked.get(folder.name.toLowerCase()) : null;
-      const { coverPath, ...rest } = folder;
-      return {
-        ...rest,
-        coverUrl: coverPath ? localAssetUrl(coverPath) : entry?.cover || '',
-        source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
-        seriesId: entry ? String(entry.series_id) : '',
-        totalEpisodes: entry ? Number(entry.total) || 0 : 0,
-        linked: !!entry,
-      };
-    });
-    return { success: true, root, folders };
+    return { success: true, root: downloadRoot(), folders: libraryFolderRecords() };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 一部剧的处理进度、补下载任务和日志：全部由主进程保存，页面切走再回来、重启应用后都还在。 */
+ipcMain.handle('library-activity', (_event, dir) => {
+  try {
+    const folder = path.resolve(String(dir || ''));
+    if (!seriesLibrary.isLibraryFolder(folder, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    const same = (other) => !!other && libraryActivity.dirKey(other) === libraryActivity.dirKey(folder);
+    const planning = [...libraryPlanning].find(([key]) => same(key));
+    return {
+      success: true,
+      dir: folder,
+      planning: planning ? planning[1] : null,
+      batches: getQuchongSnapshots()
+        .filter((batch) => same(batch.libraryDir))
+        .slice(0, 10),
+      jobs: [...libraryJobs.values()].filter((job) => same(job.dir)).map(libraryJobSnapshot),
+      logs: libraryLog().list(folder, 300),
+    };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 打开剧文件夹，或它里面的「去重」成品文件夹。 */
+ipcMain.handle('library-open-folder', async (_event, dir, which) => {
+  try {
+    const folder = path.resolve(String(dir || ''));
+    if (!seriesLibrary.isLibraryFolder(folder, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    const target = which === 'output' ? path.join(folder, '去重') : folder;
+    if (!fs.existsSync(target)) return { success: false, error: '这个文件夹还不存在' };
+    const error = await shell.openPath(target);
+    return error ? { success: false, error } : { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-activity-clear', (_event, dir) => {
+  try {
+    libraryLog().clear(path.resolve(String(dir || '')));
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 总任务：所有剧的处理、下载、补下载一张表。 */
+ipcMain.handle('library-overview', () => {
+  try {
+    return {
+      success: true,
+      ...libraryActivity.buildOverview({
+        folders: libraryFolderRecords(),
+        batches: getQuchongSnapshots(),
+        downloads: downloadTasks,
+        jobs: [...libraryJobs.values()],
+        planning: libraryPlanning,
+      }),
+    };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -3219,10 +3419,12 @@ function startLibraryDownloadJob({ dir, request, entry, indices, files }) {
     updatedAt: Date.now(),
   };
   libraryJobs.set(job.id, job);
+  libLog(dir, 'info', job.message);
   const finish = (status, message) => {
     clearInterval(job.timer);
     job.status = status;
     job.message = message;
+    libLog(dir, status === 'failed' ? 'error' : 'ok', message);
     emitLibraryJob(job);
   };
   const tick = async () => {
@@ -3280,6 +3482,7 @@ ipcMain.handle('library-job-cancel', (_event, id) => {
     clearInterval(job.timer);
     job.status = 'cancelled';
     job.message = '已取消；补下载的集仍会继续下载，但不会自动开始处理';
+    libLog(job.dir, 'warn', job.message);
     emitLibraryJob(job);
   }
   return { success: true };
@@ -3480,7 +3683,9 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
       return { success: false, error: '选中的文件不在这部剧的文件夹里' };
     }
     const outputDir = path.join(dir, '去重');
-    if (payload.mode === 'episode') return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts });
+    if (payload.mode === 'episode') {
+      return await startQuchongBatch({ sources: files, outputDir, opts: payload.opts, libraryDir: dir });
+    }
 
     const detail = libraryEpisodeDetail(dir);
     const selected = files.map((file) => seriesLibrary.parseEpisodeIndex(path.basename(file)));
@@ -3489,7 +3694,13 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
       missing: detail.missing.map((item) => ({ index: item.index, state: item.state })),
       confirmed: libraryGapNotes().get(dir),
     });
-    const label = (item) => ({ ...item, text: seriesGaps.STATE_TEXT[item.state] });
+    // 下载失败的集带上具体原因（资源缺失、网络失败…），界面直接写出来。
+    const reasons = new Map(detail.missing.map((item) => [item.index, item.task?.reason || null]));
+    const label = (item) => ({
+      ...item,
+      text: seriesGaps.STATE_TEXT[item.state],
+      reason: reasons.get(item.index) || null,
+    });
     const policy = payload.gapPolicy;
     if (blocking.length && !policy) {
       return {
@@ -3529,13 +3740,22 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
       );
     }
     const result = await startResplitBatch({ dir, files, ...request });
-    return {
-      ...result,
-      notes: [
-        ...notes.map(label),
-        ...(policy === 'force' ? blocking.map((item) => ({ ...label(item), forced: true })) : []),
-      ],
-    };
+    const allNotes = [
+      ...notes.map(label),
+      ...(policy === 'force' ? blocking.map((item) => ({ ...label(item), forced: true })) : []),
+    ];
+    if (result.success) {
+      for (const item of allNotes) {
+        libLog(
+          dir,
+          'warn',
+          item.forced
+            ? `第 ${item.index} 集${item.text}，按你的选择强制拼接`
+            : `第 ${item.index} 集${item.text}，直接拼接`,
+        );
+      }
+    }
+    return { ...result, notes: allNotes };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -6943,6 +7163,7 @@ let waitingForSubtitles = false;
 app.on('before-quit', (event) => {
   try {
     store.flushPending();
+    activityLogStore?.flush();
   } catch (_) {}
   if (!transcriptionManager?.hasActive() && !reconstructionPipeline?.hasActive()) return;
   event.preventDefault();

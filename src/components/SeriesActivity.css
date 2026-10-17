@@ -1,0 +1,291 @@
+/* 处理进度、日志（剧子页面）和总任务（剧列表页）共用 */
+.act-panel {
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.act-head,
+.act-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.act-log-head {
+  margin: 16px 0 6px;
+}
+.act-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.act-error {
+  margin: 8px 0 0;
+  color: var(--primary);
+}
+.act-planning,
+.act-job {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--bg-inset);
+  border-radius: 8px;
+}
+.act-job {
+  justify-content: space-between;
+}
+.act-job.is-failed {
+  color: var(--primary);
+}
+.act-bar,
+.act-mini {
+  display: block;
+  height: 5px;
+  background: var(--bg-inset);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.act-bar i,
+.act-mini i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.act-bar-inline {
+  flex: 1;
+  max-width: 200px;
+}
+.act-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border-radius: 10px;
+}
+.act-chip.is-running {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.act-chip.is-completed {
+  color: #2f7a46;
+  background: #e3f2e7;
+}
+.act-chip.is-failed {
+  color: var(--primary);
+  background: #fbe4e2;
+}
+.act-chip.is-queued,
+.act-chip.is-stopped {
+  color: var(--text-secondary);
+}
+
+/* 一批处理 */
+.act-batch {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+}
+.act-batch.is-failed {
+  border-color: var(--primary);
+}
+.act-batch-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.act-toggle {
+  width: 20px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.act-batch-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  flex: 1;
+  min-width: 0;
+}
+.act-batch-title span {
+  color: var(--text-secondary);
+}
+.act-batch-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.act-tasks {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.act-tasks li {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(70px, 0.8fr) minmax(120px, 2fr) 80px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-muted);
+}
+.act-task-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-task-from {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.act-task-state {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-tasks li.is-failed .act-task-state {
+  color: var(--primary);
+}
+.act-tasks li.is-completed .act-task-state {
+  color: #2f7a46;
+}
+
+/* 日志 */
+.act-log {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.act-line {
+  display: flex;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+.act-line time {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.act-line span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.act-line.is-ok span {
+  color: #2f7a46;
+}
+.act-line.is-warn span {
+  color: #a8650c;
+}
+.act-line.is-error span {
+  color: var(--primary);
+}
+.act-more {
+  margin: 0 0 6px;
+}
+
+/* 总任务 */
+.ov-panel {
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.ov-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ov-idle,
+.ov-count {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.ov-count {
+  margin-left: auto;
+}
+.ov-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.ov-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 220px) 1fr;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-muted);
+}
+.ov-name {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-name:hover {
+  color: var(--accent);
+}
+.ov-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  min-width: 0;
+}
+.ov-proc {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.ov-proc .act-mini {
+  width: 90px;
+}
+.ov-proc em {
+  font-style: normal;
+  color: var(--primary);
+}
+.ov-job {
+  color: var(--text-secondary);
+}
+.ov-job.is-failed {
+  color: var(--primary);
+}
+@media (max-width: 900px) {
+  .act-tasks li {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ov-row {
+    grid-template-columns: 1fr;
+  }
+}

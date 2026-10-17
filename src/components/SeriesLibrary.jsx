@@ -3,6 +3,8 @@ import './SeriesLibrary.css';
 import { Film, FolderPlus, RefreshCw, X } from './icons';
 import Pager from './Pager';
 import SeriesDetail from './SeriesDetail';
+import TaskOverview, { overviewBusy } from './TaskOverview';
+import useLiveData from './useLiveData';
 import { clampPage, slicePage } from './pagination';
 
 const VIEW_KEY = 'library-view';
@@ -23,13 +25,22 @@ function saveView(patch) {
   }
 }
 
+/** 卡片右上角的状态角标：处理中、下载中、有失败。 */
+function cardStatus(item) {
+  if (!item) return null;
+  if (item.planning || item.processing?.state === 'running') return { kind: 'running', text: '处理中' };
+  if (item.downloads.active || item.downloads.pending) return { kind: 'running', text: '下载中' };
+  if (item.processing?.state === 'queued') return { kind: 'queued', text: '排队中' };
+  if (item.processing?.state === 'failed' || item.downloads.failed) return { kind: 'failed', text: '有失败' };
+  return null;
+}
+
 /** 管理剧集：剧列表（搜索、分页）。点一部剧进入它的子页面，不是弹窗。 */
 export default function SeriesLibrary({ active = true, onNavigate, target = null }) {
   const [folders, setFolders] = useState([]);
   const [root, setRoot] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [jobs, setJobs] = useState([]);
   const [current, setCurrent] = useState(null); // 正在看的剧（文件夹记录）
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -59,27 +70,25 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
     const found = folders.find((item) => item.seriesId && String(item.seriesId) === String(target.seriesId));
     if (found) setCurrent(found);
   }, [target, folders]);
-  // 点侧栏的「管理剧集」（没有带剧）回到列表。
-  useEffect(() => {
-    if (active && !target) setCurrent(null);
-  }, [active, target]);
 
-  useEffect(() => {
-    let alive = true;
-    window.electronAPI.libraryJobs?.().then((list) => alive && Array.isArray(list) && setJobs(list));
-    const offJob = window.electronAPI.onLibraryJobUpdate?.((job) => {
-      if (!alive) return;
-      setJobs((list) =>
-        list.some((item) => item.id === job.id)
-          ? list.map((item) => (item.id === job.id ? job : item))
-          : [...list, job],
-      );
-    });
-    return () => {
-      alive = false;
-      offJob?.();
-    };
-  }, []);
+  // 总任务（所有剧的处理、下载、补下载）：数据在主进程，切页面再回来、重启应用后都还在。
+  const [overview, refreshOverview] = useLiveData({
+    load: async () => {
+      const result = await window.electronAPI.libraryOverview();
+      return result?.success ? result : null;
+    },
+    isBusy: overviewBusy,
+    active,
+  });
+  const itemByDir = useMemo(() => new Map((overview?.items || []).map((item) => [item.dir, item])), [overview]);
+  const openByDir = (item) => {
+    const found = folders.find((folder) => folder.path === item.dir);
+    if (found) setCurrent(found);
+  };
+  const dismissJob = async (job) => {
+    await window.electronAPI.libraryJobDismiss(job.id);
+    refreshOverview();
+  };
 
   const importFolder = async () => {
     const result = await window.electronAPI.libraryImport();
@@ -91,12 +100,6 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
     await window.electronAPI.libraryRemoveImport(folder.path);
     load();
   };
-  const cancelJob = (job) => window.electronAPI.libraryJobCancel(job.id);
-  const dismissJob = async (job) => {
-    await window.electronAPI.libraryJobDismiss(job.id);
-    setJobs((list) => list.filter((item) => item.id !== job.id));
-  };
-
   const shown = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     return keyword ? folders.filter((folder) => folder.name.toLowerCase().includes(keyword)) : folders;
@@ -108,15 +111,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
   }, [page, currentPage]);
 
   if (current) {
-    return (
-      <SeriesDetail
-        key={current.path}
-        folder={current}
-        active={active}
-        onBack={() => setCurrent(null)}
-        onNavigate={onNavigate}
-      />
-    );
+    return <SeriesDetail key={current.path} folder={current} active={active} onBack={() => setCurrent(null)} />;
   }
 
   return (
@@ -143,40 +138,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
 
       {error && <p className="lib-error">{error}</p>}
 
-      {jobs.length > 0 && (
-        <div className="lib-jobs">
-          {jobs.map((job) => (
-            <div key={job.id} className={`lib-job is-${job.status}`}>
-              <div>
-                <strong>《{job.name}》</strong>
-                {job.message}
-              </div>
-              <div className="lib-job-actions">
-                {job.status === 'waiting' ? (
-                  <button className="btn btn-sm" onClick={() => cancelJob(job)}>
-                    取消自动处理
-                  </button>
-                ) : job.status === 'started' ? (
-                  <>
-                    {onNavigate && (
-                      <button className="btn btn-sm" onClick={() => onNavigate('quchong')}>
-                        查看进度
-                      </button>
-                    )}
-                    <button className="btn btn-sm" onClick={() => dismissJob(job)}>
-                      知道了
-                    </button>
-                  </>
-                ) : job.status !== 'starting' ? (
-                  <button className="btn btn-sm" onClick={() => dismissJob(job)}>
-                    知道了
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <TaskOverview data={overview} onOpen={openByDir} onDismissJob={dismissJob} />
 
       {folders.length > 0 && (
         <div className="lib-search">
@@ -222,6 +184,11 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
                 </div>
               )}
               <span className="lib-badge">{folder.videoCount} 集</span>
+              {cardStatus(itemByDir.get(folder.path)) && (
+                <span className={`lib-state is-${cardStatus(itemByDir.get(folder.path)).kind}`}>
+                  {cardStatus(itemByDir.get(folder.path)).text}
+                </span>
+              )}
               {folder.imported && (
                 <button
                   className="lib-remove"

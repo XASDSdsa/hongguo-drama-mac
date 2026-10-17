@@ -199,6 +199,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('publish-update', listener);
     return () => ipcRenderer.removeListener('publish-update', listener);
   },
+  libraryActivity: (dir) => ipcRenderer.invoke('library-activity', dir),
+  libraryOpenFolder: (dir, which) => ipcRenderer.invoke('library-open-folder', dir, which),
+  libraryActivityClear: (dir) => ipcRenderer.invoke('library-activity-clear', dir),
+  libraryOverview: () => ipcRenderer.invoke('library-overview'),
+  onLibraryActivity: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on('library-activity', listener);
+    return () => ipcRenderer.removeListener('library-activity', listener);
+  },
   onLibraryJobUpdate: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('library-job-update', listener);

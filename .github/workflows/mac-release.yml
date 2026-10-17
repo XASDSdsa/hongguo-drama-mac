@@ -101,6 +101,7 @@ jobs:
           node scripts/check-download-series.cjs
           node scripts/check-download-errors.cjs
           node scripts/check-pagination.cjs
+          node scripts/check-library-activity.cjs
           node scripts/check-series-library.cjs
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs

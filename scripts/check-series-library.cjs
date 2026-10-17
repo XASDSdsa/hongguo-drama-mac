@@ -298,6 +298,28 @@ async function check(name, fn) {
     assert.equal(started.success, true, started.error);
     const [task] = vm.runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context);
     assert.equal(task.dst, path.join(series.path, '去重', '同名剧_第002集_去重.mp4'));
+    // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。
+    const [batch] = vm.runInContext('[...quchongBatches.values()]', context);
+    assert.equal(batch.libraryDir, series.path);
+    assert.deepEqual(Array.from(task.episodes), [2]);
+    const activity = await handlers['library-activity']({}, series.path);
+    assert.equal(activity.success, true);
+    assert.equal(activity.batches.length, 1);
+    assert.equal(activity.batches[0].libraryDir, series.path);
+    assert.equal(activity.batches[0].total, 1);
+    assert.equal(activity.batches[0].modeText, '按原集去重');
+    assert.ok(
+      activity.logs.some((line) => /已加入去重队列：1 集（按原集去重）/.test(line.text)),
+      'queueing is logged',
+    );
+    assert.equal((await handlers['library-activity']({}, path.join(tmp, 'elsewhere'))).success, false);
+    const overview = await handlers['library-overview']({});
+    const mine = overview.items.find((item) => item.dir === series.path);
+    assert.ok(mine && mine.processing, 'the series shows up in the overall task list');
+    assert.equal(mine.processing.total, 1);
+    assert.equal((await handlers['library-activity']({}, root)).success, false, 'the download root is not a series');
+    assert.equal((await handlers['library-activity-clear']({}, series.path)).success, true);
+    assert.deepEqual(Array.from((await handlers['library-activity']({}, series.path)).logs), []);
 
     // 默认模式是重新拆分：用真实的小视频走完 探测 -> 切点分析 -> 规划 -> 入队。
     let haveFfmpeg = true;
@@ -422,6 +444,25 @@ async function check(name, fn) {
     assert.equal(byIndex.get(6).task.progress, 40);
     // 第 7 集排在最后一个任务之后、也没有任务：平台有、没下载。
     assert.ok(!byIndex.has(7) || byIndex.get(7).state === 'notDownloaded');
+
+    // 「开始处理」的提醒直接写下载失败的原因，而不是只说“下载失败”。
+    touch(path.join(dir, '失败剧_第004集.mp4'));
+    touch(path.join(dir, '失败剧_第005集.mp4'));
+    const asked = await handlers['library-dedup'](
+      {},
+      { dir, files: [2, 4].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+    );
+    assert.equal(asked.needsDecision, true);
+    assert.equal(asked.kind, 'download');
+    const reason = asked.blocking.find((item) => item.index === 3).reason;
+    assert.equal(reason.label, '资源缺失');
+    assert.equal(reason.retryHelps, false);
+    assert.match(reason.detail, /未获取到有效播放地址/);
+    const askedNetwork = await handlers['library-dedup'](
+      {},
+      { dir, files: [4, 5].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+    );
+    assert.ok(!askedNetwork.needsDecision, 'episodes 4 and 5 are contiguous');
   });
 
   if (ffmpegOk) {
@@ -523,8 +564,74 @@ async function check(name, fn) {
         .filter((item) => item.segments);
       const files = new Set(tasks.flatMap((item) => item.segments.map((segment) => path.basename(segment.src))));
       assert.ok(files.has('缺集剧_第003集.mp4'), 'the newly downloaded episode is part of the plan');
+      const act = await handlers['library-activity']({}, dir);
+      const text = act.logs.map((line) => line.text).join('\n');
+      assert.match(text, /正在补下载/, 'waiting for the download is logged');
+      assert.match(text, /开始规划重新拆分/);
+      assert.match(text, /切点分析完成：将生成 \d+ 集/);
+      assert.match(text, /已加入去重队列/);
+      assert.equal(act.planning, null, 'planning is over once the batch is queued');
       assert.ok(files.has('缺集剧_第002集.mp4') && files.has('缺集剧_第005集.mp4'));
     });
+
+    await check(
+      'main: a running batch writes its progress and log to the series, and they survive re-reading',
+      async () => {
+        const root = path.join(tmp, 'run-log');
+        const dir = path.join(root, '跑批剧');
+        fs.mkdirSync(dir, { recursive: true });
+        for (const n of [1, 2]) realEpisode(path.join(dir, `跑批剧_第00${n}集.mp4`));
+        const { context, handlers, events } = makeMain(root, path.join(tmp, 'ud-run'), []);
+        // 这个测试要真的跑：把测试夹具里停掉的队列泵换回真实的。
+        context.pumpAllQuchongBatches = vm.runInContext(
+          '(function () { for (const b of quchongBatches.values()) pumpQuchongBatch(b); })',
+          context,
+        );
+        const started = await handlers['library-dedup'](
+          {},
+          {
+            dir,
+            mode: 'episode',
+            files: [1, 2].map((n) => path.join(dir, `跑批剧_第00${n}集.mp4`)),
+            opts: { speed_min: 1.03, speed_max: 1.2, black_intro: false, jobs: 2 },
+          },
+        );
+        assert.equal(started.success, true, started.error);
+        let act;
+        const deadline = Date.now() + 60000;
+        do {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          act = await handlers['library-activity']({}, dir);
+        } while (Date.now() < deadline && act.batches[0].status !== 'completed' && act.batches[0].status !== 'failed');
+        assert.equal(act.batches[0].status, 'completed', JSON.stringify(act.batches[0].tasks.map((t) => t.error)));
+        assert.equal(act.batches[0].done, 2);
+        const lines = act.logs.map((line) => line.text);
+        assert.ok(lines.some((text) => /已加入去重队列：2 集/.test(text)));
+        assert.ok(
+          lines.some((text) => /跑批剧_第001集.mp4：开始处理/.test(text)),
+          lines.join('\n'),
+        );
+        assert.ok(lines.some((text) => /开始编码/.test(text)));
+        assert.ok(lines.filter((text) => /：完成，用时/.test(text)).length === 2);
+        assert.ok(lines.some((text) => /这一批处理全部完成：成功 2 集/.test(text)));
+        assert.ok(
+          act.logs.every((line) => typeof line.t === 'number' && line.level),
+          'every line has a time and level',
+        );
+        assert.ok(
+          events.some(([name]) => name === 'library-activity'),
+          'the page is told to refresh',
+        );
+        const ov = await handlers['library-overview']({});
+        assert.equal(ov.items.find((item) => item.dir === dir).processing.state, 'completed');
+        // 日志写盘后，换一个新的日志仓库（相当于重启应用）读到的还是同一份。
+        vm.runInContext('libraryLog().flush()', context);
+        const fresh = require('../src/native/library-activity').createActivityLog({
+          file: path.join(tmp, 'ud-run', 'library-activity.json'),
+        });
+        assert.equal(fresh.list(dir).length, act.logs.length);
+      },
+    );
 
     await check('main: an imported folder asks once, then remembers episodes that were always missing', async () => {
       const root = path.join(tmp, 'gap2-dl');
