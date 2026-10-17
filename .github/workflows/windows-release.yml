@@ -1,0 +1,96 @@
+name: Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Bundle offline subtitle engine and tiny model
+        run: |
+          npm run setup:transcription
+          npm run check:transcription-bundle
+
+      - name: Bundle offline video structure runtime
+        run: |
+          npm run setup:structure
+          npm run check:structure-bundle
+          npm run check:structure
+
+      - name: Prepare pinned Windows FFmpeg
+        run: |
+          node scripts/check-ffmpeg-setup.cjs
+          node scripts/setup-ffmpeg.js
+
+      - name: Build local whisper.cpp and prepare tiny model
+        shell: bash
+        run: |
+          set -euo pipefail
+          WHISPER_REF=v1.9.3
+          src="$RUNNER_TEMP/whisper.cpp"
+          build="$RUNNER_TEMP/whisper-build"
+          git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp.git "$src"
+          cmake -S "$src" -B "$build" -A x64 -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DGGML_OPENMP=OFF -DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build "$build" --config Release --target whisper-cli
+          bin=$(find "$build" -type f -iname whisper-cli.exe | head -n 1)
+          test -n "$bin"
+          mkdir -p build/whisper/win32-x64 build/whisper/models
+          curl -L --retry 4 --fail https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin -o build/whisper/models/ggml-tiny.bin
+          echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  build/whisper/models/ggml-tiny.bin" | sha256sum -c -
+          cp "$src/LICENSE" build/whisper/WHISPER-LICENSE.txt
+          WHISPER_CPP_BIN="$bin" WHISPER_CPP_MODEL="$PWD/build/whisper/models/ggml-tiny.bin" node scripts/setup-whisper.js
+
+      - name: Run Windows-safe checks
+        shell: bash
+        run: |
+          node scripts/check-download-series.cjs
+          node scripts/check-series-library.cjs
+          node scripts/check-jianying-simple-draft.cjs
+          node scripts/check-quchong-queue.cjs
+          node scripts/check-pipeline-gate.cjs
+          node scripts/check-whisper-adapter.cjs
+          npm run check:ai
+
+      - name: Build installer, portable and unpacked zip
+        run: |
+          npm run setup:title-fonts
+          npm run build:react
+          npx electron-builder --win nsis --x64 --publish never
+          npx electron-builder --win portable --x64 --publish never
+          npx electron-builder --win --dir --x64 --publish never
+          node scripts/make-zip.js
+          node scripts/prepare-release-assets.js
+
+      - name: Check packaged subtitle engine without system Python
+        run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: hongguo-windows
+          path: dist/release/*
