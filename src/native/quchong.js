@@ -308,7 +308,7 @@ function execJson(ffprobePath, args, signal) {
     const child = execFile(
       ffprobePath,
       args,
-      { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 },
+      { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, windowsHide: true, timeout: 120000 },
       (error, stdout, stderr) => {
         if (error) return reject(new Error((stderr || error.message).trim().slice(-3000)));
         try {
@@ -423,7 +423,7 @@ function tailPush(state, chunk) {
 
 function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onLog) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const errors = { text: '' };
     let output = '';
     let abortKillTimer = null;
@@ -518,7 +518,7 @@ async function publishOutput(tmp, dst) {
     return;
   } catch (error) {
     if (error.code === 'EEXIST') throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
-    if (!['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS', 'EINVAL'].includes(error.code)) throw error;
+    if (!['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS', 'EINVAL', 'EISDIR'].includes(error.code)) throw error;
   }
   if (fs.existsSync(dst)) throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
   await fsp.rename(tmp, dst);
@@ -739,7 +739,7 @@ async function encodeOne({
           );
         if (nvencApi) {
           throw new Error(
-            `NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`,
+            `NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。请更新 NVIDIA 显卡驱动，或在「设置 → 去重编码方式」改成「只用 CPU」后重试；未自动切换编码器。\n${error.message}`,
           );
         }
         // 失败在音频编码上（和显卡无关）：同样的参数再来一遍也一样会失败，所以先换一组随机参数，再不行用最简音频链。
@@ -803,7 +803,7 @@ async function encodeOne({
         }
         if (encoder !== 'cpu') {
           throw new Error(
-            `${encoder} 编码失败${attempt ? `（已重试 ${attempt} 次）` : ''}，未自动切换编码器。原因：${keyDiagnostics(error.message)}\n${error.message}`,
+            `${encoder} 编码失败${attempt ? `（已重试 ${attempt} 次）` : ''}，未自动切换编码器。可在「设置 → 去重编码方式」改成「只用 CPU」后重试。原因：${keyDiagnostics(error.message)}\n${error.message}`,
           );
         }
         throw error;

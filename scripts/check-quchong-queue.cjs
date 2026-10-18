@@ -180,29 +180,25 @@ async function check(name, run) {
     assert.equal(batch.snapshot().tasks.filter((task) => task.status === 'running').length, 2);
   });
 
-  await check('global eight-process cap still lets independent batches overlap', async () => {
-    const h = load();
-    const first = await h.start(['first-1', 'first-2', 'first-3', 'first-4', 'first-5', 'first-6'], 8);
-    const second = await h.start(['second-1', 'second-2', 'second-3', 'second-4'], 8);
+  await check('all batches together never run more FFmpeg jobs than the configured concurrency', async () => {
+    // 设置里的「视频去重同时处理」是全应用的上限：几部剧一起处理也不会超过它；界面传来的旧 jobs 不起作用。
+    const h = load({ quchong_jobs: 3 });
+    const first = await h.start(['first-1', 'first-2', 'first-3', 'first-4'], 8);
+    const second = await h.start(['second-1', 'second-2', 'second-3'], 8);
     const name = (source) => path.basename(source, '.mp4');
-    assert.equal(h.starts.length, 8, 'two batches should share eight global slots');
-    assert.deepEqual(h.starts.map(name), [
-      'first-1',
-      'first-2',
-      'first-3',
-      'first-4',
-      'first-5',
-      'first-6',
-      'second-1',
-      'second-2',
-    ]);
-    assert.equal(first.snapshot().tasks.filter((task) => task.status === 'running').length, 6);
-    assert.equal(second.snapshot().tasks.filter((task) => task.status === 'running').length, 2);
+    assert.equal(h.starts.length, 3, 'two batches share the three configured slots');
+    assert.deepEqual(h.starts.map(name), ['first-1', 'first-2', 'first-3']);
+    assert.equal(second.snapshot().tasks.filter((task) => task.status === 'running').length, 0);
 
     h.jobs.get(first.sources[0]).resolve();
     await tick();
-    assert.equal(name(h.starts.at(-1)), 'second-3', 'a freed global slot must be assigned to another batch');
-    assert.equal(second.snapshot().tasks.filter((task) => task.status === 'running').length, 3);
+    assert.equal(h.starts.length, 4, 'a freed slot is refilled right away');
+    assert.equal(
+      first.snapshot().tasks.filter((task) => task.status === 'running').length +
+        second.snapshot().tasks.filter((task) => task.status === 'running').length,
+      3,
+      'never more than the configured three at once',
+    );
   });
 
   await check('dedup concurrency is persisted, validated, and applies to queued work', async () => {
@@ -238,7 +234,7 @@ async function check(name, run) {
   });
 
   await check('lowering concurrency lets active work finish before starting the next queued job', async () => {
-    const h = load();
+    const h = load({ quchong_jobs: 4 });
     const batch = await h.start(['lower-1', 'lower-2', 'lower-3', 'lower-4', 'lower-5', 'lower-6'], 4);
     const result = await h.handlers['quchong-set-concurrency']({}, 1);
     assert.equal(result.success, true);
@@ -267,9 +263,10 @@ async function check(name, run) {
   await check(
     'active and queued source files cannot be submitted twice while unrelated batches keep running',
     async () => {
-      const h = load();
-      const first = await h.start(['reserved-active', 'reserved-queued'], 1);
+      // 全局并发 2：先占一个槽的无关批次在跑，这一批只能跑一集、另一集排队。
+      const h = load({ quchong_jobs: 2 });
       const other = await h.start(['independent']);
+      const first = await h.start(['reserved-active', 'reserved-queued']);
       for (const src of first.sources) {
         const result = await h.handlers['quchong-start'](
           {},
@@ -364,9 +361,10 @@ async function check(name, run) {
   });
 
   await check('cancel stops active and queued jobs only in the requested batch', async () => {
-    const h = load(),
-      cancelled = await h.start(['active', 'queued'], 1),
-      other = await h.start(['other']);
+    // 全局并发 2：无关批次先占一个槽，被取消的这一批一集在跑、一集排队。
+    const h = load({ quchong_jobs: 2 }),
+      other = await h.start(['other']),
+      cancelled = await h.start(['active', 'queued']);
     const active = h.jobs.get(cancelled.sources[0]),
       good = h.jobs.get(other.sources[0]);
     active.onStage('finalizing');

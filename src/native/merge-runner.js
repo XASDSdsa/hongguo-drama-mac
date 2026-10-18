@@ -7,7 +7,8 @@ function publishMergedOutput(source, destination) {
   try {
     fs.linkSync(source, destination);
   } catch (error) {
-    if (!['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS'].includes(error.code)) throw error;
+    // Windows 上 FAT32/exFAT 的硬链接失败被 libuv 映射成 EISDIR，部分网络盘是 EINVAL。
+    if (!['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS', 'EINVAL', 'EISDIR'].includes(error.code)) throw error;
     // FAT/exFAT cannot hard-link. COPYFILE_EXCL refuses existing files; Node removes an incomplete destination on copy failure.
     fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
   }

@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          (npm run setup:jianying && node scripts/check-jianying-runtime.cjs) > "$RUNNER_TEMP/j.log" 2>&1
+          (npm run setup:jianying && node scripts/check-jianying-runtime.cjs && env -u PYTHONUTF8 node scripts/check-jianying-runtime-utf8.cjs) > "$RUNNER_TEMP/j.log" 2>&1
           code=$?
           cat "$RUNNER_TEMP/j.log"
           if [ $code -ne 0 ]; then echo "::error title=jianying::$(tail -n 25 "$RUNNER_TEMP/j.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; fi

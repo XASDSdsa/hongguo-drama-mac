@@ -30,6 +30,9 @@ function run(exe, args, { signal, onLine, onStderrLine, cwd, onProgress, duratio
     const child = spawn(exe, args, {
       cwd,
       windowsHide: true,
+      // 内置的 Python 运行时（剪映草稿、结构化拆解）在中文 Windows 上默认按 GBK 输出，
+      // 而这里按 UTF-8 读：路径里的「剪映草稿」会变成乱码，草稿明明写好了却报失败。统一要求 UTF-8。
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
       detached: processGroup,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

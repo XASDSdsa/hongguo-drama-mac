@@ -48,6 +48,14 @@ try {
     4,
     'other saves carry pending playback',
   );
+  // 去重快照也合并写入：一集要经过好几个阶段，每次都整份重写太费。
+  writes.length = 0;
+  store.saveQuchongTasks([{ id: 'b', status: 'running', tasks: [] }]);
+  store.saveQuchongTasks([{ id: 'b', status: 'completed', tasks: [] }]);
+  assert.equal(writes.length, 0, 'quchong snapshots must not write synchronously');
+  store.flushPending();
+  assert.equal(writes.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).quchongTasks[0].status, 'completed');
   fs.writeFileSync = write;
   console.log('PASS: interrupted save preserves data; task and quchong snapshots recover; no temporary file remains');
 } finally {

@@ -109,8 +109,12 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
 
   const act = async (fn) => {
     setError('');
-    const result = await fn();
-    if (result && result.success === false) setError(result.error || '操作失败');
+    try {
+      const result = await fn();
+      if (result && result.success === false) setError(result.error || '操作失败');
+    } catch (_) {
+      setError('操作没有完成，请稍后再试');
+    }
     onChanged?.();
   };
 
@@ -129,12 +133,13 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
       <div className="act-head">
         <h3>处理进度</h3>
         <span className="act-head-btns">
-          {(activeBatches.length > 0 || draftRunning) && (
+          {(activeBatches.length > 0 || draftRunning || planning) && (
             <button
               className="btn btn-sm"
               onClick={() =>
                 act(async () => {
                   let last = { success: true };
+                  if (planning) last = await window.electronAPI.libraryPlanCancel(dir);
                   for (const batch of activeBatches) last = await window.electronAPI.quchongCancel(batch.id);
                   if (draftRunning) last = await window.electronAPI.libraryDraftCancel(dir);
                   return last;

@@ -144,6 +144,7 @@ function SettingsPage({ active = true }) {
         'name_format',
         'max_concurrent',
         'quchong_jobs',
+        'quchong_encoder',
         'proxy_enabled',
         'proxy_mode',
         'proxy_host',
@@ -423,6 +424,19 @@ function SettingsPage({ active = true }) {
               <em>越多越快但更占电脑，一般 2~4；保存后立即生效，正在跑的批次也会跟着调整。</em>
             </label>
             <label className="settings-field">
+              <span>去重编码方式</span>
+              <select
+                className="input-field"
+                aria-label="去重编码方式"
+                value={settings.quchong_encoder === 'cpu' ? 'cpu' : 'auto'}
+                onChange={(e) => update('quchong_encoder', e.target.value)}
+              >
+                <option value="auto">自动（有显卡就用显卡加速）</option>
+                <option value="cpu">只用 CPU（显卡编码出错时选这个）</option>
+              </select>
+              <em>显卡驱动太旧或显卡编码报错时，改成「只用 CPU」再处理；速度慢一些，但哪台电脑都能跑。</em>
+            </label>
+            <label className="settings-field">
               <span>草稿处理线程数</span>
               <input
                 className="input-field"
@@ -628,8 +642,9 @@ function SettingsPage({ active = true }) {
           <header className="settings-section-head">
             <h3>视频反推提示词</h3>
             <p>
-              在「管理剧集」里勾选「生成剪映草稿」并打开「同时反推 Seedance 2.5 提示词」后使用。用火山方舟的视频理解模型看成品视频，
-              每集在这部剧的「视频提示词」文件夹里生成一份按 Seedance 2.5 分段写好的文本。
+              在「管理剧集」里勾选「生成剪映草稿」并打开「同时反推 Seedance 2.5
+              提示词」后使用。用火山方舟的视频理解模型看成品视频， 每集在这部剧的「视频提示词」文件夹里生成一份按
+              Seedance 2.5 分段写好的文本。
             </p>
           </header>
           <div className="ai-settings-grid">

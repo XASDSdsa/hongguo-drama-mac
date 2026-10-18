@@ -38,7 +38,17 @@ def _self_test() -> int:
     return 0
 
 
+def _utf8_stdio() -> None:
+    # Chinese Windows defaults pipes to cp936; the desktop app reads UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> int:
+    _utf8_stdio()
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         return _self_test()
     if len(sys.argv) < 2:

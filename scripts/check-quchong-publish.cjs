@@ -23,7 +23,7 @@ const quchong = require('../src/native/quchong');
     assert.equal(fs.readFileSync(path.join(dir, '剧_第001集.mp4'), 'utf8'), 'A', '已有成品不能被覆盖');
 
     // 2) 不支持硬链接（exFAT/FAT32 报 EPERM/ENOTSUP）：改名落盘，目标存在时同样拒绝。
-    for (const code of ['EPERM', 'ENOTSUP', 'EXDEV']) {
+    for (const code of ['EPERM', 'ENOTSUP', 'EXDEV', 'EISDIR']) {
       fs.promises.link = async () => {
         throw Object.assign(new Error('link not supported'), { code });
       };

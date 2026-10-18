@@ -45,7 +45,7 @@ function validateSplit(input = {}) {
 
 function capture(ffmpegPath, args, signal, stream) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '';
     const keep = (chunk) => {
       out += chunk.toString('utf8');

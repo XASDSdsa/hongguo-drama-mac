@@ -326,36 +326,39 @@ const plan = (sources, split = {}, overrides = {}) =>
       assert.deepEqual(leftovers(), [], '成品写好后中间文件必须删掉');
     });
 
-    await check(
-      'real ffmpeg: the pre-dedup file is cut and merged first, then dedup encoding reads that one file',
-      async () => {
-        const dst = path.join(tmp, 'out', 'order.mp4');
-        const spy = path.join(tmp, 'spy.sh');
-        fs.writeFileSync(spy, `#!/bin/bash\necho "$*" >> "${path.join(tmp, 'calls.log')}"\nexec ffmpeg "$@"\n`, {
-          mode: 0o755,
-        });
-        await quchong.runJob({
-          ffmpegPath: spy,
-          ffprobePath: 'ffprobe',
-          src: a,
-          dst,
-          segments: [
-            { src: a, start: 1, duration: 3, speed: 1.2 },
-            { src: b, start: 2, duration: 3, speed: 1.1 },
-          ],
-          opts: { ...quchong.DEFAULTS, encoder: 'cpu' },
-        });
-        const calls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n');
-        assert.ok(calls.length >= 2);
-        assert.match(calls[0], /atempo=1\.2/, '第一步：按各自倍数变速并合并');
-        assert.match(calls[0], /concat=n=2/);
-        assert.doesNotMatch(calls[0], /unsharp|hue=|rotate=/, '第一步不加任何去重特效');
-        assert.match(calls[0], /\.mkv/);
-        assert.match(calls[1], /unsharp/, '第二步：统一加去重特效');
-        assert.doesNotMatch(calls[1], /concat/);
-        assert.match(calls[1], /\.hongguo-quchong-pre-.*\.mkv/, '第二步读的是中间文件');
-      },
-    );
+    // 用 bash 小脚本记录调用顺序；Windows 不能直接执行 bash 脚本，这一条只在 macOS/Linux 上跑（顺序逻辑与平台无关）。
+    if (process.platform !== 'win32')
+      await check(
+        'real ffmpeg: the pre-dedup file is cut and merged first, then dedup encoding reads that one file',
+        async () => {
+          const dst = path.join(tmp, 'out', 'order.mp4');
+          const spy = path.join(tmp, 'spy.sh');
+          fs.writeFileSync(spy, `#!/bin/bash\necho "$*" >> "${path.join(tmp, 'calls.log')}"\nexec ffmpeg "$@"\n`, {
+            mode: 0o755,
+          });
+          await quchong.runJob({
+            ffmpegPath: spy,
+            ffprobePath: 'ffprobe',
+            src: a,
+            dst,
+            segments: [
+              { src: a, start: 1, duration: 3, speed: 1.2 },
+              { src: b, start: 2, duration: 3, speed: 1.1 },
+            ],
+            opts: { ...quchong.DEFAULTS, encoder: 'cpu' },
+          });
+          const calls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n');
+          assert.ok(calls.length >= 2);
+          assert.match(calls[0], /atempo=1\.2/, '第一步：按各自倍数变速并合并');
+          assert.match(calls[0], /concat=n=2/);
+          assert.doesNotMatch(calls[0], /unsharp|hue=|rotate=|eq=brightness/, '第一步不加任何去重特效');
+          assert.match(calls[0], /\.mkv/);
+          // 锐化量随机落在 0 附近时会被跳过，调色（eq/hue）每集都有。
+          assert.match(calls[1], /eq=brightness=.*hue=h=/, '第二步：统一加去重特效');
+          assert.doesNotMatch(calls[1], /concat/);
+          assert.match(calls[1], /\.hongguo-quchong-pre-.*\.mkv/, '第二步读的是中间文件');
+        },
+      );
 
     await check('real ffmpeg: one segment at speed 1 trims exactly', async () => {
       const dst = path.join(tmp, 'out', 'single.mp4');

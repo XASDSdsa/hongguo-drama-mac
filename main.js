@@ -46,13 +46,18 @@ const APP_VERSION = app.getVersion() || '1.0.0';
 const APP_TITLE = '红果短剧';
 
 let mainWindow = null;
+// 用户在「还有任务在跑」的提示里确认过退出，之后关窗口不再拦。
+let quitConfirmed = false;
 // 只允许开一个：两个进程同时读写 data.json、同时往同一个「去重」文件夹写成品会互相覆盖。
 // 再次打开时把已有窗口拉到前面。
-const singleInstance = app.requestSingleInstanceLock();
+const singleInstance = typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true;
 if (!singleInstance) app.quit();
 else
   app.on('second-instance', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      if (app.isReady?.()) createWindow();
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -171,6 +176,9 @@ function getDefaultSettings() {
     max_concurrent: 3,
     // 视频去重同时运行的 FFmpeg 数量（1~8），下载管理和视频处理共用。
     quchong_jobs: quchong.DEFAULTS.jobs,
+    // 去重编码：auto = 有显卡就用显卡（Mac 用 VideoToolbox，Windows 按显卡选 NVENC/AMF/QSV）；
+    // cpu = 只用 CPU（显卡驱动太旧、显卡编码出错时的退路）。
+    quchong_encoder: 'auto',
     // 看完一集后自动删除本地文件（边看边清，避免占用磁盘）
     auto_delete_watched: false,
     // 兼容模式：本机无法解码 HEVC 时自动转码为 H.264（解决「黑屏有声」）
@@ -350,7 +358,13 @@ function getCurrentSettings() {
     ...merged,
     max_concurrent: MAX_CONCURRENT_DOWNLOADS,
     quchong_jobs: Number.isInteger(jobs) && jobs >= 1 && jobs <= 8 ? jobs : quchong.DEFAULTS.jobs,
+    quchong_encoder: merged.quchong_encoder === 'cpu' ? 'cpu' : 'auto',
   };
+}
+
+/** 去重实际用的编码器：以「设置」为准，不用界面里缓存的旧值。 */
+function dedupEncoder() {
+  return getCurrentSettings().quchong_encoder === 'cpu' ? 'cpu' : quchong.DEFAULTS.encoder;
 }
 
 // 净化文件夹/文件名称（移除非法字符、结尾的点和空格）
@@ -2627,8 +2641,8 @@ function persistQuchongBatch(batch) {
   const index = quchongHistory.findIndex((item) => String(item.id) === String(batch.id));
   if (index < 0) quchongHistory.unshift(snapshot);
   else quchongHistory[index] = snapshot;
+  // 界面没有订阅整份历史快照（有单独的进度/状态事件），不再每次都把 50 个批次整体发过去。
   saveQuchongHistory();
-  sendToRenderer('quchong-history-changed', { tasks: getQuchongSnapshots() });
 }
 
 function loadQuchongTasks() {
@@ -2795,10 +2809,23 @@ function finishQuchongBatch(batch) {
   quchongBatches.delete(batch.id);
 }
 
+function stopQueuedQuchongTasks(batch, reason) {
+  while (batch.queue.length) {
+    const task = batch.queue.shift();
+    task.status = 'stopped';
+    task.stage = 'stopped';
+    task.error = reason;
+    task.endTime = Date.now();
+    task.updatedAt = task.endTime;
+    emitQuchongTask(batch, task);
+  }
+}
+
 function pumpQuchongBatch(batch) {
   if (batch.finished) return;
   while (!batch.cancelled && batch.active < batch.concurrency && batch.queue.length) {
-    if (quchongActive >= QUCHONG_MAX_ACTIVE) break;
+    // 全应用同时跑的去重 FFmpeg 数不超过设置里的并发数（几部剧一起处理也一样），避免 CPU、内存被打满。
+    if (quchongActive >= Math.min(QUCHONG_MAX_ACTIVE, getCurrentSettings().quchong_jobs)) break;
     const task = batch.queue.shift();
     task.status = 'running';
     task.stage = 'processing';
@@ -2890,6 +2917,16 @@ function pumpQuchongBatch(batch) {
         if (task.status === 'failed')
           logQuchongTask(batch, task, 'error', `失败：${String(task.error).split('\n')[0]}`);
         else logQuchongTask(batch, task, 'warn', '已停止');
+        // 磁盘写满：后面每一集都会同样失败，剩下的直接停下，不再白白占着电脑。
+        if (
+          task.status === 'failed' &&
+          /No space left on device|ENOSPC|磁盘空间不足/i.test(task.error) &&
+          batch.queue.length
+        ) {
+          const left = batch.queue.length;
+          stopQueuedQuchongTasks(batch, '磁盘空间不足，已停止');
+          libLog(batch.libraryDir, 'error', `磁盘写满了：剩下的 ${left} 集已停止。请清理磁盘后再处理`);
+        }
       })
       .finally(() => {
         task.endTime = Date.now();
@@ -2905,17 +2942,7 @@ function pumpQuchongBatch(batch) {
         finishQuchongBatch(batch);
       });
   }
-  if (batch.cancelled) {
-    while (batch.queue.length) {
-      const task = batch.queue.shift();
-      task.status = 'stopped';
-      task.stage = 'stopped';
-      task.error = '已取消';
-      task.endTime = Date.now();
-      task.updatedAt = task.endTime;
-      emitQuchongTask(batch, task);
-    }
-  }
+  if (batch.cancelled) stopQueuedQuchongTasks(batch, '已取消');
   if (batch.cancelled) persistQuchongBatch(batch);
   finishQuchongBatch(batch);
 }
@@ -2931,8 +2958,8 @@ function cancelAllQuchongBatches() {
 ipcMain.handle('quchong-defaults', () => ({
   ...quchong.DEFAULTS,
   jobs: getCurrentSettings().quchong_jobs,
-  // 编码器在应用启动时已经从 Chromium 的显卡信息里选定，这里只读缓存。
-  encoder: quchong.resolveEncoder(quchong.DEFAULTS.encoder),
+  // 编码器在应用启动时已经从 Chromium 的显卡信息里选定，这里只读缓存；设置里选了「只用 CPU」就是 cpu。
+  encoder: quchong.resolveEncoder(dedupEncoder()),
 }));
 
 // 下载管理与视频处理页使用同一个去重并发设置；修改后立即填充空闲槽位。
@@ -3081,12 +3108,24 @@ function registerQuchongBatch({
  * 重新拆分：把选中的集接成连续时间线，按成品时长范围切成新的集，每一集交给去重队列处理。
  * 规划阶段会先分析切点（镜头切换、说话停顿），分析结果缓存在应用私有目录。
  */
+// 正在分析切点的剧 -> AbortController（「停止」按钮、关窗口时用来中断分析）。
+const libraryPlanControllers = new Map();
+
+function cancelLibraryPlanning(dir) {
+  const controller = libraryPlanControllers.get(path.resolve(String(dir || '')));
+  if (!controller) return false;
+  controller.abort();
+  return true;
+}
+
 async function startResplitBatch(args) {
   const dir = args.dir;
+  const controller = new AbortController();
+  libraryPlanControllers.set(path.resolve(dir), controller);
   libraryPlanning.set(dir, { done: 0, total: args.files.length });
   libLog(dir, 'info', `开始规划重新拆分：${args.files.length} 集，先分析切点`);
   try {
-    const result = await planAndQueueResplit(args);
+    const result = await planAndQueueResplit({ ...args, signal: controller.signal });
     if (result.success) {
       const summary = result.summary;
       libLog(
@@ -3098,16 +3137,61 @@ async function startResplitBatch(args) {
     } else libLog(dir, 'error', `没有开始处理：${result.error || '规划失败'}`);
     return result;
   } catch (error) {
+    if (controller.signal.aborted) {
+      libLog(dir, 'warn', '切点分析已停止，没有开始处理，「去重」里的成品没有动');
+      return { success: false, error: '已停止' };
+    }
     libLog(dir, 'error', `没有开始处理：${error?.message || error}`);
     throw error;
   } finally {
+    libraryPlanControllers.delete(path.resolve(dir));
     libraryPlanning.delete(dir);
     sendToRenderer('library-activity', { dir });
   }
 }
 
-async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTasks = null, title = '' }) {
-  const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...opts });
+/**
+ * 开始前先看输出盘够不够：成品通常是原片的 1~2 倍大（原片多是 HEVC，成品是 H.264），
+ * 再留 1 GB 给处理中的临时文件。磁盘半路写满会让后面每一集都失败，不如一开始就说清楚。
+ */
+async function dedupSpaceProblem(outputDir, inputs) {
+  let total = 0;
+  for (const file of inputs) {
+    try {
+      total += (await fsp.stat(file)).size;
+    } catch (_) {}
+  }
+  const need = total * 2 + 1024 ** 3;
+  let free;
+  try {
+    let probe = path.resolve(outputDir);
+    while (!fs.existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+    const stats = await fsp.statfs(probe);
+    free = Number(stats.bavail) * Number(stats.bsize);
+  } catch (_) {
+    return '';
+  }
+  if (!Number.isFinite(free) || free >= need) return '';
+  const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1);
+  return `输出位置所在的磁盘只剩 ${gb(free)} GB，这次处理大约需要 ${gb(need)} GB。请先清理磁盘，或在设置里换一个空间更大的输出位置`;
+}
+
+async function planAndQueueResplit({
+  dir,
+  files,
+  split,
+  opts,
+  outputDir,
+  sideTasks = null,
+  title = '',
+  signal = null,
+}) {
+  // 并发数和编码方式以「设置」为准：界面里缓存的旧参数不能把它们改回去。
+  const options = quchong.validateOptions({
+    ...opts,
+    jobs: getCurrentSettings().quchong_jobs,
+    encoder: dedupEncoder(),
+  });
   const splitOptions = resplit.validateSplit(split);
   const ffmpegPath = resolveFfmpeg('ffmpeg');
   const ffprobePath = resolveFfmpeg('ffprobe');
@@ -3129,7 +3213,8 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
   progress(0, ordered.length);
   const durations = new Map();
   for (const item of ordered) {
-    const media = await quchong.probeMedia(ffprobePath, item.file);
+    if (signal?.aborted) throw new Error('已停止');
+    const media = await quchong.probeMedia(ffprobePath, item.file, signal);
     if (!media.has_video) return { success: false, error: `这个文件没有视频轨：${path.basename(item.file)}` };
     durations.set(item.file, media.video_duration > 0 ? media.video_duration : media.duration);
   }
@@ -3139,6 +3224,7 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
     files: ordered.map((item) => item.file),
     cacheDir: path.join(app.getPath('userData'), 'resplit-cache'),
     onProgress: progress,
+    signal,
   });
 
   libLog(
@@ -3173,6 +3259,14 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
     'info',
     `排好 ${plan.pieces.length} 集新片，同时处理 ${options.jobs} 集，编码器 ${options.encoder}；每集先合并变速，再统一加去重特效`,
   );
+
+  const lowSpace = await dedupSpaceProblem(
+    outputDir,
+    ordered.map((item) => item.file),
+  );
+  if (lowSpace) return { success: false, error: lowSpace };
+  // 用户在分析期间点了「停止」：到这里为止什么都没动，旧成品也还在。
+  if (signal?.aborted) throw new Error('已停止');
 
   // 新的一版开始前，旧成品挪进废纸篓：成品文件夹里只留最新一版。
   const retired = await retireLibraryOutputs(dir);
@@ -3235,7 +3329,11 @@ async function startQuchongBatch(payload = {}) {
     const outputDir = configuredDir(payload.outputDir, 'dedup_output_dir', '去重输出目录');
     const outputDirs = sources.map(() => outputDir);
     await fsp.mkdir(outputDir, { recursive: true });
-    const opts = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...payload.opts });
+    const opts = quchong.validateOptions({
+      ...payload.opts,
+      jobs: getCurrentSettings().quchong_jobs,
+      encoder: dedupEncoder(),
+    });
     const bgm = payload.bgm ? path.resolve(String(payload.bgm)) : null;
     if (bgm) {
       const stat = await fsp.stat(bgm).catch(() => null);
@@ -3255,6 +3353,8 @@ async function startQuchongBatch(payload = {}) {
     const duplicate = sources.find((file) => pendingSources.has(quchongPathKey(file)));
     if (duplicate) return { success: false, error: `视频已在去重队列中：${path.basename(duplicate)}` };
 
+    const lowSpace = await dedupSpaceProblem(outputDir, sources);
+    if (lowSpace) return { success: false, error: lowSpace };
     const destinations = allocateQuchongDestinations(sources, outputDirs);
     const libraryDir =
       typeof payload.libraryDir === 'string' &&
@@ -3869,18 +3969,32 @@ async function retireLibraryOutputs(dir) {
     .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
     .map((entry) => path.join(output, entry.name));
   let moved = 0;
+  const locked = [];
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   for (const file of files) {
     try {
       if (typeof shell?.trashItem === 'function') await shell.trashItem(file);
       else throw new Error('no trash');
       moved += 1;
     } catch (_) {
-      const keep = path.join(publishWorkDir(dir), 'replaced-outputs', String(Date.now()));
-      fs.mkdirSync(keep, { recursive: true });
-      fs.renameSync(file, path.join(keep, path.basename(file)));
-      moved += 1;
+      // U 盘、移动硬盘、网络盘没有回收站：放进同一个盘上的「去重-旧成品」文件夹（同盘改名，不占额外空间），
+      // 不能挪到系统盘的应用目录——跨盘改名会直接失败。文件正被播放器打开时挪不动，记下来最后统一说明。
+      try {
+        const keep = path.join(dir, '去重-旧成品', stamp);
+        fs.mkdirSync(keep, { recursive: true });
+        fs.renameSync(file, path.join(keep, path.basename(file)));
+        moved += 1;
+      } catch (error) {
+        locked.push(path.basename(file));
+      }
     }
   }
+  if (locked.length)
+    throw new Error(
+      `有 ${locked.length} 个旧成品正被别的程序打开（比如播放器），没法移走：${locked.slice(0, 5).join('、')}${
+        locked.length > 5 ? ' 等' : ''
+      }。请先关掉再开始`,
+    );
   // 这些成品已经被新一版替换，它们的分析中间文件不会再被用到。
   await cleanupAndLog(dir, files, '旧成品已替换');
   return moved;
@@ -3995,7 +4109,7 @@ function draftProgressPercent(job) {
 function draftMessage(job) {
   const items = [...job.active.values()];
   if (items.length === 1) return items[0].message;
-  return items.length ? `同时做 ${items.length} 集` : '';
+  return items.length ? `同时做 ${items.length} 集` : job.waitingReason || '';
 }
 
 function libraryDraftSnapshot(job) {
@@ -4047,15 +4161,58 @@ function draftThreadBudget() {
   return configured > 0 ? configured : Math.max(2, Math.min(8, cores - 2));
 }
 
+/**
+ * 系统是不是已经很忙。macOS 用负载；Windows 上 os.loadavg() 恒为 0，改看可用内存。
+ * macOS 的 os.freemem() 不含可回收的缓存，数值常年很低，不能拿来判断。
+ */
+function systemBusy() {
+  const cores = os.availableParallelism?.() || os.cpus().length || 1;
+  if (process.platform === 'win32') return os.freemem() < DRAFT_LANE_MEMORY + 1024 ** 3;
+  return os.loadavg()[0] > cores * 0.85;
+}
+
 /** 现在这台电脑适合同时做几集：看线程预算、内存，有去重在跑或系统已经很忙就退回一集一集做。 */
 function draftLanesAllowed() {
   const byThreads = Math.floor(draftThreadBudget() / DRAFT_LANE_MIN_THREADS);
   const byMemory = Math.floor((os.totalmem() * 0.5) / DRAFT_LANE_MEMORY);
   let lanes = Math.min(DRAFT_MAX_LANES, byThreads, byMemory);
-  const cores = os.availableParallelism?.() || os.cpus().length || 1;
   const dedupRunning = [...quchongBatches.values()].some((batch) => !batch.finished);
-  if (dedupRunning || os.loadavg()[0] > cores * 0.85) lanes = Math.min(lanes, 1);
+  if (dedupRunning || systemBusy()) lanes = Math.min(lanes, 1);
   return Math.max(1, lanes);
+}
+
+/** 所有剧加起来正在做的草稿集数（不算 except 这一部）。 */
+function draftEpisodesInProgress(except) {
+  let count = 0;
+  for (const job of libraryDraftJobs.values()) if (job !== except && job.status === 'running') count += job.active.size;
+  return count;
+}
+
+/**
+ * 每做一集草稿前先排队：几部剧加起来同时做的集数不超过电脑能承受的数量；
+ * Windows 上可用内存不够一集的分析时也先等着（每 5 秒看一次），不和去重抢内存把电脑拖死。
+ */
+async function waitForDraftCapacity(job, state) {
+  let told = false;
+  while (!job.cancelled) {
+    const othersBusy = draftEpisodesInProgress(job) + job.active.size >= draftLanesAllowed();
+    const lowMemory = process.platform === 'win32' && os.freemem() < DRAFT_LANE_MEMORY;
+    if (!othersBusy && !lowMemory) {
+      if (told) {
+        job.waitingReason = '';
+        libraryDraftEmit(job);
+      }
+      return;
+    }
+    if (!told) {
+      told = true;
+      job.waitingReason = lowMemory ? '排队中：等电脑空出内存' : '排队中：等别的剧的草稿做完';
+      if (state) state.message = job.waitingReason;
+      libLog(job.dir, 'info', `剪映草稿：${job.waitingReason}`, 'side');
+      libraryDraftEmit(job);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
 }
 
 /** 流水线同一时间最多放行几集：所有正在做草稿的剧各自的并行数之和，没有就是 1。 */
@@ -4285,7 +4442,21 @@ async function generateLibraryDraft(job, file, item) {
 }
 
 /** 对这些去重成品逐集生成剪映草稿；后台运行，进度和日志写进这部剧的「支线任务日志」。 */
-async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts = false, partial = false }) {
+// 同一部剧的「开始做草稿」按顺序一个个处理：准备检查要花时间（会起一个检测进程），
+// 两个请求同时进来时不能各建一个任务（后建的会把先建的盖掉，先建的就成了停不下来的孤儿任务）。
+const draftStartLocks = new Map();
+function startLibraryDrafts(args) {
+  const key = path.resolve(String(args?.dir || ''));
+  const run = (draftStartLocks.get(key) || Promise.resolve()).then(() => startLibraryDraftsNow(args));
+  const tail = run.catch(() => {});
+  draftStartLocks.set(key, tail);
+  tail.then(() => {
+    if (draftStartLocks.get(key) === tail) draftStartLocks.delete(key);
+  });
+  return run;
+}
+
+async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prompts = false, partial = false }) {
   const key = path.resolve(dir);
   if (!candidates.length)
     return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
@@ -4358,6 +4529,8 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts
         libLog(key, 'info', '剪映草稿：电脑比较忙，少开一路，剩下的接着一集一集做', 'side');
         return;
       }
+      await waitForDraftCapacity(job);
+      if (job.cancelled || !job.queue.length) return;
       const item = job.queue.shift();
       const label = path.basename(item.file, path.extname(item.file));
       const state = {
@@ -4382,9 +4555,15 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts
         if (getCurrentSettings().structure_cleanup !== false)
           await cleanupAndLog(key, [item.file], `${label} 草稿已生成`);
       } catch (error) {
-        if (job.cancelled || error?.stopped) return;
+        if (job.cancelled) return;
+        // 这一集被单独中断（不是整个任务被停）：记成失败，接着做后面的集，不让整条车道悄悄退出。
         job.failed += 1;
-        libLog(key, 'error', `剪映草稿：${label} 失败：${error?.message || error}`, 'side');
+        libLog(
+          key,
+          'error',
+          error?.stopped ? `剪映草稿：${label} 被中断` : `剪映草稿：${label} 失败：${error?.message || error}`,
+          'side',
+        );
       } finally {
         job.active.delete(label);
       }
@@ -4452,6 +4631,9 @@ ipcMain.handle('library-draft', async (_event, payload = {}) => {
     if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
       return { success: false, error: '这不是剧文件夹' };
     }
+    // 这部剧正在分析切点或去重时，「去重」里的成品随时会被换掉，先不单独做草稿。
+    const busy = libraryBusyReason(dir);
+    if (busy) return { success: false, error: busy };
     return await startLibraryDrafts({
       dir,
       files: libraryDedupOutputs(dir),
@@ -4463,6 +4645,10 @@ ipcMain.handle('library-draft', async (_event, payload = {}) => {
     return { success: false, error: error?.message || String(error) };
   }
 });
+
+ipcMain.handle('library-plan-cancel', (_event, dir) =>
+  cancelLibraryPlanning(dir) ? { success: true } : { success: false, error: '没有在分析切点' },
+);
 
 ipcMain.handle('library-draft-cancel', (_event, dir) => {
   try {
@@ -4753,7 +4939,7 @@ function probeDuration(ffprobePath, file, task) {
     const child = execFile(
       ffprobePath,
       ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file],
-      { timeout: 30000 },
+      { timeout: 30000, windowsHide: true },
       (err, stdout) => {
         if (task?.child === child) delete task.child;
         if (err) return resolve(0);
@@ -4781,7 +4967,7 @@ function probeVideoInfo(ffprobePath, file, task) {
         'json',
         file,
       ],
-      { timeout: 30000 },
+      { timeout: 30000, windowsHide: true },
       (err, stdout) => {
         if (task?.child === child) delete task.child;
         if (err) return resolve(null);
@@ -5999,10 +6185,15 @@ async function pickH264Encoder(ffmpegPath, task) {
   const { execFile } = require('child_process');
 
   const list = await new Promise((resolve) => {
-    const child = execFile(ffmpegPath, ['-hide_banner', '-encoders'], { timeout: 20000 }, (err, stdout) => {
-      if (task?.child === child) delete task.child;
-      resolve(String(stdout || ''));
-    });
+    const child = execFile(
+      ffmpegPath,
+      ['-hide_banner', '-encoders'],
+      { timeout: 20000, windowsHide: true },
+      (err, stdout) => {
+        if (task?.child === child) delete task.child;
+        resolve(String(stdout || ''));
+      },
+    );
     if (task) task.child = child;
   });
   if (task?.cancelled) throw new Error('已取消');
@@ -6025,7 +6216,8 @@ async function pickH264Encoder(ffmpegPath, task) {
           '-f',
           'lavfi',
           '-i',
-          'color=c=black:s=64x64:d=0.1',
+          // NVENC 有最小尺寸限制（64×64 会被拒），用 256×256 才测得出显卡编码是否可用。
+          'color=c=black:s=256x256:d=0.1',
           '-frames:v',
           '1',
           '-c:v',
@@ -6034,7 +6226,7 @@ async function pickH264Encoder(ffmpegPath, task) {
           'null',
           '-',
         ],
-        { timeout: 25000 },
+        { timeout: 25000, windowsHide: true },
         (err) => {
           if (task?.child === child) delete task.child;
           resolve(!err);
@@ -7379,9 +7571,20 @@ function isFileInUse(file) {
     [...quchongBatches.values()].some(
       (batch) =>
         !batch.finished &&
-        (batch.tasks.some((task) => ['pending', 'running'].includes(task.status) && quchongPathKey(task.src) === key) ||
+        // 重新拆分的一集由好几个原集的片段拼成：所有片段的原文件都算在用，不只是第一段。
+        (batch.tasks.some(
+          (task) =>
+            ['pending', 'running'].includes(task.status) &&
+            quchongTaskInputs(task).some((input) => quchongPathKey(input) === key),
+        ) ||
           (batch.bgm && quchongPathKey(batch.bgm) === key)),
     )
+  )
+    return true;
+  // 正在分析切点的剧：它文件夹里的原集马上要被拼接处理，先不能删。
+  if (
+    key &&
+    [...libraryPlanControllers.keys()].some((dir) => quchongPathKey(path.dirname(file)) === quchongPathKey(dir))
   )
     return true;
   // AI 文案提取只读取已下载源文件，任务在 queued/running 阶段也不能删除输入。
@@ -7964,7 +8167,17 @@ function createWindow() {
     } catch (_) {}
   });
 
-  createdWindow.on('close', () => {
+  // 还有任务在跑时先问一句：关窗口（Windows 上就是退出）会停掉正在下载、去重、做草稿的任务。
+  createdWindow.on('close', (event) => {
+    let busy = false;
+    try {
+      busy = appBusy();
+    } catch (_) {}
+    if (busy && !quitConfirmed && dialog?.showMessageBox) {
+      event.preventDefault();
+      askToQuit(createdWindow);
+      return;
+    }
     if (mainWindow === createdWindow) rendererClosing = true;
   });
 
@@ -7979,9 +8192,53 @@ function createWindow() {
     }
     cancelAllQuchongBatches();
     cancelAllEpisodeWorkflows();
+    // 关窗口时把后台的切点分析、剪映草稿、合并也一起停掉，不留在没有窗口的后台继续跑。
+    for (const controller of libraryPlanControllers.values()) controller.abort();
+    for (const job of libraryDraftJobs.values()) {
+      if (job.status !== 'running') continue;
+      job.cancelled = true;
+      job.queue = [];
+      job.controller?.abort();
+    }
+    for (const task of mergeTasks) {
+      if (task.status !== 'running') continue;
+      task.cancelled = true;
+      try {
+        require('./src/native/merge-runner').stopMergeChildren(task);
+      } catch (_) {}
+    }
     reconstructionPipeline?.cancelAll().catch((error) => console.warn('[Structure]', error.message));
     transcriptionManager?.cancelAll().catch((error) => console.warn('[Subtitles] 停止任务失败:', error.message));
   });
+}
+
+let quitDialogOpen = false;
+/** 有任务在跑时退出前确认一次；确认后才真的退出（停止任务、保存状态由退出流程完成）。 */
+function askToQuit(win) {
+  if (quitDialogOpen) return;
+  quitDialogOpen = true;
+  const target = win && !win.isDestroyed() ? win : undefined;
+  dialog
+    .showMessageBox(target, {
+      type: 'warning',
+      buttons: ['继续处理', '停止并退出'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: APP_TITLE,
+      message: '还有任务正在处理',
+      detail:
+        '退出会停止正在进行的下载、去重、剪映草稿等任务（已经做完的成品不受影响），下次需要重新开始这些任务。确定要停止并退出吗？',
+    })
+    .then(({ response }) => {
+      if (response !== 1) return;
+      quitConfirmed = true;
+      app.quit();
+    })
+    .catch(() => {})
+    .finally(() => {
+      quitDialogOpen = false;
+    });
 }
 
 // ===== 应用生命周期 =====
@@ -8097,6 +8354,7 @@ app.whenReady().then(async () => {
     console.warn('[Encoder] 检测失败:', e.message);
   }
   createWindow();
+  startSleepBlockerWatch();
 });
 
 function gpuAdapterNames(info) {
@@ -8150,6 +8408,7 @@ function appBusy() {
   );
 }
 function refreshSleepBlocker() {
+  if (!powerSaveBlocker) return;
   let busy = false;
   try {
     busy = appBusy();
@@ -8160,9 +8419,13 @@ function refreshSleepBlocker() {
     sleepBlocker = null;
   }
 }
-app.whenReady().then(() => {
-  if (singleInstance) setInterval(refreshSleepBlocker, 15_000).unref?.();
-});
+function startSleepBlockerWatch() {
+  const tick = () => {
+    refreshSleepBlocker();
+    setTimeout(tick, 15_000).unref?.();
+  };
+  tick();
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -8174,6 +8437,16 @@ app.on('before-quit', (event) => {
     store.flushPending();
     activityLogStore?.flush();
   } catch (_) {}
+  // macOS 的 ⌘Q / Dock 退出会先到这里：有任务在跑就先问，别在用户点「继续处理」之前就把任务停了。
+  let busy = false;
+  try {
+    busy = appBusy();
+  } catch (_) {}
+  if (busy && !quitConfirmed && dialog?.showMessageBox) {
+    event.preventDefault();
+    askToQuit(mainWindow);
+    return;
+  }
   if (!transcriptionManager?.hasActive() && !reconstructionPipeline?.hasActive()) return;
   event.preventDefault();
   if (waitingForSubtitles) return;

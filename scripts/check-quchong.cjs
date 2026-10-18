@@ -195,7 +195,7 @@ async function checkNvencApiMismatch(implementation) {
       }),
       (error) => {
         assert.match(error.message, /FFmpeg 需要 NVENC API 13\.1，当前显卡驱动提供 12\.2/);
-        assert.match(error.message, /与当前驱动 API 兼容的 FFmpeg 构建/);
+        assert.match(error.message, /请更新 NVIDIA 显卡驱动，或在「设置 → 去重编码方式」改成「只用 CPU」/);
         assert.ok(error.message.endsWith(`ffmpeg 退出码 1\n${diagnostics}`), '友好说明必须保留退出码及原始完整诊断');
         return true;
       },

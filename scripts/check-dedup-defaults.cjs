@@ -111,4 +111,16 @@ for (const text of ['rotate=', 'rgbashift', 'noise=alls=5', 'vignette', 'asetrat
 // 范围写反要报错，超出范围要报错。
 assert.throws(() => quchong.validateOptions({ gamma_min: 1.2, gamma_max: 1 }), /下限不能大于上限/);
 assert.throws(() => quchong.validateOptions({ brightness_min: -0.9 }), /brightness_min/);
+// 编码方式以「设置」为准（自动 / 只用 CPU），两个开始去重的入口都用它，界面缓存的旧 encoder 不起作用。
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.equal((main.match(/encoder: dedupEncoder\(\)/g) || []).length, 2, '重新拆分和普通去重都要用设置里的编码方式');
+  assert.match(main, /quchong_encoder: merged\.quchong_encoder === 'cpu' \? 'cpu' : 'auto'/);
+  assert.match(main, /encoder: quchong\.resolveEncoder\(dedupEncoder\(\)\)/);
+  const settings = fs.readFileSync(path.join(__dirname, '..', 'src/components/Settings.jsx'), 'utf8');
+  assert.match(settings, /'quchong_encoder'/);
+  assert.match(settings, /只用 CPU/);
+}
 console.log('PASS dedup defaults: cheap colour/sharpen/speed only, heavy effects off until enabled');

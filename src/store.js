@@ -41,7 +41,8 @@ function flush() {
   const temporary = dataFile + '.tmp';
   try {
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
-    const serialized = JSON.stringify(cache || {}, null, 2);
+    // 不缩进：文件小一半、序列化快一倍（这份数据只给程序读）。
+    const serialized = JSON.stringify(cache || {});
     fs.writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(temporary, dataFile);
     durable = serialized;
@@ -89,9 +90,11 @@ function getQuchongTasks() {
   return c.quchongTasks;
 }
 
+// 去重每一集要经过好几个阶段，每个阶段都整份重写数据文件会拖慢主进程、反复写盘；
+// 合并成最多每 1.5 秒写一次。退出前 flushPending 会把没写的落盘；万一崩溃，重启时进行中的任务本来就按「中断」处理。
 function saveQuchongTasks(tasks) {
   loadCache().quchongTasks = tasks || [];
-  flush();
+  scheduleFlush();
 }
 
 // ===== 短剧档案（让播放页在没有下载任务时也能列出完整分集）=====
@@ -117,6 +120,10 @@ function getPlayback() {
 // 其他保存、退出前的 flushPending 都会把待写内容一并落盘。
 function savePlayback(map) {
   loadCache().playback = map || {};
+  scheduleFlush();
+}
+
+function scheduleFlush() {
   if (deferredTimer) return;
   deferredTimer = setTimeout(() => {
     deferredTimer = null;
