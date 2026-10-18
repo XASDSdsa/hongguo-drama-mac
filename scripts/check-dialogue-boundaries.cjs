@@ -271,7 +271,7 @@ async function main() {
     const varied = speech(ranges, 10);
     verify(raw, varied, align(raw, varied, 'varied'));
   }
-  // 切点必须离停顿边缘至少 40 ms：停顿 0.9–1.1 s 里，0.92 和 1.07 太靠边，1.0 在中间。
+  // 切点必须离停顿边缘至少 30 ms：停顿 0.9–1.1 s 里，0.92 和 1.08 太靠边，1.0 在中间。
   const edgeSpeech = voicedSpeech(
     [
       [0, 0.9],
@@ -282,7 +282,7 @@ async function main() {
   for (const [time, expected] of [
     [0.92, 'merged'],
     [1.0, 'kept'],
-    [1.07, 'merged'],
+    [1.08, 'merged'],
   ]) {
     const edgeShots = shotsAt([0, time, 2.5]);
     assert.equal(align(edgeShots, edgeSpeech, 'edge').boundary_decisions[0].status, expected, `cut at ${time}`);
@@ -291,9 +291,9 @@ async function main() {
   const longShots = shotsAt([0, 30, 62, 90]);
   const shortPauses = voicedSpeech(
     [
-      [0, 29.9],
-      [30.04, 61.95],
-      [62.09, 89.5],
+      [0, 29.95],
+      [30.05, 61.95],
+      [62.05, 89.5],
     ],
     90,
   );

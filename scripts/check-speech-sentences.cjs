@@ -23,7 +23,7 @@ const span = (start, end, id) => ({
 const raw = {
   sample_rate: 16000,
   duration: 1,
-  timing_method: 'whisper-audio-pause-v4',
+  timing_method: 'whisper-audio-pause-v5',
   sentence_boundary_source: 'ct_transformer_global',
   alignment_summary: { sentences: 2 },
   segments: [

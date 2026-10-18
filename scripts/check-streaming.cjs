@@ -185,6 +185,24 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     assert.equal(task.status, 'failed');
     assert.equal(fs.existsSync(path.join(root, 'broken.mp4.enc.tmp')), false);
   });
+  await check('draft diagnostics line says how many breaths were found and how many shot cuts were kept', async () => {
+    const h = hload(async () => ({ url: base + '/range' }));
+    const line = h.run(
+      `describeStructure(${JSON.stringify({
+        modules: {
+          transcript: { summary: { acoustic_pauses: 14, pause_cuts: 12 } },
+          alignment: {
+            summary: { raw_shot_count: 9, kept_boundary_count: 5, merged_boundary_count: 3, shot_count: 6 },
+          },
+        },
+      })})`,
+    );
+    assert.match(line, /14 处气口/);
+    assert.match(line, /拆开 12 次/);
+    assert.match(line, /画面切点 8 个，留下 5 个，并掉 3 个/);
+    assert.match(line, /最终 6 段/);
+    assert.equal(h.run('describeStructure({})'), '分析完成');
+  });
   await check('a 404 on the download link is retried with a fresh link, not given up as missing', async () => {
     let lookups = 0;
     const h = hload(async () => {

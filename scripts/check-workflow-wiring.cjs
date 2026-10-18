@@ -10,8 +10,8 @@ const preload = read('preload.js');
 const settings = read('src/components/Settings.jsx');
 const packageJson = JSON.parse(read('package.json'));
 const { ALGORITHM, POLICY } = require('../src/native/video-structure/alignment');
-const audioPauseAlgorithm = 'whisper-audio-pause-v4';
-const audioPausePolicy = 'paraformer-ct-global-whisper-audio-pause-v4';
+const audioPauseAlgorithm = 'whisper-audio-pause-v5';
+const audioPausePolicy = 'paraformer-ct-global-whisper-audio-pause-v5';
 
 const checks = [
   ['主进程读取工作流门禁配置', main.includes('workflowGates') && main.includes('workflow_require_dedup')],

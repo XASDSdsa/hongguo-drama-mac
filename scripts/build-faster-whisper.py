@@ -108,7 +108,7 @@ def main():
     checksums = {str(p.relative_to(output)).replace('\\', '/'): digest(p) for p in [executable, *(output / 'models/tiny' / name for name in MODEL_FILES)]}
     manifest = {'version': 1, 'buildId': build_id, 'platform': target, 'python': platform.python_version(), 'minimumMacOS': minimum_macos,
                 'model': 'tiny', 'modelRevision': MODEL_REVISION, 'offlineSelfTest': True,
-                'sentenceAlignmentSelfTest': True, 'sentenceAlignmentAlgorithm': 'whisper-audio-pause-v4', 'sha256': checksums}
+                'sentenceAlignmentSelfTest': True, 'sentenceAlignmentAlgorithm': 'whisper-audio-pause-v5', 'sha256': checksums}
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf8')
     print(f'Bundled transcription ready: {output}', flush=True)
 

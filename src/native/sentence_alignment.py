@@ -4,8 +4,11 @@ from __future__ import annotations
 import math
 import unicodedata
 
-ALGORITHM = 'whisper-audio-pause-v4'
-PAUSE_SPLIT_SECONDS = 0.20
+ALGORITHM = 'whisper-audio-pause-v5'
+# A breath between clauses is ~0.15-0.3 s.  Anything the speaker actually stops for splits the voice; punctuation never does.
+PAUSE_SPLIT_SECONDS = 0.15
+PAD_SAMPLES = 320  # 20 ms kept on each side of a pause so no syllable edge is trimmed
+WORD_TOLERANCE_SAMPLES = 2560  # Whisper word times drift by ~100-150 ms; 160 ms to the nearest word boundary
 
 
 def spoken_characters(text):
@@ -79,7 +82,7 @@ def acoustic_evidence(audio, rate=16000, detector=None):
     if detector is None:
         from faster_whisper.vad import get_speech_timestamps, VadOptions
         detector = lambda data: get_speech_timestamps(data, VadOptions(
-            min_silence_duration_ms=200, min_speech_duration_ms=100,
+            min_silence_duration_ms=100, min_speech_duration_ms=100,
             max_speech_duration_s=float('inf'), speech_pad_ms=0), sampling_rate=rate)
     speech = detector(samples)
     previous = 0
@@ -95,7 +98,13 @@ def acoustic_evidence(audio, rate=16000, detector=None):
     energies = np.sqrt(np.mean(padded.reshape(-1, frame).astype(np.float64) ** 2, axis=1))
     positive = np.sort(energies[energies > 0])
     body = float(positive[int((len(positive) - 1) * .8)]) if len(positive) else 0
-    threshold = min(10 ** (-38 / 20), body * 10 ** (-24 / 20))
+    # A breath is quiet relative to the voice around it, not relative to digital silence:
+    # separated vocals and room tone always leave a floor, so an absolute -38 dB gate never opens.
+    threshold = min(10 ** (-26 / 20), body * 10 ** (-14 / 20))
+    if len(energies) >= 5:
+        # 50 ms median: a click or a stray frame inside a breath must not split one pause into two.
+        windows = np.lib.stride_tricks.sliding_window_view(np.pad(energies, 2, mode='edge'), 5)
+        energies = np.median(windows, axis=1)
     quiet, first = [], None
     minimum = round(PAUSE_SPLIT_SECONDS * rate)
     for index in range(len(energies) + 1):
@@ -144,23 +153,29 @@ def align_segment(segment, words, source_id, evidence=None):
     if measured[-1]['last'] <= measured[0]['first']:
         return _fallback(segment, source_id, '整段没有可定位的发声时长')
     evidence = evidence or dict(speech=[], pauses=[])
-    pad, tolerance = 640, 1280  # 40ms protection, 80ms alignment uncertainty.
+    pad, tolerance = PAD_SAMPLES, WORD_TOLERANCE_SAMPLES
     cuts, unresolved = [], []
     for pause in evidence['pauses']:
         left, right = pause['start'], pause['end']
         if left <= a or right >= b:
             continue
-        candidates = []
+        centre = (left + right) / 2
+        best = None
         for i, (before, after) in enumerate(zip(measured, measured[1:]), 1):
-            if (before['first'] < left and right < after['last']
-                    and left - tolerance <= before['last'] <= right + tolerance
-                    and left - tolerance <= after['first'] <= right + tolerance
-                    and min(before['probability'], after['probability']) >= .01):
-                candidates.append(i)
-        if len(candidates) != 1 or (cuts and candidates[0] <= cuts[-1]['index']):
+            if min(before['probability'], after['probability']) < .01:
+                continue
+            # The word boundary is the silence between two words; it must sit in (or right next to) the measured pause.
+            boundary_start, boundary_end = before['last'], after['first']
+            distance = max(left - boundary_end, boundary_start - right, 0)
+            if distance > tolerance or boundary_start < a or boundary_end > b:
+                continue
+            score = (distance, abs((boundary_start + boundary_end) / 2 - centre))
+            if best is None or score < best[0]:
+                best = (score, i)
+        if best is None or (cuts and best[1] <= cuts[-1]['index']):
             unresolved.append(dict(start=left / rate, end=right / rate))
             continue
-        cuts.append(dict(index=candidates[0], start=left, end=right))
+        cuts.append(dict(index=best[1], start=left, end=right))
     # Audio protects real speech at recognition-window edges when DTW drifts.
     # DTW can miss a quiet initial/final syllable. Preserve source endpoints;
     # only PCM-confirmed silence outside VAD speech may shorten them.
@@ -279,7 +294,9 @@ def align_transcript(data, audio, aligner, progress=None, detector=None):
     return {**data, 'segments': output, 'warnings': warnings, 'timing_method': ALGORITHM,
             'alignment_summary': {'source_segments': len(segments), 'sentences': len(output), 'unresolved_segments': unresolved,
                                   'unresolved_sentence_boundaries': sum(bool(row.get('needs_review')) for row in output),
-                                  'continuous_window_joins': before_join - len(output)}}
+                                  'continuous_window_joins': before_join - len(output),
+                                  'acoustic_pauses': len(evidence['pauses']),
+                                  'pause_cuts': before_join - len(segments)}}
 
 
 def whisper_aligner(model):

@@ -7,13 +7,14 @@ const { envelope, requireThat, validateIntervals } = require('./contracts');
 // Punctuation, subtitle cues, and topic changes are not breaths.
 const ALGORITHM = 'visual-shot-on-acoustic-pause-v1';
 const POLICY = 'shot_cut_requires_acoustic_pause';
-const ACOUSTIC_PAUSE_SECONDS = 0.2;
+// A breath between clauses is ~0.15-0.3 s; the voice gap left after trimming 20 ms of padding is what is measured here.
+const ACOUSTIC_PAUSE_SECONDS = 0.12;
 // A cut must sit inside the pause, not on its edge: voice-activity edges are only accurate to a few tens of ms.
 // Levels 1-2 are used only to break up a segment longer than the maximum, never to cut inside speech.
 const PAUSE_TIERS = Object.freeze([
-  Object.freeze({ level: 0, pause: ACOUSTIC_PAUSE_SECONDS, margin: 0.04 }),
-  Object.freeze({ level: 1, pause: 0.14, margin: 0.03 }),
-  Object.freeze({ level: 2, pause: 0.1, margin: 0.025 }),
+  Object.freeze({ level: 0, pause: ACOUSTIC_PAUSE_SECONDS, margin: 0.03 }),
+  Object.freeze({ level: 1, pause: 0.09, margin: 0.02 }),
+  Object.freeze({ level: 2, pause: 0.07, margin: 0.015 }),
 ]);
 const DEFAULT_MAX_SHOT_SECONDS = 60;
 const SUBTITLE_POLICY = 'voice-segments-v1';

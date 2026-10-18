@@ -65,11 +65,45 @@ class AudioCutTests(unittest.TestCase):
             [word('前一句',0,1.5),word('后一句',1.5,4)],'source',ev)
         self.assertIsNone(warning)
         self.assertEqual([r['text'] for r in rows],['前一句 ','后一句'])
-        self.assertEqual([(r['start'],r['end']) for r in rows],[(1,2.24),(2.66,5)])
+        self.assertEqual([(r['start'],r['end']) for r in rows],[(1,2.22),(2.68,5)])
         self.assertEqual(''.join(r['text'] for r in rows),'前一句 后一句')
         for row in rows:
             self.assertEqual(row['start_sample'],row['speech_spans'][0]['start_sample'])
             self.assertEqual(row['end_sample_exclusive'],row['speech_spans'][0]['end_sample_exclusive'])
+
+    def noisy(self, duration, gaps, floor=.004):
+        import numpy as np
+        audio = pcm(duration)
+        rng = np.random.default_rng(3)
+        for a, b in gaps:
+            n = round(b * RATE) - round(a * RATE)
+            audio[round(a * RATE):round(b * RATE)] = (rng.standard_normal(n) * floor).astype(np.float32)
+        return audio
+
+    def test_breath_with_room_noise_floor_splits_clauses(self):
+        # 0.18 s breaths over a noise floor, word times 100 ms off: still three clauses, no punctuation needed.
+        audio = self.noisy(6, [(1.9, 2.08), (4.0, 4.18)])
+        ev = evidence(audio, [(0, 1.9), (2.08, 4.0), (4.18, 6)])
+        self.assertEqual(len(ev['pauses']), 2)
+        words = [word('他', 0, .9), word('走了', .9, 1.85), word('可是', 2.2, 3), word('没回头', 3, 3.95),
+                 word('我', 4.25, 5), word('等着', 5, 6)]
+        rows, warning = module.align_segment(source('他走了可是没回头我等着。', duration=6), words, 's', ev)
+        self.assertIsNone(warning)
+        self.assertEqual([r['text'] for r in rows], ['他走了', '可是没回头', '我等着。'])
+        self.assertEqual(''.join(r['text'] for r in rows), '他走了可是没回头我等着。')
+        self.assertTrue(all(len(r['speech_spans']) == 1 for r in rows))
+        self.assertGreater(rows[1]['start'] - rows[0]['end'], .1)
+
+    def test_loud_gap_is_not_a_breath(self):
+        self.assertFalse(evidence(pcm(4), [(0, 1.5), (1.7, 4)])['pauses'])
+        self.assertFalse(evidence(self.noisy(4, [(1.5, 1.7)], floor=.1), [(0, 1.5), (1.7, 4)])['pauses'])
+
+    def test_nearest_word_boundary_is_used_when_two_are_close(self):
+        ev = evidence(self.noisy(4, [(1.5, 1.7)]), [(0, 1.5), (1.7, 4)])
+        words = [word('甲', 0, .7), word('乙', .7, 1.3), word('丙', 1.75, 2.5), word('丁', 2.5, 4)]
+        rows, warning = module.align_segment(source('甲乙丙丁', duration=4), words, 's', ev)
+        self.assertIsNone(warning)
+        self.assertEqual([r['text'] for r in rows], ['甲乙', '丙丁'])
 
     def test_quiet_gap_without_vad_confirmation_is_not_cut(self):
         audio=pcm(4,[(1.2,1.8)])

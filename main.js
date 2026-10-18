@@ -4053,6 +4053,24 @@ async function cleanupAndLog(dir, files, reason) {
     libLog(dir, 'info', `剪映草稿：${reason}，已清理 ${count} 集的分析中间文件，释放 ${formatBytes(freed)}`, 'side');
 }
 
+/** 一句话讲清楚这一集是怎么切的：气口找到几个、台词切了几刀、画面切点留了几个、并掉几个。 */
+function describeStructure(structure) {
+  const m = structure?.modules || {};
+  const speech = m.transcript?.summary || {};
+  const cut = m.alignment?.summary || {};
+  const parts = [];
+  if (Number.isFinite(speech.acoustic_pauses)) {
+    parts.push(`检测到 ${speech.acoustic_pauses} 处气口，按气口拆开 ${speech.pause_cuts ?? 0} 次`);
+  }
+  if (Number.isFinite(cut.raw_shot_count)) {
+    parts.push(
+      `画面切点 ${cut.raw_shot_count - 1} 个，留下 ${cut.kept_boundary_count ?? 0} 个，并掉 ${cut.merged_boundary_count ?? 0} 个没落在气口上的`,
+    );
+  }
+  if (Number.isFinite(cut.shot_count)) parts.push(`最终 ${cut.shot_count ?? '?'} 段`);
+  return parts.length ? parts.join('；') : '分析完成';
+}
+
 async function generateLibraryDraft(job, file, item) {
   const pipeline = getReconstructionPipeline();
   const label = path.basename(file, path.extname(file));
@@ -4070,6 +4088,7 @@ async function generateLibraryDraft(job, file, item) {
     if (incomplete.length) {
       throw new Error(structure?.error || `拆解没有完成：${incomplete.map((id) => DRAFT_STAGE_TEXT[id]).join('、')}`);
     }
+    libLog(path.resolve(job.dir), 'info', `剪映草稿：${label} ${describeStructure(structure)}`, 'side');
     // 拆解结果是缓存复用的：以前生成的草稿和这次要的分轨方式不一样时，只重做最后一步。
     const manifestOf = (draftPath) => {
       try {

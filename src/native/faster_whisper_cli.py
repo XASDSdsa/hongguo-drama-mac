@@ -58,7 +58,7 @@ def probe() -> int:
         "cuda": False,
         "bundled": bool(getattr(sys, 'frozen', False)),
         "error": "",
-        "sentence_alignment": "whisper-audio-pause-v4",
+        "sentence_alignment": "whisper-audio-pause-v5",
     }
     try:
         import faster_whisper  # noqa: F401  # type: ignore
@@ -107,7 +107,7 @@ def self_test(args) -> int:
         raise RuntimeError('句级声学对齐引擎自检失败')
     print(json.dumps({'ok': True, 'bundled': bool(getattr(sys, 'frozen', False)),
                       'model': str(args.model), 'device': args.device, 'vad': True,
-                      'sentence_alignment': 'whisper-audio-pause-v4'}), flush=True)
+                      'sentence_alignment': 'whisper-audio-pause-v5'}), flush=True)
     return 0
 
 

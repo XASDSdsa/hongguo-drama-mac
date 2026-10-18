@@ -12,7 +12,7 @@ function verifyBundle(root, platform, arch) {
     );
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   if (manifest.platform !== target || manifest.offlineSelfTest !== true) throw new Error('字幕引擎未通过离线识别检查');
-  if (manifest.sentenceAlignmentSelfTest !== true || manifest.sentenceAlignmentAlgorithm !== 'whisper-audio-pause-v4')
+  if (manifest.sentenceAlignmentSelfTest !== true || manifest.sentenceAlignmentAlgorithm !== 'whisper-audio-pause-v5')
     throw new Error('内置句级声学对齐尚未通过离线检查，请在构建机运行 npm run setup:transcription');
   if (platform === 'darwin' && (!manifest.minimumMacOS || Number(manifest.minimumMacOS) > 13))
     throw new Error('字幕引擎尚未通过 macOS 13 兼容性检查，请重新构建');
