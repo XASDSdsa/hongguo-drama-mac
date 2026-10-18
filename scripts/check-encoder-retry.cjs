@@ -294,6 +294,52 @@ exec ffmpeg "\${args[@]}"
   );
 
   await check(
+    'an aac "-22" line that only follows another stream\'s real failure is not blamed on the audio; the real cause leads the message',
+    async () => {
+      // 真实现场：画面编码器先打不开，音频编码器随后被连累，也打印一遍 -22。
+      const lines = [
+        '[mpeg4 @ 0x5] timebase 1/1000000 not supported by MPEG 4 standard',
+        '[vost#0:0/mpeg4 @ 0x5] [enc:mpeg4 @ 0x5] Error while opening encoder',
+        '[aost#0:1/aac @ 0x6] [enc:aac @ 0x6] Could not open encoder before EOF',
+        '[aost#0:1/aac @ 0x6] Task finished with error code: -22 (Invalid argument)',
+        '[aost#0:1/aac @ 0x6] Terminating thread with return code -22 (Invalid argument)',
+        'Conversion failed!',
+      ];
+      const counter = path.join(tmp, 'collateral.count');
+      fs.writeFileSync(counter, '0');
+      const file = path.join(tmp, 'collateral');
+      fs.writeFileSync(
+        file,
+        `#!/bin/bash\nn=$(cat "${counter}"); echo $((n+1)) > "${counter}"\n${lines.map((line) => `echo "${line}" >&2`).join('\n')}\nexit 234\n`,
+        { mode: 0o755 },
+      );
+      const fake = { file, count: () => Number(fs.readFileSync(counter, 'utf8')) };
+      const { promise, logs } = await run(fake.file, path.join(tmp, 'collateral.mp4'));
+      await assert.rejects(promise, (error) => {
+        const head = error.message.split('\n')[0];
+        assert.doesNotMatch(head, /音频编码失败/);
+        assert.match(head, /videotoolbox 编码失败/);
+        assert.match(head, /原因：timebase 1\/1000000 not supported|原因：\[mpeg4 @ 0x5\] timebase/);
+        return true;
+      });
+      assert.equal(fake.count(), 3, '按编码器重试 2 次，不走音频降级');
+      assert.ok(!logs.some((line) => line.startsWith('[降级]')));
+    },
+  );
+
+  await check('rootCause skips the lines FFmpeg prints for streams dragged down by the real failure', () => {
+    const text = [
+      'ffmpeg 退出码 234',
+      'Input #0, mov,mp4, from a.mp4:',
+      '  Stream #0:1: Audio: aac',
+      '[Parsed_concat_10 @ 0x1] Input link in0:v0 parameters (size 320x240, SAR 27:64) do not match the corresponding output link in0:v0 parameters (320x240, SAR 1:1)',
+      '[aost#0:1/aac @ 0x2] Task finished with error code: -22 (Invalid argument)',
+    ].join('\n');
+    assert.match(quchong.rootCause(text), /do not match/);
+    assert.equal(quchong.rootCause('[aost#0:1/aac @ 0x2] Task finished with error code: -22 (Invalid argument)'), '');
+  });
+
+  await check(
     'the [aac] Qavg summary line at the end of any failure is not mistaken for an audio failure',
     async () => {
       const fake = fakeFfmpeg(

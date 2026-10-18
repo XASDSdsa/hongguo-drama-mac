@@ -413,10 +413,21 @@ async function main() {
     });
     const delayedResult = await quchong.probeMedia(ffprobe, delayedOutput);
     assert.ok(Math.abs(delayedResult.video_duration - delayedCommand.duration) < 0.1, '音画偏移样本输出时长错误');
-    // Exercise exactly the production 1080p defaults, including noise, RGB
-    // shift, rotation, vignette, pitch/EQ, on concurrent jobs.
+    // Two concurrent jobs at 1080p: the production defaults (colour + sharpen + speed), and the same with every
+    // slow effect switched on (rotation, RGB shift, noise, vignette, pitch/EQ) so those filters stay covered.
     // The hardware is pinned to CPU so the same test runs on every CI host.
     const defaultOpts = { ...quchong.DEFAULTS, encoder: 'cpu' };
+    const allEffects = {
+      ...defaultOpts,
+      rotation_max: 0.008,
+      rgb_shift: 2,
+      noise_min: 4,
+      noise_max: 7,
+      vignette: true,
+      pitch_min: 1.04,
+      pitch_max: 1.07,
+      eq_enable: true,
+    };
     let active = 0,
       peakActive = 0;
     const parallel = await Promise.all(
@@ -424,22 +435,25 @@ async function main() {
         const target = path.join(dir, `default-parallel-${index}.mp4`);
         const progress = [],
           stages = [];
-        const result = await runJobCase(`default 1080p filters, parallel job ${index + 1}`, {
-          ffmpegPath: ffmpeg,
-          ffprobePath: ffprobe,
-          src: portrait,
-          dst: target,
-          opts: defaultOpts,
-          onProgress: (value) => progress.push(value),
-          onStage: (stage) => {
-            stages.push(stage);
-            if (stage === 'encoding') {
-              active += 1;
-              peakActive = Math.max(peakActive, active);
-            }
-            if (stage === 'saving') active -= 1;
+        const result = await runJobCase(
+          `${index === 0 ? 'default' : 'all-effects'} 1080p filters, parallel job ${index + 1}`,
+          {
+            ffmpegPath: ffmpeg,
+            ffprobePath: ffprobe,
+            src: portrait,
+            dst: target,
+            opts: index === 0 ? defaultOpts : allEffects,
+            onProgress: (value) => progress.push(value),
+            onStage: (stage) => {
+              stages.push(stage);
+              if (stage === 'encoding') {
+                active += 1;
+                peakActive = Math.max(peakActive, active);
+              }
+              if (stage === 'saving') active -= 1;
+            },
           },
-        });
+        );
         const info = await quchong.probeMedia(ffprobe, target);
         const sourceInfo = await quchong.probeMedia(ffprobe, portrait);
         assert.equal(info.video_width, sourceInfo.video_width, '不改分辨率');
@@ -449,8 +463,8 @@ async function main() {
         assert.deepEqual(stages, ['probing', 'encoding', 'finalizing', 'validating', 'saving']);
         const source = await quchong.probeMedia(ffprobe, portrait);
         assert.ok(
-          Math.abs(info.video_duration - source.video_duration / result.rolled.SPEED - 0.3) < 0.1,
-          '默认变速+黑片头的输出时长错误',
+          Math.abs(info.video_duration - source.video_duration / result.rolled.SPEED) < 0.1,
+          '变速后的输出时长错误',
         );
         return result;
       }),

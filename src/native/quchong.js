@@ -367,6 +367,33 @@ const ENCODER_RETRY_DELAYS = [1500, 4000];
 // FFmpeg 7 把失败的输出流写在日志里：aost#0:1/aac 是音频编码器。收尾时的 [aac @ …] Qavg 统计行不代表音频失败。
 const AUDIO_FAILURE = /aost#\d+:\d+\/aac[^\n]*(error code|Terminating thread|Invalid argument)/i;
 
+// 一次失败里，FFmpeg 会在「真正出错的那一路」之后，把被连累退出的每一路（包括没出错的音频编码器）
+// 也打印成 "Task finished with error code: -22"。这些行只是连累，不是原因。
+const COLLATERAL =
+  /Task finished with error code|Terminating thread with return code|Conversion failed|Nothing was written|Could not open encoder before EOF|Error sending frames to consumers|Qavg|^frame=|^size=/i;
+const ERROR_WORDS =
+  /error|invalid|fail|cannot|can't|could not|unable|not supported|no such|incompatible|out of range|too many|do not match|mismatch|impossible/i;
+const HEADER_LINE =
+  /^(Input #|Output #|Stream #|Stream mapping|Metadata:|Duration:|major_brand|minor_version|compatible_brands|encoder\s*:|comment\s*:|handler_name|vendor_id|Side data|cpb:)/i;
+const AUDIO_ONLY_SOURCE =
+  /aost#|enc:aac|\[aac @|Parsed_(aresample|aformat|atempo|asetrate|adelay|apad|volume|amix|asetpts|equalizer|anull)/i;
+
+/** 最先出现的、真正的报错行（不是被连累打印的那些）。没有就返回空串。 */
+function rootCause(message) {
+  const lines = String(message)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.find((line) => !HEADER_LINE.test(line) && !COLLATERAL.test(line) && ERROR_WORDS.test(line)) || '';
+}
+
+/** 失败真的出在音频编码上：有 aac 的报错，而且在它之前没有别的路先出错。 */
+function isAudioEncoderFailure(message) {
+  if (!AUDIO_FAILURE.test(message)) return false;
+  const root = rootCause(message);
+  return !root || AUDIO_ONLY_SOURCE.test(root);
+}
+
 /** 从 FFmpeg 的一大段输出里挑出真正的报错行：输入文件信息放在最前面，直接截头会把原因截掉。 */
 function keyDiagnostics(message) {
   const lines = String(message)
@@ -383,7 +410,9 @@ function keyDiagnostics(message) {
         line,
       ),
   );
-  const picked = hits.slice(-3).join(' / ');
+  // 最先出现的真正原因排第一，再跟最后几行报错；中间被连累打印的重复行不重复写。
+  const root = rootCause(message);
+  const picked = [...new Set([root, ...hits.slice(-3)].filter(Boolean))].slice(0, 4).join(' / ');
   return (picked || lines.slice(-2).join(' / ') || exit).slice(0, 300);
 }
 
@@ -454,6 +483,8 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
     });
     child.stderr.on('data', (chunk) => {
       tailPush(errors, chunk);
+      // 日志很长时开头会被截掉：第一个真正的报错行先记下来，最后一起带上。
+      if (!errors.first) errors.first = rootCause(errors.text);
       if (!finalizing && /Starting second pass: moving the moov atom/i.test(errors.text)) {
         finalizing = true;
         onLog?.('[收尾] FFmpeg 正在将 MP4 播放索引移至文件开头');
@@ -465,7 +496,11 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
       if (signal?.aborted) return finish(new Error('已取消'));
       if (code !== 0)
         return finish(
-          new Error(`ffmpeg 退出码 ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}\n${errors.text.slice(-6000)}`),
+          new Error(
+            `ffmpeg 退出码 ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}\n${
+              errors.first && !errors.text.slice(-6000).includes(errors.first) ? `${errors.first}\n` : ''
+            }${errors.text.slice(-6000)}`,
+          ),
         );
       finish();
     });
@@ -666,7 +701,7 @@ async function encodeOne({
           );
         }
         // 失败在音频编码上（和显卡无关）：同样的参数再来一遍也一样会失败，所以先换一组随机参数，再不行用最简音频链。
-        if (AUDIO_FAILURE.test(error.message)) {
+        if (isAudioEncoderFailure(error.message)) {
           if (audioStep < 2) {
             audioStep += 1;
             if (audioStep === 1) {
@@ -898,6 +933,7 @@ module.exports = {
   DEFAULTS,
   ENCODER_RETRY_DELAYS,
   keyDiagnostics,
+  rootCause,
   validateOptions,
   rollParams,
   detectEncoder,
