@@ -68,25 +68,33 @@ async function clips(ctx, media, shotResult) {
   const abort = new AbortController();
   const stop = () => abort.abort();
   ctx.signal?.addEventListener('abort', stop, { once: true });
-  const encode = async (shot, slot) => {
+  // exact = false: seek to the shot and trim by timestamps (fast). exact = true: decode from the file start and
+  // trim by frame number (slow, but it is the reference behaviour). The fast path is only trusted when every
+  // check below passes; otherwise that one shot is redone the exact way.
+  const encodeOnce = async (shot, slot, exact) => {
     abort.signal.throwIfAborted();
     const file = `shot-${String(shot.order).padStart(4, '0')}.mp4`;
     const sourceStart = origin + shot.start;
     const sourceEnd = origin + shot.end;
     const expected = shot.end_frame_exclusive - shot.start_frame;
     const lastDuration = Math.round(media.frames[shot.end_frame_exclusive - 1].duration * 1000000);
-    const first = shot.start_frame === 0 ? null : between(shot.start_frame);
-    const last = shot.end_frame_exclusive === media.frames.length ? null : between(shot.end_frame_exclusive);
+    const bias = Number(ctx.debugTrimBias) || 0;
+    const first = shot.start_frame === 0 ? null : between(shot.start_frame) + bias;
+    const last = shot.end_frame_exclusive === media.frames.length ? null : between(shot.end_frame_exclusive) + bias;
     // Subtract the decoded first-frame timestamp in its integer time base.
     // Decimal seconds / TB can round by a tick and shift every following frame.
     const trim = [first == null ? null : `start=${first.toFixed(6)}`, last == null ? null : `end=${last.toFixed(6)}`]
       .filter(Boolean)
       .join(':');
-    const filters = [`[0:${media.video.index}]${trim ? `trim=${trim},` : ''}setpts=PTS-STARTPTS[v]`];
-    const seek = Math.max(0, sourceStart - SEEK_LEAD);
+    const filters = [
+      exact
+        ? `[0:${media.video.index}]trim=start_frame=${shot.start_frame}:end_frame=${shot.end_frame_exclusive},setpts=PTS-STARTPTS[v]`
+        : `[0:${media.video.index}]${trim ? `trim=${trim},` : ''}setpts=PTS-STARTPTS[v]`,
+    ];
+    const seek = exact ? 0 : Math.max(0, sourceStart - SEEK_LEAD);
     const args = ['-nostdin', '-y', '-v', 'error', '-copyts'];
     if (seek > 0) args.push('-ss', seek.toFixed(6));
-    if (last != null) args.push('-t', (last + SEEK_TAIL - seek).toFixed(6));
+    if (!exact && last != null) args.push('-t', (last + SEEK_TAIL - seek).toFixed(6));
     args.push('-i', ctx.input);
     const audio = ctx.params.audio_mode === 'original' && media.has_audio;
     if (audio)
@@ -171,7 +179,17 @@ async function clips(ctx, media, shotResult) {
       audio_mode: audio ? 'original' : 'mute',
       frame_count: expected,
       validation: 'frame_count_pts_and_end_duration',
+      export_mode: exact ? 'exact' : 'fast',
     };
+  };
+  const encode = async (shot, slot) => {
+    try {
+      return await encodeOnce(shot, slot, false);
+    } catch (error) {
+      if (abort.signal.aborted) throw error;
+      progressOf[slot] = 0;
+      return encodeOnce(shot, slot, true);
+    }
   };
   const results = new Array(total);
   let next = 0;

@@ -252,6 +252,25 @@ async function main() {
         cc.clips.reduce((n, c) => n + c.frame_count, 0),
         real.frame_count,
       );
+      // A fast (seek + timestamp trim) export that comes out one frame off must be redone the exact way.
+      const biasShots = align(
+        buildShots(real, { single: scores, all: scores }, 'vfr', verified(real, [40])).shots,
+        { duration: real.video_end, utterances: [] },
+        'vfr',
+      );
+      const bad = await clips(
+        { ...ctx, taskId: 'vfr-bias', dir: path.join(temp, 'vfr-bias'), debugTrimBias: real.frames[40].duration * 1.2 },
+        real,
+        biasShots,
+      );
+      assert.equal(
+        bad.clips.reduce((n, c) => n + c.frame_count, 0),
+        real.frame_count,
+      );
+      assert(
+        bad.clips.some((c) => c.export_mode === 'exact'),
+        'bad fast export was not redone exactly',
+      );
       await assert.rejects(() => audio(ctx, { has_audio: false }), /没有音轨/);
       // Real PCM regression: a non-zero audio offset must be represented on the
       // video clock, and masking must preserve speech samples only in the selected

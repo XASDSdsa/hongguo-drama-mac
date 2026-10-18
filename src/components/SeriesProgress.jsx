@@ -4,6 +4,20 @@ import { Folder, RefreshCw } from './icons';
 
 const LOG_STEP = 100;
 
+/** 当前步骤已经跑了多久：每秒走一格，让人看得出没卡住（有的步骤，例如检测分镜，本身要几十秒才有下一条日志）。 */
+function useElapsed(since, active) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active, since]);
+  if (!active || !since) return '';
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  return seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
+}
+
 export const isActiveBatch = (batch) => batch.status === 'running' || batch.status === 'queued';
 
 /** 2026-10-15 18:51:16 */
@@ -91,6 +105,7 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
   const activeBatches = batches.filter(isActiveBatch);
   const draft = activity?.draft;
   const draftRunning = draft?.status === 'running';
+  const stepElapsed = useElapsed(draft?.stageStartedAt, draftRunning);
 
   const act = async (fn) => {
     setError('');
@@ -165,11 +180,13 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
               剪映草稿（{draft.modeText}）：已完成 {draft.done}/{draft.total} 集
               {draft.failed ? `，失败 ${draft.failed} 集` : ''}
               {draftRunning && draft.current ? ` · 正在做 ${draft.current}` : ''}
-              {draftRunning && draft.message ? `（${draft.message}）` : ''}
+              {draftRunning && draft.message
+                ? `（${draft.message}${draft.detail ? ` · ${draft.detail}` : ''}${stepElapsed ? ` · 已 ${stepElapsed}` : ''}）`
+                : ''}
             </span>
           </div>
           {draftRunning && (
-            <div className="act-bar" aria-hidden="true">
+            <div className="act-bar is-live" aria-hidden="true">
               <i
                 style={{
                   width: `${Math.floor(((draft.done + draft.progress / 100) / Math.max(1, draft.total)) * 100)}%`,

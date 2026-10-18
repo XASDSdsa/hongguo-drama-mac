@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
-import { ChevronRight, Film, RefreshCw } from './icons';
+import { Check, ChevronRight, Film, RefreshCw } from './icons';
 import DedupParams from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
@@ -347,6 +347,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   // 同一部剧同一时间只跑一批（分析切点、处理中、等补下载都算）。
   const seriesBusy =
     !!activity?.planning ||
+    activity?.draft?.status === 'running' ||
     activeBatches.length > 0 ||
     (activity?.jobs || []).some((job) => ['waiting', 'starting'].includes(job.status));
   const draftBlocked = draftOn && draftNumbers.length === 0;
@@ -364,7 +365,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       : est && est.count > 0
         ? `每集 ${est.finalMin}–${est.finalMax} 秒，预计约 ${est.count} 集`
         : '';
-  const startLabel = dedupOn ? `开始处理（${selectedCount} 集）` : '开始处理';
+  const startLabel = seriesBusy || submitting ? '处理中…' : dedupOn ? `开始处理（${selectedCount} 集）` : '开始处理';
 
   const title = detail?.name || folder.name;
   const downloaded = episodes.length;
@@ -504,6 +505,11 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     <span className="lib-ep-no">
                       {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
                     </span>
+                    {on && (
+                      <span className="lib-ep-check">
+                        <Check size={11} />
+                      </span>
+                    )}
                   </button>
                 );
               })}

@@ -3847,6 +3847,8 @@ function libraryDraftSnapshot(job) {
     current: job.current,
     progress: job.progress,
     message: job.message,
+    detail: job.detail || '',
+    stageStartedAt: job.stageStartedAt || null,
     startedAt: job.startedAt,
     endTime: job.endTime,
   };
@@ -3984,6 +3986,8 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
       job.current = label;
       job.progress = 0;
       job.lastStage = '';
+      job.detail = '';
+      job.stageStartedAt = Date.now();
       libLog(key, 'info', `剪映草稿：${label} 开始`, 'side');
       libraryDraftEmit(job);
       try {
@@ -4032,8 +4036,10 @@ function libraryDraftProgress(payload) {
   );
   const stage = payload?.stage;
   job.message = DRAFT_STAGE_TEXT[stage] || '';
+  job.detail = String(payload?.modules?.[stage]?.message || '').slice(0, 80);
   if (stage && stage !== job.lastStage && DRAFT_STAGE_TEXT[stage]) {
     job.lastStage = stage;
+    job.stageStartedAt = Date.now();
     libLog(job.dir, 'info', `剪映草稿：${job.current}：${DRAFT_STAGE_TEXT[stage]}`, 'side');
   }
   libraryDraftEmit(job);

@@ -15,12 +15,26 @@
   gap: 6px;
 }
 .pager-size select {
-  width: 72px;
-  padding: 4px 6px;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 76px;
+  height: 30px;
+  padding: 0 24px 0 10px;
+  font-size: 13px;
+  line-height: 28px;
+  color: var(--text);
+  background-color: var(--bg-card);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
 }
 .pager-jump input {
   width: 64px;
-  padding: 4px 8px;
+  height: 30px;
+  padding: 0 8px;
   text-align: center;
 }
 .pager-jump input.is-bad {

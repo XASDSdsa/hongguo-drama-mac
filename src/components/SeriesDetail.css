@@ -153,14 +153,22 @@
   outline: 2px solid var(--text);
   outline-offset: 1px;
 }
-.lib-ep:not(.is-selected):not(.is-missing) {
-  color: var(--text-tertiary);
-  background: transparent;
-  border-style: dashed;
-}
 .lib-ep.is-selected {
-  border-color: var(--border-strong);
-  background: var(--bg-card);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.lib-ep-check {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: var(--accent);
+  border-radius: 50%;
 }
 .lib-ep.is-missing {
   height: 52px;
