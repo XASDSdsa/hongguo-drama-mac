@@ -123,40 +123,67 @@
 .lib-eps {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 .lib-ep-cell {
   position: relative;
   display: flex;
   min-width: 0;
+  height: 44px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.lib-ep-cell:hover {
+  border-color: var(--border-strong);
+}
+.lib-ep-cell:has(.lib-ep.is-selected) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .lib-ep-cell > .lib-ep {
   flex: 1;
+  height: 100%;
+  padding: 0 0 0 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px 0 0 7px;
 }
+/* 每集右边的文件夹区：和格子是一体的，没有分割线；点它直接在文件管理器里定位这个视频 */
 .lib-ep-reveal {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 100%;
   padding: 0;
   color: var(--text-tertiary);
   background: transparent;
   border: 0;
-  border-radius: 5px;
-  opacity: 0.55;
+  border-radius: 0 7px 7px 0;
   cursor: pointer;
 }
-.lib-ep-cell:hover .lib-ep-reveal,
+.lib-ep-reveal:hover,
 .lib-ep-reveal:focus-visible {
-  opacity: 1;
-}
-.lib-ep-reveal:hover {
   color: var(--accent);
-  background: var(--bg-inset);
+}
+.lib-ep-cell > .lib-ep-check {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
 }
 .lib-ep {
   position: relative;
@@ -204,7 +231,7 @@
   border-radius: 50%;
 }
 .lib-ep.is-missing {
-  height: 52px;
+  height: 44px;
   cursor: default;
   border-style: dashed;
   background: transparent;

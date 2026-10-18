@@ -507,12 +507,12 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                       <span className="lib-ep-no">
                         {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
                       </span>
-                      {on && (
-                        <span className="lib-ep-check">
-                          <Check size={11} />
-                        </span>
-                      )}
                     </button>
+                    {on && (
+                      <span className="lib-ep-check">
+                        <Check size={11} />
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="lib-ep-reveal"
@@ -520,7 +520,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                       title="在文件管理器里定位这个视频"
                       onClick={() => window.electronAPI.showInFolder(episode.path)}
                     >
-                      <Folder size={13} />
+                      <Folder size={15} />
                     </button>
                   </div>
                 );
