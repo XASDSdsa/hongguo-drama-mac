@@ -8,12 +8,24 @@ const fsp = fs.promises;
 async function json(file) {
   return JSON.parse(await fsp.readFile(file, 'utf8'));
 }
+/** 改名遇到 Windows 杀毒软件短暂占用（EPERM/EBUSY/EACCES）时稍等重试。 */
+async function renameRetry(from, to) {
+  const waits = [100, 250, 500, 1000, 2000];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fsp.rename(from, to);
+    } catch (error) {
+      if (attempt >= waits.length || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+    }
+  }
+}
 async function atomicJson(file, value) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
   try {
     await fsp.writeFile(temp, JSON.stringify(value, null, 2), 'utf8');
-    await fsp.rename(temp, file);
+    await renameRetry(temp, file);
   } finally {
     await fsp.rm(temp, { force: true });
   }
@@ -148,4 +160,4 @@ async function probe(ffprobe, input, args = [], options = {}) {
 function blocked(message) {
   return Object.assign(new Error(message), { code: 'DEPENDENCY_MISSING' });
 }
-module.exports = { json, atomicJson, sha256, run, probe, blocked };
+module.exports = { json, atomicJson, sha256, run, probe, blocked, renameRetry };

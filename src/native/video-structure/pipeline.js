@@ -4,7 +4,7 @@ const fsp = fs.promises;
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { VERSION, MODULES, fingerprint, descendants, requireThat } = require('./contracts');
-const { json, atomicJson, sha256 } = require('./io');
+const { json, atomicJson, sha256, renameRetry } = require('./io');
 const runtimeTools = require('./runtime');
 const mediaTools = require('./media');
 const { shots } = require('./shots');
@@ -44,12 +44,12 @@ const HANDLERS = {
     exportsModule(ctx, deps.alignment.data, deps.clips.data, deps.transcript.data, deps.clips.dir, deps.transcript.dir),
 };
 function safeName(text) {
-  return (
-    String(text)
-      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
-      .replace(/[. ]+$/g, '')
-      .slice(0, 70) || 'episode'
-  );
+  const cleaned = String(text)
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .slice(0, 70)
+    .replace(/[. ]+$/g, '');
+  if (!cleaned) return 'episode';
+  return /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(cleaned) ? `_${cleaned}` : cleaned;
 }
 function brief(data) {
   const reviewItems = Array.isArray(data.review_items) ? data.review_items : [];
@@ -362,7 +362,7 @@ function createVideoStructurePipeline({
           path: path.join(outputRel, path.relative(dir, file)),
           sha256: await sha256(file, job.controller.signal),
         });
-      await fsp.rename(dir, finalDir);
+      await renameRetry(dir, finalDir);
       const summary = brief(data);
       if (id === 'jianying') Object.assign(summary, { draft_path: data.draft_path, validated: data.validated });
       Object.assign(record, {

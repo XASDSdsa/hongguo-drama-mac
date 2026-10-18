@@ -160,6 +160,59 @@ function resolveEncoder(requested, platform = process.platform) {
   return detectEncoder(requested, platform, windowsAdapters);
 }
 
+// Windows「自动」时实际试编一帧，确认显卡编码真的能用：很多笔记本是没有 NVENC 的 GeForce MX / GT 1030，
+// 或者驱动太旧。按显卡顺序试 NVENC → QSV → AMF，都不行就用 CPU。每个 FFmpeg 只试一次，结果缓存。
+const encoderProbes = new Map();
+const ADAPTER_PATTERN = { nvenc: /nvidia/i, qsv: /(intel|uhd|iris|arc)/i, amf: /(amd|radeon)/i };
+
+function probeEncoder(ffmpegPath, name) {
+  return new Promise((resolve) => {
+    execFile(
+      ffmpegPath,
+      [
+        '-hide_banner',
+        '-v',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=black:s=256x256:d=0.2',
+        '-frames:v',
+        '1',
+        '-pix_fmt',
+        'yuv420p',
+        ...encoderArgs(name, false, 256, 256),
+        '-f',
+        'null',
+        '-',
+      ],
+      { windowsHide: true, timeout: 20000 },
+      (error) => resolve(!error),
+    );
+  });
+}
+
+async function resolveWorkingEncoder(requested, ffmpegPath, platform = process.platform) {
+  const picked = resolveEncoder(requested, platform);
+  if (requested !== 'auto' || platform !== 'win32' || !ffmpegPath || ['cpu', 'auto'].includes(picked)) return picked;
+  if (!encoderProbes.has(ffmpegPath)) {
+    encoderProbes.set(
+      ffmpegPath,
+      (async () => {
+        const order = [
+          ...new Set([
+            picked,
+            ...['nvenc', 'qsv', 'amf'].filter((name) => ADAPTER_PATTERN[name].test(windowsAdapters)),
+          ]),
+        ];
+        for (const name of order) if (await probeEncoder(ffmpegPath, name)) return name;
+        return 'cpu';
+      })(),
+    );
+  }
+  return encoderProbes.get(ffmpegPath);
+}
+
 function encoderArgs(name, lean, width, height) {
   if (name === 'nvenc') return ['-c:v', 'h264_nvenc', '-preset', 'p1', '-cq', lean ? '24' : '21'];
   if (name === 'amf') return ['-c:v', 'h264_amf', '-quality', 'speed'];
@@ -707,7 +760,10 @@ async function encodeOne({
     // 重新拆分时变速已经在前一步做完，这一步固定按 1 倍走。
     if (speed != null) rolled.SPEED = speed;
     if (signal?.aborted) throw new Error('已取消');
-    const encoder = await resolveEncoder(options.encoder, process.platform);
+    const firstChoice = resolveEncoder(options.encoder, process.platform);
+    const encoder = await resolveWorkingEncoder(options.encoder, ffmpegPath, process.platform);
+    if (encoder !== firstChoice && firstChoice !== 'auto')
+      onLog?.(`[编码器] 这台电脑的显卡编码（${firstChoice}）试编失败，改用 ${encoder === 'cpu' ? 'CPU' : encoder}`);
     const build = (audioMode, output = tmp) =>
       buildCommand({
         src: inputs[0],
@@ -975,6 +1031,7 @@ module.exports = {
   rollParams,
   detectEncoder,
   resolveEncoder,
+  resolveWorkingEncoder,
   setWindowsAdapters,
   encoderArgs,
   buildCommand,

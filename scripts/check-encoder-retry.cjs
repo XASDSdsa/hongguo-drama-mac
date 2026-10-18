@@ -339,6 +339,33 @@ exec ffmpeg "\${args[@]}"
     assert.equal(quchong.rootCause('[aost#0:1/aac @ 0x2] Task finished with error code: -22 (Invalid argument)'), '');
   });
 
+  await check('Windows auto: a GPU without working NVENC (e.g. GeForce MX) falls back to QSV, then CPU', async () => {
+    const probe = (name, failPattern) => {
+      const file = path.join(tmp, name);
+      const log = path.join(tmp, name + '.log');
+      fs.writeFileSync(
+        file,
+        `#!/bin/bash\necho "$*" >> "${log}"\nif echo "$*" | grep -Eq '${failPattern}'; then exit 1; fi\nexit 0\n`,
+        { mode: 0o755 },
+      );
+      return { file, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) };
+    };
+    quchong.setWindowsAdapters(['NVIDIA', 'Intel']);
+    const noNvenc = probe('probe-no-nvenc', 'h264_nvenc');
+    assert.equal(await quchong.resolveWorkingEncoder('auto', noNvenc.file, 'win32'), 'qsv');
+    assert.equal(await quchong.resolveWorkingEncoder('auto', noNvenc.file, 'win32'), 'qsv', 'cached');
+    assert.equal(noNvenc.calls().length, 2, 'nvenc tried once, qsv once, then cached');
+    const none = probe('probe-none', 'h264_nvenc|h264_qsv');
+    assert.equal(await quchong.resolveWorkingEncoder('auto', none.file, 'win32'), 'cpu');
+    const ok = probe('probe-ok', 'never-matches');
+    assert.equal(await quchong.resolveWorkingEncoder('auto', ok.file, 'win32'), 'nvenc');
+    // 手动指定或非 Windows 不试编。
+    assert.equal(await quchong.resolveWorkingEncoder('cpu', ok.file, 'win32'), 'cpu');
+    assert.equal(await quchong.resolveWorkingEncoder('auto', ok.file, 'darwin'), 'videotoolbox');
+    assert.equal(ok.calls().length, 1);
+    quchong.setWindowsAdapters([]);
+  });
+
   await check(
     'the [aac] Qavg summary line at the end of any failure is not mistaken for an audio failure',
     async () => {

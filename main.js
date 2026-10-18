@@ -369,13 +369,15 @@ function dedupEncoder() {
 
 // 净化文件夹/文件名称（移除非法字符、结尾的点和空格）
 function sanitizeFolderName(name) {
-  return (
-    String(name || '')
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
-      .replace(/[. ]+$/g, '')
-      .trim()
-      .slice(0, 80) || ''
-  );
+  // 先截长度再去掉结尾的点和空格：截断处正好是空格时，Windows 建文件夹会悄悄去掉它，
+  // 记录里的名字就和磁盘上对不上。CON、NUL、COM1 这类是 Windows 保留名，前面加「_」。
+  const cleaned = String(name || '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
+    .trim()
+    .slice(0, 80)
+    .replace(/[. ]+$/g, '')
+    .trim();
+  return /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(cleaned) ? `_${cleaned}` : cleaned;
 }
 
 // 按命名模板渲染文件名，返回 名称(不含扩展名) 或 null
@@ -1970,7 +1972,10 @@ async function executeHongguoDownload(task, attempt = 0) {
           fs.unlinkSync(decodedPath);
         } catch (_) {}
       }
-      fs.unlinkSync(tmpPath);
+      // 成品已经就位：删临时文件失败（Windows 上被杀毒软件短暂占用）不能把整集判成失败。
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch (_) {}
     } else if (playInfo.spadeA) {
       const key = hongguo.deriveKey(playInfo.spadeA);
       if (!key) throw new Error('Key 派生失败');
@@ -1985,7 +1990,10 @@ async function executeHongguoDownload(task, attempt = 0) {
           fs.unlinkSync(decodedPath);
         } catch (_) {}
       }
-      fs.unlinkSync(tmpPath);
+      // 成品已经就位：删临时文件失败（Windows 上被杀毒软件短暂占用）不能把整集判成失败。
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch (_) {}
     } else fs.renameSync(tmpPath, finalPath);
     task.status = 'completed';
     task.progress = 100;
@@ -8188,11 +8196,24 @@ function createWindow() {
   }
 
   // 渲染进程崩溃（内存不足等）时重新加载页面；后台下载/处理任务不受影响。
+  // 一分钟内反复崩溃就不再自动重载（避免死循环占满 CPU），改成提示页；后台任务照常在主进程里跑。
+  const crashTimes = [];
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Window] 渲染进程退出:', details?.reason);
     if (details?.reason === 'clean-exit' || createdWindow.isDestroyed()) return;
+    const now = Date.now();
+    crashTimes.push(now);
+    while (crashTimes.length && now - crashTimes[0] > 60_000) crashTimes.shift();
     try {
-      createdWindow.webContents.reload();
+      if (crashTimes.length <= 3) createdWindow.webContents.reload();
+      else
+        createdWindow.loadURL(
+          'data:text/html;charset=utf-8,' +
+            encodeURIComponent(
+              '<meta charset="utf-8"><body style="font-family:-apple-system,\'Microsoft YaHei\',sans-serif;padding:40px;color:#333">' +
+                '<h3>界面连续出错，已暂停自动刷新</h3><p>后台的下载和处理不受影响。请关闭窗口后重新打开应用；如果反复出现，请把这个情况告诉我们。</p></body>',
+            ),
+        );
     } catch (_) {}
   });
 
@@ -8455,6 +8476,12 @@ function startSleepBlockerWatch() {
   };
   tick();
 }
+
+// GPU、网络等子进程崩溃只记日志（Chromium 会自己重启它们），方便排查个别机器的显卡驱动问题。
+app.on('child-process-gone', (_event, details) => {
+  if (details?.reason !== 'clean-exit')
+    console.error('[Process] 子进程退出:', details?.type, details?.reason, details?.exitCode);
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

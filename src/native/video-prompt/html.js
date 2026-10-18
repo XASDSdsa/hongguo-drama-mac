@@ -265,11 +265,29 @@ q.addEventListener('input',function(){
 
 function assetBlock(item, thumbs) {
   const thumb = thumbs[item.id];
-  const head = thumb ? `<img src="${esc(thumb)}" alt="">` : `<div class="ph">${esc((item.name || '?').slice(0, 1))}</div>`;
+  const head = thumb
+    ? `<img src="${esc(thumb)}" alt="">`
+    : `<div class="ph">${esc((item.name || '?').slice(0, 1))}</div>`;
   return `<div class="asset">${head}<div><b>${esc(item.name)}</b><em>#${esc(item.id)} · ${KIND_TEXT[item.kind] || ''}</em><br>${esc(item.desc || '（无描述）')}</div></div>`;
 }
 
-function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, frames, thumbs, videoRel, size, segCount, shotTotal, stamp, failedMessage }) {
+function shotCard({
+  segment,
+  segIndex,
+  row,
+  shot,
+  shotIndex,
+  library,
+  byId,
+  frames,
+  thumbs,
+  videoRel,
+  size,
+  segCount,
+  shotTotal,
+  stamp,
+  failedMessage,
+}) {
   const frame = frames?.[row.no] || {};
   const times = keyframeTimes(row);
   const assets = (shot?.assets || []).map((id) => byId.get(id)).filter(Boolean);
@@ -315,7 +333,7 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
         .map((image) => {
           const thumb = thumbs[image.id];
           const item = byId.get(image.id);
-          return `<li>${thumb ? `<img src="${esc(thumb)}" alt="">` : ''}<span>图片${image.index} = ${esc(item?.name || image.id)}</span></li>`;
+          return `<li>${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy" decoding="async">` : ''}<span>图片${image.index} = ${esc(item?.name || image.id)}</span></li>`;
         })
         .join('')}</ul>`
     : '';
@@ -349,7 +367,7 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
   const kfHtml = FRAME_LABELS.map((label, i) => {
     const src = frame.grid?.[i];
     return `<button type="button" data-t="${times[i].toFixed(2)}"${i === 0 ? ' class="on"' : ''}>${
-      src ? `<img src="${esc(src)}" alt="${label}">` : '<div class="none">无画面</div>'
+      src ? `<img src="${esc(src)}" alt="${label}" loading="lazy" decoding="async">` : '<div class="none">无画面</div>'
     }<span>${label}</span></button>`;
   }).join('');
 
@@ -368,7 +386,9 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
     ? row.dialogue.map((text) => `<p class="say">${esc(text)}</p>`).join('')
     : '<p class="say empty">本镜没有台词。</p>';
 
-  const assetsHtml = assets.length ? assets.map((item) => assetBlock(item, thumbs)).join('') : '<p class="empty">本镜没有标注素材。</p>';
+  const assetsHtml = assets.length
+    ? assets.map((item) => assetBlock(item, thumbs)).join('')
+    : '<p class="empty">本镜没有标注素材。</p>';
 
   return `<article class="shot" data-q="${esc(search)}">
 <div class="c1">${vbox}<div class="gridhead">四宫格参考<small>KEYFRAMES</small></div><div class="kf">${kfHtml}</div><div class="kfnote">关键帧取自原片 ${times.map(clockPrecise).join(' / ')}，点击可跳到该处</div></div>
@@ -413,7 +433,21 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
  * @param {{width:number,height:number}} p.size 原片画幅
  * @param {string|Date} p.generatedAt
  */
-function renderEpisodeHtml({ title = '', label, episodeName = '', duration, maxSeconds, library, segments, frames = {}, thumbs = {}, videoRel = '', size = null, generatedAt = new Date(), allText = '' }) {
+function renderEpisodeHtml({
+  title = '',
+  label,
+  episodeName = '',
+  duration,
+  maxSeconds,
+  library,
+  segments,
+  frames = {},
+  thumbs = {},
+  videoRel = '',
+  size = null,
+  generatedAt = new Date(),
+  allText = '',
+}) {
   const byId = new Map(libraryEntries(library).map((item) => [item.id, item]));
   const stamp = localStamp(generatedAt);
   const shotTotal = segments.reduce((sum, segment) => sum + segment.rows.length, 0);
@@ -476,7 +510,9 @@ function renderEpisodeHtml({ title = '', label, episodeName = '', duration, maxS
 <header class="top"><div class="brand" data-view="shots">分镜头脚本</div><nav><a data-view="library">素材库</a></nav><span class="sp"></span>${
     title ? `<span class="pill">▣ ${esc(title)}</span>` : ''
   }${
-    badShots ? `<span class="stat"><i class="warn"></i>${badShots} 镜没有生成提示词</span>` : '<span class="stat"><i></i>提示词已生成</span>'
+    badShots
+      ? `<span class="stat"><i class="warn"></i>${badShots} 镜没有生成提示词</span>`
+      : '<span class="stat"><i></i>提示词已生成</span>'
   }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜</span>${
     stamp ? `<span class="stat">${esc(stamp)}</span>` : ''
   }</header>

@@ -29,6 +29,21 @@ function loadCache() {
   return cache;
 }
 
+// Windows 上杀毒软件/索引服务会在文件刚写完时短暂占用它，这时改名会报 EPERM/EBUSY/EACCES。
+// 稍等一下再试几次，别让一次瞬间占用变成「保存失败」。
+function renameWithRetry(from, to) {
+  const waits = [50, 100, 200, 400, 800];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= waits.length || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waits[attempt]);
+    }
+  }
+}
+
 let deferredTimer = null;
 const DEFERRED_FLUSH_MS = 1500;
 
@@ -44,7 +59,7 @@ function flush() {
     // 不缩进：文件小一半、序列化快一倍（这份数据只给程序读）。
     const serialized = JSON.stringify(cache || {});
     fs.writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(temporary, dataFile);
+    renameWithRetry(temporary, dataFile);
     durable = serialized;
   } catch (e) {
     try {
@@ -168,6 +183,7 @@ function removeStructureProject(projectId) {
 }
 
 module.exports = {
+  renameWithRetry,
   setErrorHandler: (handler) => {
     errorHandler = handler;
   },

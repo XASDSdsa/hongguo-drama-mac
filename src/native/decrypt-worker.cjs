@@ -1,7 +1,33 @@
 const { Worker, isMainThread, parentPort, workerData } = require('node:worker_threads');
 
+// 解密时整集读进内存（约 2 倍于文件大小）：同时最多解 2 集，几个下载同时完成也不会把内存顶上去。
+const MAX_PARALLEL_DECRYPT = 2;
+let decrypting = 0;
+const waiting = [];
+function acquire() {
+  if (decrypting < MAX_PARALLEL_DECRYPT) {
+    decrypting += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waiting.push(resolve));
+}
+function release() {
+  const next = waiting.shift();
+  if (next) next();
+  else decrypting -= 1;
+}
+
 // Media parsing and sample decryption must not block Electron's cancellation IPC.
-function decryptInWorker(payload, { signal, cancelToken } = {}) {
+async function decryptInWorker(payload, options = {}) {
+  await acquire();
+  try {
+    return await decryptNow(payload, options);
+  } finally {
+    release();
+  }
+}
+
+function decryptNow(payload, { signal, cancelToken } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted || cancelToken?.reason) return reject(new Error('已取消'));
     const worker = new Worker(__filename, { workerData: payload });

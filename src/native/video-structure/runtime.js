@@ -130,6 +130,26 @@ function requireRuntime(id, config, rt) {
   if (id === 'shots' && (config.threshold !== 0.5 || !['cpu', 'cuda', 'mps'].includes(config.device)))
     throw new Error('TransNet V2 阈值或设备配置无效');
 }
+// 运行时自检（会启动一次 Python + torch）：结果按运行时缓存，每次开始做草稿不用再等一遍；
+// 加 90 秒超时——显卡驱动异常或杀毒软件扫描时它可能卡住，不能让「开始做草稿」永远没有回应。
+const statusCache = new Map();
+async function runtimeStatus(rt) {
+  const key = [rt.command, ...rt.prefix].join('\u0000');
+  if (statusCache.has(key)) return statusCache.get(key);
+  let output;
+  try {
+    output = await run(rt.command, [...rt.prefix, 'status'], {
+      signal: AbortSignal.timeout(90_000),
+      killProcessTree: true,
+    });
+  } catch (error) {
+    if (error?.code === 'ABORT_ERR') throw new Error('检查内置分析运行时超时（可能正被杀毒软件扫描），请稍后再试');
+    throw error;
+  }
+  const versions = JSON.parse(output.stdout);
+  statusCache.set(key, versions);
+  return versions;
+}
 async function availability(settings) {
   const rt = runtime(settings);
   const modules = {};
@@ -144,7 +164,7 @@ async function availability(settings) {
   let versions = null;
   if (rt.command) {
     try {
-      versions = JSON.parse((await run(rt.command, [...rt.prefix, 'status'])).stdout);
+      versions = await runtimeStatus(rt);
     } catch (e) {
       modules.shots = modules.transcript = { ready: false, error: e.message };
     }
