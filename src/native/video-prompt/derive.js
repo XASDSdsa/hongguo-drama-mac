@@ -21,6 +21,7 @@ const {
   composeSegmentPrompt,
   renderEpisodeFile,
 } = require('./compose');
+const { renderEpisodeHtml, keyframeTimes, jpegSize } = require('./html');
 
 const ATTEMPTS = 3;
 
@@ -59,6 +60,33 @@ async function writeAtomic(file, content) {
   await fsp.rename(temp, file);
 }
 
+/** 抽一帧，返回 data URI 和原始字节；失败返回 null（缺一张图不影响整份提示词）。 */
+async function grabFrame(ffmpeg, inputPath, time, width, quality, temp, name, signal) {
+  const file = path.join(temp, name);
+  try {
+    await runFfmpeg(ffmpeg, ['-y', '-ss', String(Math.max(0, time)), '-i', inputPath, '-frames:v', '1', '-vf', `scale='min(${width},iw)':-2`, '-q:v', String(quality), file], signal);
+    const bytes = await fsp.readFile(file);
+    await fsp.rm(file, { force: true });
+    return { uri: `data:image/jpeg;base64,${bytes.toString('base64')}`, bytes };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return null;
+  }
+}
+
+/** 简单并发池。 */
+async function pool(items, size, task) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      await task(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function withRetries(task, { signal, sleep, label, log }) {
   let lastError;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
@@ -89,6 +117,7 @@ async function withRetries(task, { signal, sleep, label, log }) {
  * @param {string} options.outDir          成果文件夹（只放最终的 txt 和参考图）
  * @param {string} options.cacheFile       缓存文件（放在软件数据目录，不放成果文件夹）
  * @param {string} options.sourceKey       视频内容指纹（进缓存键）
+ * @param {string} [options.title]         剧名（只显示在 HTML 页头）
  */
 async function deriveEpisodePrompts({
   ffmpeg,
@@ -101,6 +130,7 @@ async function deriveEpisodePrompts({
   outDir,
   cacheFile,
   sourceKey,
+  title = '',
   maxSeconds = DEFAULT_MAX_SEGMENT_SECONDS,
   fps = 5,
   log = () => {},
@@ -203,27 +233,77 @@ async function deriveEpisodePrompts({
     for (const item of results) {
       if (item.error) {
         item.segment.prompt = `（本段没有生成成功：${item.error}。重新开始一次即可，已完成的段会直接复用。）`;
+        item.segment.failedMessage = item.error;
         previousEndState = '';
         continue;
       }
       const composed = composeSegmentPrompt({ segment: item.segment, shots: item.shots, library, refImages, previousEndState });
       item.segment.prompt = composed.text;
       item.segment.images = composed.images;
+      item.segment.shotLines = composed.shotLines;
+      item.segment.shots = item.shots;
       previousEndState = composed.endState;
     }
 
-    const text = renderEpisodeFile({
-      label,
-      duration,
-      maxSeconds: Math.min(30, Math.max(2, Number(maxSeconds) || DEFAULT_MAX_SEGMENT_SECONDS)),
-      library,
-      segments: results.map((item) => item.segment),
-      refPaths,
-    });
+    const maxLimit = Math.min(30, Math.max(2, Number(maxSeconds) || DEFAULT_MAX_SEGMENT_SECONDS));
+    const allSegments = results.map((item) => item.segment);
+    const text = renderEpisodeFile({ label, duration, maxSeconds: maxLimit, library, segments: allSegments, refPaths });
     const file = path.join(outDir, `${label}.txt`);
     await writeAtomic(file, text);
+
+    // 5) 分镜头脚本页面：每个分镜抽四张关键帧，连同素材库一起写进一个 HTML。页面是附加成果，出问题只记日志。
+    let htmlFile = '';
+    try {
+      step(segments.length + 1, '截取每个分镜的关键帧，生成分镜头脚本页面');
+      const frames = {};
+      const jobs = [];
+      for (const row of rows) {
+        frames[row.no] = { poster: '', grid: [null, null, null, null] };
+        const times = keyframeTimes(row);
+        jobs.push({ row, kind: 'poster', time: times[0] });
+        times.forEach((time, i) => jobs.push({ row, kind: 'grid', index: i, time }));
+      }
+      let size = null;
+      await pool(jobs, 4, async (job) => {
+        const wide = job.kind === 'poster';
+        const frame = await grabFrame(ffmpeg, inputPath, job.time, wide ? 560 : 320, wide ? 4 : 7, temp, `kf-${job.row.no}-${job.kind}${job.index ?? ''}.jpg`, signal);
+        if (!frame) return;
+        if (wide) {
+          frames[job.row.no].poster = frame.uri;
+          if (!size) size = jpegSize(frame.bytes);
+        } else frames[job.row.no].grid[job.index] = frame.uri;
+      });
+      const thumbs = {};
+      await pool(library.characters.filter((c) => c.ref_time != null), 4, async (character) => {
+        const frame = await grabFrame(ffmpeg, inputPath, character.ref_time, 160, 5, temp, `ref-${character.id}.jpg`, signal);
+        if (frame) thumbs[character.id] = frame.uri;
+      });
+      // 画幅：优先读原片尺寸（海报缩小过，宽高比一致但像素不对）。
+      const probe = await grabFrame(ffmpeg, inputPath, rows[0].start, 100000, 31, temp, 'size.jpg', signal);
+      if (probe) size = jpegSize(probe.bytes) || size;
+      const html = renderEpisodeHtml({
+        title,
+        label,
+        duration,
+        maxSeconds: maxLimit,
+        library,
+        segments: allSegments,
+        frames,
+        thumbs,
+        videoRel: path.relative(outDir, inputPath).split(path.sep).map(encodeURIComponent).join('/'),
+        size,
+        generatedAt: new Date(),
+        allText: text,
+      });
+      htmlFile = path.join(outDir, `${label}.html`);
+      await writeAtomic(htmlFile, html);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      htmlFile = '';
+      log('warn', `分镜头脚本页面没有生成：${error.message}（提示词文本已经写好）`);
+    }
     onProgress(100, '提示词已生成');
-    return { file, segments: segments.length, failed };
+    return { file, htmlFile, segments: segments.length, failed };
   } finally {
     await fsp.rm(temp, { recursive: true, force: true }).catch(() => {});
   }

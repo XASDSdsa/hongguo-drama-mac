@@ -238,6 +238,7 @@ function composeSegmentPrompt({ segment, shots, library, refImages = {}, previou
   if (library.style) lines.push(`【画风】${library.style}。`);
   if (cast.length) lines.push('【素材】', ...cast);
 
+  const shotLines = [];
   segment.rows.forEach((row, index) => {
     const shot = shots[index];
     const scene = shot.assets.map((id) => byId.get(id)).find((item) => item?.kind === 'scene');
@@ -247,7 +248,9 @@ function composeSegmentPrompt({ segment, shots, library, refImages = {}, previou
     if (shot.sound && !QUIET.test(shot.sound)) tags.push(`<${shot.sound}>`);
     if (shot.music && !QUIET.test(shot.music)) tags.push(`(${shot.music})`);
     if (row.dialogue.length) tags.push(`{${row.dialogue.join(' ')}}`);
-    lines.push(`${sec(row.start - segment.start)}–${sec(row.end - segment.start)} 秒：${body}。${tags.join('')}`);
+    const line = `${sec(row.start - segment.start)}–${sec(row.end - segment.start)} 秒：${body}。${tags.join('')}`;
+    shotLines.push(line);
+    lines.push(line);
   });
 
   const last = shots[shots.length - 1];
@@ -258,7 +261,7 @@ function composeSegmentPrompt({ segment, shots, library, refImages = {}, previou
       ? `保持一致：${CONSISTENCY_BASE}与上一段结束时一致（${previousEndState}）。`
       : `保持一致：${CONSISTENCY_BASE}全程不变。`,
   );
-  return { text: lines.join('\n'), images, endState };
+  return { text: lines.join('\n'), images, endState, shotLines };
 }
 
 // ===== 输出文件（每一集同一个格式） =====

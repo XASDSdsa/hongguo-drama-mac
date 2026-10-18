@@ -180,8 +180,29 @@ async function main() {
   assert.ok(fs.existsSync(path.join(outDir, '第3集-参考图', 'C1-林夏.jpg')));
   // 成果文件夹里只有最终文件和参考图，没有 json 或中间文件
   const listing = fs.readdirSync(outDir).sort();
-  assert.deepEqual(listing, ['第3集-参考图', '第3集.txt']);
+  assert.deepEqual(listing, ['第3集-参考图', '第3集.html', '第3集.txt']);
   assert.ok(!text.includes('ark-secret'));
+
+  // 分镜头脚本页面：自包含，三栏卡片，只放真实数据
+  assert.equal(first.htmlFile, path.join(outDir, '第3集.html'));
+  const page = await fsp.readFile(first.htmlFile, 'utf8');
+  assert.ok(page.startsWith('<!doctype html>'));
+  assert.equal((page.match(/<article class="shot"/g) || []).length, 5, '每个分镜一张卡片');
+  assert.equal((page.match(/class="seghead"/g) || []).length, 2, '每段一个段头');
+  assert.ok(page.includes('镜头 01') && page.includes('镜头 05'));
+  assert.ok(page.includes('四宫格参考') && page.includes('起幅') && page.includes('动作A') && page.includes('动作B') && page.includes('落幅'));
+  assert.equal((page.match(/data:image\/jpeg;base64,/g) || []).length >= 5 * 5, true, '每个分镜 1 张海报 + 4 张关键帧');
+  assert.ok(page.includes('data-src="../%E7%AC%AC3%E9%9B%86.mp4"'), '视频预览指向同一剧文件夹里的成品视频');
+  assert.ok(page.includes('320×240'), '画幅取自原片');
+  assert.ok(page.includes('你还是来了。') && page.includes('林夏') && page.includes('老街路口'));
+  assert.ok(page.includes('写实电影质感，冷蓝夜色'));
+  assert.ok(!page.includes('ark-secret') && !page.includes('doubao-test-model'), '页面里没有 Key 和模型名');
+  assert.ok(!/GPU|渲染引擎|已匹配|一致性|重试视频/.test(page.replace(/data:image\/jpeg;base64,[A-Za-z0-9+/=]+/g, '')), '没有数据来源的状态不显示');
+  const embedded = JSON.parse(page.match(/<script type="application\/json" id="data">([\s\S]*?)<\/script>/)[1]);
+  assert.equal(embedded.segments.length, 2);
+  assert.equal(embedded.all, text, '“复制全部”就是 txt 的内容');
+  assert.ok(embedded.segments[0].shots[1].line.startsWith('3–7 秒：'));
+  assert.ok(!page.slice(page.indexOf('<script>')).includes('${'), '页面脚本里没有没替换的模板占位');
 
   // 缓存：同一个视频、同一个模型再跑一次，不再请求方舟
   const asked = calls.ask;
@@ -215,6 +236,9 @@ async function main() {
   const failedText = await fsp.readFile(failed.file, 'utf8');
   assert.ok(failedText.includes('本段没有生成成功'));
   assert.ok(!failedText.includes('ark-secret'), '失败信息里不能带 Key');
+  const failedPage = await fsp.readFile(failed.htmlFile, 'utf8');
+  assert.ok(failedPage.includes('本段没有生成成功') && failedPage.includes('本段未生成'), '失败的段在页面里标出来');
+  assert.ok(!failedPage.includes('ark-secret'));
 
   // 没填模型名：直接说清楚
   await assert.rejects(() => createArkClient({ apiKey: 'k', fetchImpl: mockFetch }).ask('file-1', 'x'), /没有填视频理解模型名/);

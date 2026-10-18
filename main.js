@@ -4142,6 +4142,7 @@ async function deriveLibraryPrompts(job, file, item, structure) {
       outDir: path.join(job.dir, '视频提示词'),
       cacheFile: path.join(app.getPath('userData'), 'video-prompt-cache', `${item.projectId}.json`),
       sourceKey,
+      title: path.basename(path.resolve(job.dir)),
       maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
       log,
       onProgress: (_percent, message) => {
@@ -4152,7 +4153,7 @@ async function deriveLibraryPrompts(job, file, item, structure) {
     });
     if (result.failed) {
       log('warn', `共 ${result.segments} 段，有 ${result.failed} 段没有生成，重新开始一次会只补这几段 → ${result.file}`);
-    } else log('ok', `已生成 → ${result.file}`);
+    } else log('ok', `已生成 → ${result.htmlFile || result.file}`);
   } catch (error) {
     if (job.cancelled || job.controller.signal.aborted) throw Object.assign(new Error('已停止'), { stopped: true });
     log('error', `没有生成：${openai.redactError(error, settings.ark_api_key)}`);
