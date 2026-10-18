@@ -40,10 +40,10 @@ DEFAULT_DISCLAIMER = "剧情纯属虚构 请勿代入现实"
 BOUNDARY_POLICY = "shot_cut_requires_acoustic_pause"
 ALIGNMENT_ALGORITHM = "visual-shot-on-acoustic-pause-v1"
 SUBTITLE_POLICY = "voice-segments-v1"
-PAUSE_SECONDS = 0.2
+PAUSE_SECONDS = 0.12
 # Mirrors PAUSE_TIERS in alignment.js: a cut must sit at least `margin` inside a pause of at least `pause` seconds.
 # Levels 1-2 only break up segments longer than the maximum and never cut inside speech.
-PAUSE_TIERS = ({"level": 0, "pause": 0.2, "margin": 0.04}, {"level": 1, "pause": 0.14, "margin": 0.03}, {"level": 2, "pause": 0.1, "margin": 0.025})
+PAUSE_TIERS = ({"level": 0, "pause": 0.12, "margin": 0.03}, {"level": 1, "pause": 0.09, "margin": 0.02}, {"level": 2, "pause": 0.07, "margin": 0.015})
 
 
 def progress(value: float, message: str) -> None:
