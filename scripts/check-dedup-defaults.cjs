@@ -49,6 +49,21 @@ for (let i = 0; i < 200; i++) {
   assert.ok(r.UNSHARP >= D.unsharp_min && r.UNSHARP <= D.unsharp_max);
   assert.ok(r.SPEED >= D.speed_min && r.SPEED <= D.speed_max);
 }
+// 随机裁边的位置避开正中间：默认 20% => CX、CY 都不会落在 0.4 ~ 0.6 之间，两侧都能取到。
+const seen = { low: false, high: false };
+for (let i = 0; i < 2000; i++) {
+  const r = quchong.rollParams(quchong.validateOptions({}));
+  for (const v of [r.CX, r.CY]) {
+    assert.ok(v >= 0 && v <= 1 && !(v > 0.4 + 1e-9 && v < 0.6 - 1e-9), `裁边位置 ${v} 落在中心`);
+    if (v < 0.4 + 1e-9) seen.low = true;
+    else seen.high = true;
+  }
+}
+assert.deepEqual(seen, { low: true, high: true });
+assert.equal(D.center_exclude, 20);
+const none = quchong.rollParams(quchong.validateOptions({ center_exclude: 0 }), () => 0.5);
+assert.equal(none.CX, 0.5, '设成 0 就是不排除');
+
 const ends = quchong.rollParams(quchong.validateOptions({}), () => 0);
 assert.equal(ends.BRIGHTNESS, D.brightness_min);
 assert.equal(ends.UNSHARP, D.unsharp_min);

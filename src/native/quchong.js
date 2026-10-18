@@ -26,6 +26,7 @@ let windowsGpuReady = false;
 // 都比较吃时间，默认关闭，需要时在参数面板里手动打开。
 const DEFAULTS = Object.freeze({
   crop_ratio: 0.94,
+  center_exclude: 20,
   speed_min: 1.03,
   speed_max: 1.21,
   brightness_min: -0.1445,
@@ -59,6 +60,7 @@ function validateOptions(input = {}) {
   const opts = { ...DEFAULTS, ...input };
   const numeric = [
     ['crop_ratio', 0.85, 1],
+    ['center_exclude', 0, 90],
     ['speed_min', 1, 1.3],
     ['speed_max', 1, 1.3],
     ['rotation_max', 0, 0.02],
@@ -105,6 +107,16 @@ function validateOptions(input = {}) {
   return opts;
 }
 
+/**
+ * 随机裁边的位置（0 = 靠一边，1 = 靠另一边）：避开正中间那一段。
+ * exclude 是百分比，20 表示 0.4 ~ 0.6 之间不取，免得有的集正好裁在正中、和原画面几乎没区别。
+ */
+function offAxisCenter(random, exclude) {
+  const gap = Math.min(0.9, Math.max(0, Number(exclude) / 100));
+  const u = random() * (1 - gap);
+  return u < 0.5 - gap / 2 ? u : u + gap;
+}
+
 function rollParams(opts, random = Math.random) {
   const randint = (min, max) => Math.floor(random() * (max - min + 1)) + min;
   const between = (min, max) => min + random() * (max - min);
@@ -118,8 +130,8 @@ function rollParams(opts, random = Math.random) {
     SPEED: between(opts.speed_min, opts.speed_max),
     PITCH: between(opts.pitch_min, opts.pitch_max),
     ROT: between(0, opts.rotation_max),
-    CX: random(),
-    CY: random(),
+    CX: offAxisCenter(random, opts.center_exclude),
+    CY: offAxisCenter(random, opts.center_exclude),
     NOISE: randint(opts.noise_min, opts.noise_max),
   };
 }

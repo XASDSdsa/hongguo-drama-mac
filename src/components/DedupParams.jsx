@@ -14,6 +14,7 @@ export const RANGE_PARAMS = [
 
 export const BASIC_PARAMS = [
   ['crop_ratio', '裁切比例', 0.01, 0.85, 1],
+  ['center_exclude', '中心排除比例（%）', 1, 0, 90],
   ['speed_min', '变速下限', 0.01, 1, 1.3],
   ['speed_max', '变速上限', 0.01, 1, 1.3],
   ['orig_volume', '原声音量', 0.05, 0.1, 1],
