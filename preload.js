@@ -188,6 +188,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryEstimate: (payload) => ipcRenderer.invoke('library-estimate', payload),
   libraryDraft: (payload) => ipcRenderer.invoke('library-draft', payload),
   libraryDraftCancel: (dir) => ipcRenderer.invoke('library-draft-cancel', dir),
+  libraryStoryboards: (payload) => ipcRenderer.invoke('library-storyboards', payload),
+  libraryStoryboardOpen: (payload) => ipcRenderer.invoke('library-storyboard-open', payload),
   libraryRefreshRemote: (dir) => ipcRenderer.invoke('library-refresh-remote', dir),
   libraryJobs: () => ipcRenderer.invoke('library-jobs'),
   libraryJobCancel: (id) => ipcRenderer.invoke('library-job-cancel', id),

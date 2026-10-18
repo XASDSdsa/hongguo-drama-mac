@@ -66,6 +66,85 @@ function ghostLabel(item) {
   return item.text;
 }
 
+const formatClock = (seconds) => {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+};
+
+/** 所选几集的整个分镜工程图：每集一排分镜缩略图（起幅画面），点「打开」看完整的分镜头脚本页面。 */
+function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
+  const [state, setState] = useState({ items: [], error: '' });
+  const [openError, setOpenError] = useState('');
+  const numbersKey = numbers.join(',');
+  useEffect(() => {
+    let alive = true;
+    window.electronAPI
+      .libraryStoryboards?.({ dir, numbers })
+      .then((result) => {
+        if (!alive) return;
+        setState(result?.success ? { items: result.items, error: '' } : { items: [], error: result?.error || '' });
+      })
+      .catch(() => alive && setState({ items: [], error: '' }));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir, numbersKey, refreshKey]);
+
+  const ready = state.items.filter((item) => item.state === 'ready');
+  if (!ready.length) {
+    return enabled ? (
+      <p className="sb-hint">分镜处理完、提示词写好后，所选集的整个分镜工程图会出现在这里。</p>
+    ) : null;
+  }
+  const open = async (number) => {
+    setOpenError('');
+    const result = await window.electronAPI.libraryStoryboardOpen({ dir, number });
+    if (!result?.success) setOpenError(result?.error || '打开失败');
+  };
+  return (
+    <div className="sb-results">
+      {state.items.map((item) => (
+        <section key={item.number} className="sb-ep">
+          <header className="sb-head">
+            <b>第 {item.number} 集</b>
+            {item.state === 'ready' ? (
+              <>
+                <span>
+                  {item.shots.length} 个分镜 · {item.segments} 段
+                </span>
+                <button className="btn btn-sm sb-open" onClick={() => open(item.number)}>
+                  打开完整分镜头脚本
+                </button>
+              </>
+            ) : (
+              <span className="sb-none">
+                {item.state === 'no-episode' ? '去重成品里还没有这一集' : '还没有生成'}
+              </span>
+            )}
+          </header>
+          {item.state === 'ready' && (
+            <div className="sb-grid">
+              {item.shots.map((shot) => (
+                <figure key={shot.no} className={shot.failed ? 'is-failed' : ''} title={shot.failed ? '这一段没有生成成功' : ''}>
+                  {shot.thumb ? <img src={shot.thumb} alt={`镜头 ${shot.no}`} /> : <div className="sb-blank" />}
+                  <figcaption>
+                    <b>{String(shot.no).padStart(2, '0')}</b>
+                    <span>
+                      {formatClock(shot.start)} · {Math.round(shot.dur * 10) / 10}秒{shot.lines ? ' · 台词' : ''}
+                    </span>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </section>
+      ))}
+      {openError && <p className="sb-hint is-error">{openError}</p>}
+    </div>
+  );
+}
+
 /** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、AI 发布素材、要做的处理（去重、剪映草稿）和进度日志。 */
 export default function SeriesDetail({ folder, active = true, onBack }) {
   const [detail, setDetail] = useState(null);
@@ -641,20 +720,36 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     ))}
                     集
                   </div>
-                  <label
-                    className="proc-check"
-                    title="需要先在设置里填火山方舟的 Key 和视频理解模型名。每集会在这部剧的「视频提示词」文件夹里生成一份文本，按 Seedance 2.5 分段写好。"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={draftPrompts}
-                      onChange={(e) => setDraftPrompts(e.target.checked)}
-                      disabled={submitting}
-                    />
-                    同时反推 Seedance 2.5 提示词
-                  </label>
                 </div>
               )}
+            </div>
+
+            <div className="proc-item">
+              <div className="proc-line">
+                <label
+                  className="proc-check"
+                  title="分镜处理完后，用火山方舟看视频，按 Seedance 2.5 写好每个分镜的提示词，做成分镜头脚本页面。需要先在设置里填方舟的 Key 和视频理解模型名。"
+                >
+                  <input
+                    type="checkbox"
+                    checked={draftOn && draftPrompts}
+                    onChange={(e) => setDraftPrompts(e.target.checked)}
+                    disabled={submitting || !draftOn}
+                  />
+                  <b>生产 AI 分镜工程图</b>
+                </label>
+                <span className="proc-summary">
+                  {draftOn
+                    ? `用上面选的 ${draftNumbers.length || 0} 集：分镜处理完后，写出每个分镜的提示词，生成分镜工程图`
+                    : '要先勾选「生成剪映草稿」：分镜处理完才能生产'}
+                </span>
+              </div>
+              <StoryboardResults
+                dir={detail.dir}
+                numbers={draftNumbers}
+                enabled={draftOn && draftPrompts}
+                refreshKey={`${activity?.draft?.status || ''}-${activity?.draft?.done || 0}-${activity?.draft?.failed || 0}`}
+              />
             </div>
 
             <div className="proc-foot">

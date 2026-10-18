@@ -40,6 +40,7 @@ const { createVideoStructurePipeline } = require('./src/native/video-structure/p
 const { createJianyingDraft } = require('./src/native/video-structure/jianying');
 const arkVideo = require('./src/native/video-prompt/ark');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
+const { readStoryboardOverview } = require('./src/native/video-prompt/html');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
@@ -4391,6 +4392,68 @@ ipcMain.handle('library-draft-cancel', (_event, dir) => {
     job.controller?.abort();
     for (const item of job.active.values()) if (item.projectId) getReconstructionPipeline().cancel(item.projectId);
     return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+// ===== AI 分镜工程图：剪映草稿任务里生成的「视频提示词/集名.html」，在管理剧集里按所选集号预览、打开 =====
+const storyboardOverviewCache = new Map(); // html 路径 -> { stamp, overview }
+
+function storyboardFiles(dir, numbers) {
+  const { files, missing } = selectDraftFiles(libraryDedupOutputs(dir), { numbers });
+  const byNumber = new Map(files.map((file) => [seriesLibrary.parseEpisodeIndex(path.basename(file)), file]));
+  return { byNumber, missing, numbers: normalizeDraftScope({ numbers }).numbers };
+}
+
+ipcMain.handle('library-storyboards', async (_event, payload = {}) => {
+  try {
+    const dir = path.resolve(String(payload.dir || ''));
+    if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    const { byNumber, numbers } = storyboardFiles(dir, payload.numbers);
+    const items = [];
+    for (const number of numbers) {
+      const file = byNumber.get(number);
+      if (!file) {
+        items.push({ number, state: 'no-episode' });
+        continue;
+      }
+      const label = path.basename(file, path.extname(file));
+      const html = path.join(dir, '视频提示词', `${label}.html`);
+      const stat = await fsp.stat(html).catch(() => null);
+      if (!stat) {
+        items.push({ number, label, state: 'none' });
+        continue;
+      }
+      const stamp = `${stat.size}-${Math.round(stat.mtimeMs)}`;
+      let cached = storyboardOverviewCache.get(html);
+      if (cached?.stamp !== stamp) {
+        cached = { stamp, overview: readStoryboardOverview(await fsp.readFile(html, 'utf8')) };
+        storyboardOverviewCache.set(html, cached);
+      }
+      items.push({ number, label, state: 'ready', updatedAt: stat.mtimeMs, ...cached.overview });
+    }
+    return { success: true, items };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-storyboard-open', async (_event, payload = {}) => {
+  try {
+    const dir = path.resolve(String(payload.dir || ''));
+    if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
+      return { success: false, error: '这不是剧文件夹' };
+    }
+    const { byNumber } = storyboardFiles(dir, [Number(payload.number)]);
+    const file = byNumber.get(Number(payload.number));
+    if (!file) return { success: false, error: '成品里没有这一集' };
+    const html = path.join(dir, '视频提示词', `${path.basename(file, path.extname(file))}.html`);
+    if (!fs.existsSync(html)) return { success: false, error: '这一集的分镜工程图还没有生成' };
+    const error = await shell.openPath(html);
+    return error ? { success: false, error } : { success: true };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

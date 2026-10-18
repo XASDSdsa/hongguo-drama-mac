@@ -510,4 +510,30 @@ function jpegSize(buffer) {
   return null;
 }
 
-module.exports = { renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS };
+/**
+ * 从已经生成的页面里读出概览（每个分镜的起幅缩略图、时间、有没有台词），给软件里的「分镜工程图」预览用。
+ * 页面是这个文件自己生成的，所以按它的版式解析，不另外存一份数据文件。
+ */
+function readStoryboardOverview(html) {
+  const text = String(html || '');
+  const parts = text.split('<article class="shot"').slice(1);
+  const shots = parts
+    .map((chunk) => {
+      const no = Number(/<h2>镜头 (\d+)<\/h2>/.exec(chunk)?.[1]);
+      const start = Number(/data-start="([\d.]+)"/.exec(chunk)?.[1]);
+      const end = Number(/data-end="([\d.]+)"/.exec(chunk)?.[1]);
+      if (!Number.isFinite(no) || !Number.isFinite(start) || !Number.isFinite(end)) return null;
+      return {
+        no,
+        start,
+        dur: Math.max(0, end - start),
+        thumb: /<img src="(data:image\/jpeg;base64,[A-Za-z0-9+/=]+)" alt="起幅">/.exec(chunk)?.[1] || '',
+        lines: Number(/<small>(\d+) 句<\/small>/.exec(chunk)?.[1]) || 0,
+        failed: chunk.includes('<span class="chip r">本段未生成</span>'),
+      };
+    })
+    .filter(Boolean);
+  return { segments: (text.match(/class="seghead"/g) || []).length, shots };
+}
+
+module.exports = { renderEpisodeHtml, readStoryboardOverview, keyframeTimes, jpegSize, FRAME_LABELS };
