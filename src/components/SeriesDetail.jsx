@@ -9,7 +9,8 @@ import useLiveData from './useLiveData';
 import useDialogKeyboard from './useDialogKeyboard';
 import { clampPage, slicePage } from './pagination';
 
-const STORAGE_KEY = 'library-params';
+// 画面参数的项目和默认值换过一版：换个键，旧的保存值不再覆盖新默认值。
+const STORAGE_KEY = 'library-params-v2';
 const VIEW_KEY = 'library-view';
 /** 草稿默认做新剧的前 4 集：从「新集编号」起连续 4 个。 */
 const defaultDraftNums = (start) => [0, 1, 2, 3].map((n) => String((Math.floor(Number(start)) || 1) + n));

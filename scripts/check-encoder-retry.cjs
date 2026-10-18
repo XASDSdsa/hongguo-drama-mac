@@ -54,14 +54,14 @@ exec ffmpeg "\${args[@]}"
   return { file, count: () => Number(fs.readFileSync(counter, 'utf8')) };
 }
 
-async function run(ffmpegPath, dst, encoder = 'videotoolbox') {
+async function run(ffmpegPath, dst, encoder = 'videotoolbox', extra = {}) {
   const logs = [];
   const promise = quchong.runJob({
     ffmpegPath,
     ffprobePath: 'ffprobe',
     src: source,
     dst,
-    opts: { ...quchong.DEFAULTS, encoder },
+    opts: { ...quchong.DEFAULTS, encoder, ...extra },
     onLog: (line) => logs.push(String(line)),
   });
   return { promise, logs };
@@ -152,7 +152,11 @@ exec ffmpeg "\${args[@]}"
     'an audio-encoder failure re-rolls the parameters, then falls back to the simplest audio chain',
     async () => {
       const fake = audioFake('audio-ladder', 'echo "$*" | grep -q asetrate');
-      const { promise, logs } = await run(fake.file, path.join(tmp, 'audio-ok.mp4'));
+      // 默认不变调；这一条要走「变调」的音频链，才能区分完整链和最简链。
+      const { promise, logs } = await run(fake.file, path.join(tmp, 'audio-ok.mp4'), 'videotoolbox', {
+        pitch_min: 1.04,
+        pitch_max: 1.07,
+      });
       const result = await promise;
       assert.equal(fake.count(), 3, '原样一次、换参数一次、最简音频链一次');
       assert.ok(fs.statSync(result.path).size > 0);

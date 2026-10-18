@@ -318,7 +318,8 @@ async function main() {
       rgb_shift: 0,
       noise_min: 0,
       noise_max: 0,
-      hue_range: 0,
+      hue_min: 0,
+      hue_max: 0,
       vignette: false,
       eq_enable: false,
     };

@@ -64,3 +64,27 @@
   grid-template-columns: repeat(2, minmax(0, 160px));
   gap: 10px 24px;
 }
+
+.dedup-range {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) 1fr 1fr;
+  gap: 8px 14px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.dedup-range-head {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.dedup-range-name {
+  font-size: 13px;
+}
+.dedup-heavy {
+  margin-top: 12px;
+}
+.dedup-heavy > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}

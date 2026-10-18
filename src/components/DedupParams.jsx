@@ -2,25 +2,36 @@ import React, { useState } from 'react';
 import './DedupParams.css';
 
 // 去重参数面板：「一键处理」和「管理剧集」共用，参数名与主进程 quchong.validateOptions 一致。
-export const NUMBER_PARAMS = [
+// 常用的画面参数：每集在「最小值 ~ 最大值」之间随机取一个，都是很便宜的调色和锐化。
+export const RANGE_PARAMS = [
+  ['亮度', 'brightness_min', 'brightness_max', 0.01, -0.5, 0.5],
+  ['对比度', 'contrast_min', 'contrast_max', 0.01, 0.5, 1.5],
+  ['Gamma', 'gamma_min', 'gamma_max', 0.01, 0.5, 2],
+  ['饱和度', 'saturation_min', 'saturation_max', 0.01, 0.3, 2],
+  ['色相', 'hue_min', 'hue_max', 0.1, -30, 30],
+  ['unsharp 锐化（负数为轻微模糊）', 'unsharp_min', 'unsharp_max', 0.01, -2, 2],
+];
+
+export const BASIC_PARAMS = [
   ['crop_ratio', '裁切比例', 0.01, 0.85, 1],
   ['speed_min', '变速下限', 0.01, 1, 1.3],
   ['speed_max', '变速上限', 0.01, 1, 1.3],
-  ['pitch_min', '音调下限', 0.01, 1, 1.1],
-  ['pitch_max', '音调上限', 0.01, 1, 1.1],
-  ['noise_min', '噪点下限', 1, 0, 15],
-  ['noise_max', '噪点上限', 1, 0, 15],
-  ['rotation_max', '最大旋转', 0.001, 0, 0.02],
-  ['rgb_shift', 'RGB 偏移', 1, 0, 5],
-  ['contrast', '对比度', 0.01, 0.9, 1.3],
-  ['saturation', '饱和度', 0.01, 0.8, 1.6],
-  ['hue_range', '色相范围', 1, 0, 30],
   ['orig_volume', '原声音量', 0.05, 0.1, 1],
   ['bgm_volume', 'BGM 音量', 0.05, 0, 0.5],
 ];
 
+// 下面这些都比较吃时间（处理一集要多花好几倍），默认全部关闭，需要时再手动打开。
+export const HEAVY_PARAMS = [
+  ['rotation_max', '最大旋转（0 = 关）', 0.001, 0, 0.02],
+  ['rgb_shift', 'RGB 偏移（0 = 关）', 1, 0, 5],
+  ['noise_min', '噪点下限（0 = 关）', 1, 0, 15],
+  ['noise_max', '噪点上限', 1, 0, 15],
+  ['pitch_min', '音调下限（1 = 不变）', 0.01, 1, 1.1],
+  ['pitch_max', '音调上限', 0.01, 1, 1.1],
+];
+
 const FLAGS = [
-  ['vignette', '暗角'],
+  ['vignette', '暗角（较慢）'],
   ['eq_enable', '均衡器'],
 ];
 
@@ -59,7 +70,7 @@ const TIME_GROUPS = [
 export default function DedupParams({ opts, onChange, disabled = false, split = null, onSplitChange, onReset }) {
   const [tab, setTab] = useState('time');
   const tabbed = !!split;
-  const picture = NUMBER_PARAMS.filter(([key]) => !tabbed || !['speed_min', 'speed_max'].includes(key));
+  const basic = BASIC_PARAMS.filter(([key]) => !tabbed || !['speed_min', 'speed_max'].includes(key));
   const number = (target, key, label, step, min, max) => {
     const source = target === 'split' ? split : opts;
     const change = target === 'split' ? onSplitChange : onChange;
@@ -116,27 +127,58 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
         </div>
       )}
       {(!tabbed || tab === 'picture') && (
-        <div className="dedup-grid">
-          <label>
-            画质
-            <select value={opts.quality} onChange={(e) => onChange('quality', e.target.value)} disabled={disabled}>
-              <option value="standard">标准</option>
-              <option value="lean">精简</option>
-            </select>
-          </label>
-          {picture.map(([key, label, step, min, max]) => number('opts', key, label, step, min, max))}
-          {FLAGS.map(([key, label]) => (
-            <label key={key} className="dedup-check">
-              <input
-                type="checkbox"
-                checked={!!opts[key]}
-                onChange={(e) => onChange(key, e.target.checked)}
-                disabled={disabled}
-              />
-              {label}
+        <>
+          <div className="dedup-range">
+            <span className="dedup-range-head">参数</span>
+            <span className="dedup-range-head">最小值</span>
+            <span className="dedup-range-head">最大值</span>
+            {RANGE_PARAMS.map(([label, minKey, maxKey, step, min, max]) => (
+              <React.Fragment key={minKey}>
+                <span className="dedup-range-name">{label}</span>
+                {[minKey, maxKey].map((key) => (
+                  <input
+                    key={key}
+                    className="input-field"
+                    type="number"
+                    step={step}
+                    min={min}
+                    max={max}
+                    value={opts[key] ?? ''}
+                    onChange={(e) => onChange(key, Number(e.target.value))}
+                    disabled={disabled}
+                  />
+                ))}
+              </React.Fragment>
+            ))}
+          </div>
+          <div className="dedup-grid">
+            <label>
+              画质
+              <select value={opts.quality} onChange={(e) => onChange('quality', e.target.value)} disabled={disabled}>
+                <option value="standard">标准</option>
+                <option value="lean">精简</option>
+              </select>
             </label>
-          ))}
-        </div>
+            {basic.map(([key, label, step, min, max]) => number('opts', key, label, step, min, max))}
+          </div>
+          <details className="dedup-heavy">
+            <summary>更多效果（较慢，默认关闭）</summary>
+            <div className="dedup-grid">
+              {HEAVY_PARAMS.map(([key, label, step, min, max]) => number('opts', key, label, step, min, max))}
+              {FLAGS.map(([key, label]) => (
+                <label key={key} className="dedup-check">
+                  <input
+                    type="checkbox"
+                    checked={!!opts[key]}
+                    onChange={(e) => onChange(key, e.target.checked)}
+                    disabled={disabled}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </details>
+        </>
       )}
     </div>
   );

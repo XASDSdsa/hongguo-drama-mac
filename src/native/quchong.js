@@ -22,23 +22,34 @@ const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : process
 let windowsAdapters = '';
 let windowsGpuReady = false;
 
+// 默认只做便宜的调色、锐化和变速（每集在范围内随机取值）；旋转、RGB 偏移、噪点、暗角、变调、均衡器
+// 都比较吃时间，默认关闭，需要时在参数面板里手动打开。
 const DEFAULTS = Object.freeze({
   crop_ratio: 0.94,
   speed_min: 1.03,
-  speed_max: 1.05,
-  rotation_max: 0.008,
-  rgb_shift: 2,
-  noise_min: 4,
-  noise_max: 7,
-  contrast: 1.06,
-  saturation: 1.25,
-  hue_range: 12,
-  vignette: true,
-  pitch_min: 1.04,
-  pitch_max: 1.07,
+  speed_max: 1.21,
+  brightness_min: -0.1445,
+  brightness_max: 0.1474,
+  contrast_min: 0.878,
+  contrast_max: 1.1227,
+  gamma_min: 0.8781,
+  gamma_max: 1.1227,
+  saturation_min: 0.7982,
+  saturation_max: 1.2841,
+  hue_min: -8.6,
+  hue_max: 7.7,
+  unsharp_min: -0.86,
+  unsharp_max: 0.73,
+  rotation_max: 0,
+  rgb_shift: 0,
+  noise_min: 0,
+  noise_max: 0,
+  vignette: false,
+  pitch_min: 1,
+  pitch_max: 1,
   orig_volume: 0.5,
   bgm_volume: 0.15,
-  eq_enable: true,
+  eq_enable: false,
   encoder: DEFAULT_ENCODER,
   quality: 'standard',
   jobs: DEFAULT_JOBS,
@@ -54,9 +65,18 @@ function validateOptions(input = {}) {
     ['rgb_shift', 0, 5],
     ['noise_min', 0, 15],
     ['noise_max', 0, 15],
-    ['contrast', 0.9, 1.3],
-    ['saturation', 0.8, 1.6],
-    ['hue_range', 0, 30],
+    ['brightness_min', -0.5, 0.5],
+    ['brightness_max', -0.5, 0.5],
+    ['contrast_min', 0.5, 1.5],
+    ['contrast_max', 0.5, 1.5],
+    ['gamma_min', 0.5, 2],
+    ['gamma_max', 0.5, 2],
+    ['saturation_min', 0.3, 2],
+    ['saturation_max', 0.3, 2],
+    ['hue_min', -30, 30],
+    ['hue_max', -30, 30],
+    ['unsharp_min', -2, 2],
+    ['unsharp_max', -2, 2],
     ['pitch_min', 1, 1.1],
     ['pitch_max', 1, 1.1],
     ['orig_volume', 0.1, 1],
@@ -69,13 +89,13 @@ function validateOptions(input = {}) {
       !Number.isFinite(value) ||
       value < min ||
       value > max ||
-      (['rgb_shift', 'noise_min', 'noise_max', 'hue_range', 'jobs'].includes(key) && !Number.isInteger(value))
+      (['rgb_shift', 'noise_min', 'noise_max', 'jobs'].includes(key) && !Number.isInteger(value))
     ) {
       throw new Error(`参数无效：${key}`);
     }
   }
-  if (opts.speed_min > opts.speed_max || opts.pitch_min > opts.pitch_max || opts.noise_min > opts.noise_max) {
-    throw new Error('参数下限不能大于上限');
+  for (const name of ['speed', 'pitch', 'noise', 'brightness', 'contrast', 'gamma', 'saturation', 'hue', 'unsharp']) {
+    if (opts[`${name}_min`] > opts[`${name}_max`]) throw new Error('参数下限不能大于上限');
   }
   if (!['auto', 'cpu', 'videotoolbox', 'nvenc', 'amf', 'qsv'].includes(opts.encoder)) throw new Error('编码器无效');
   if (!['standard', 'lean'].includes(opts.quality)) throw new Error('画质选项无效');
@@ -89,7 +109,12 @@ function rollParams(opts, random = Math.random) {
   const randint = (min, max) => Math.floor(random() * (max - min + 1)) + min;
   const between = (min, max) => min + random() * (max - min);
   return {
-    HUE: randint(-opts.hue_range, opts.hue_range),
+    BRIGHTNESS: between(opts.brightness_min, opts.brightness_max),
+    CONTRAST: between(opts.contrast_min, opts.contrast_max),
+    GAMMA: between(opts.gamma_min, opts.gamma_max),
+    SATURATION: between(opts.saturation_min, opts.saturation_max),
+    HUE: between(opts.hue_min, opts.hue_max),
+    UNSHARP: between(opts.unsharp_min, opts.unsharp_max),
     SPEED: between(opts.speed_min, opts.speed_max),
     PITCH: between(opts.pitch_min, opts.pitch_max),
     ROT: between(0, opts.rotation_max),
@@ -146,15 +171,17 @@ function encoderArgs(name, lean, width, height) {
 
 /** 原声的处理链：整条滤镜图里和“分开处理音频”那一步用的是同一份，保证两条路出来的声音一样。 */
 function audioChain({ safe, speed, pitch, eq, volume, audioDelay, padTo }) {
-  const af = safe
-    ? ['asetpts=PTS-STARTPTS', 'aresample=44100', `atempo=${speed.toFixed(6)}`]
-    : [
+  // 音调没变（默认）时只需要变速，不用 asetrate 折腾一圈。
+  const shifted = !safe && Math.abs(pitch - 1) > 1e-6;
+  const af = shifted
+    ? [
         'asetpts=PTS-STARTPTS',
         'aresample=44100',
         `asetrate=44100*${pitch.toFixed(6)}`,
         'aresample=44100',
         `atempo=${(speed / pitch).toFixed(6)}`,
-      ];
+      ]
+    : ['asetpts=PTS-STARTPTS', 'aresample=44100', `atempo=${speed.toFixed(6)}`];
   if (eq && !safe) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
   if (audioDelay > 0) af.push(`adelay=delays=${(audioDelay * 1000).toFixed(3)}:all=1`);
   af.push(`volume=${volume}`);
@@ -194,9 +221,12 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   if (opts.rgb_shift > 0) vf.push(`rgbashift=rh=${opts.rgb_shift}:rv=1:gh=0:gv=0:bh=-${opts.rgb_shift}:bv=1`);
   if (r.NOISE > 0) vf.push(`noise=alls=${r.NOISE}:allf=t`);
   if (opts.rgb_shift > 0) vf.push('format=yuv420p');
-  vf.push('unsharp=5:5:0.8');
+  // 锐化量为负是轻微模糊；接近 0 时等于什么都没做，直接跳过省时间。3×3 比 5×5 快三成。
+  if (Math.abs(r.UNSHARP) >= 0.05) vf.push(`unsharp=3:3:${r.UNSHARP.toFixed(4)}`);
   vf.push(`setpts=(PTS-STARTPTS)/${speed.toFixed(6)}`);
-  vf.push(`eq=contrast=${opts.contrast}:saturation=${opts.saturation},hue=h=${r.HUE}`);
+  vf.push(
+    `eq=brightness=${r.BRIGHTNESS.toFixed(4)}:contrast=${r.CONTRAST.toFixed(4)}:gamma=${r.GAMMA.toFixed(4)}:saturation=${r.SATURATION.toFixed(4)},hue=h=${r.HUE.toFixed(2)}`,
+  );
   // dither=0：关掉暗角自带的逐像素抖动，肉眼看不出，但每帧省不少计算。
   if (opts.vignette) vf.push('vignette=PI/5:dither=0');
   if (videoDelay > 0) vf.push(`tpad=start_duration=${videoDelay.toFixed(6)}:color=black`);
