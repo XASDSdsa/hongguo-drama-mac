@@ -35,7 +35,13 @@ export default function useLiveData({ load, isBusy, active = true, watch = '' })
   busyRef.current = isBusy;
 
   const refresh = useCallback(async () => {
-    const result = await loadRef.current();
+    let result = null;
+    try {
+      result = await loadRef.current();
+    } catch (_) {
+      // 读取失败（主进程忙或正在退出）：保留上一次的数据，下一轮再读。
+      return;
+    }
     if (!alive.current || !result) return;
     isBusyNow.current = !!busyRef.current?.(result);
     setData(result);
@@ -50,9 +56,10 @@ export default function useLiveData({ load, isBusy, active = true, watch = '' })
       timer.current = setTimeout(refresh, 250);
     };
     const offs = subscribeAll(soon);
+    // 有任务在跑时定时读一次；事件到来时会立刻再读，所以这里不用太密（每次读取主进程都要扫一遍磁盘）。
     const poll = setInterval(() => {
       if (isBusyNow.current) refresh();
-    }, 1000);
+    }, 2000);
     return () => {
       alive.current = false;
       offs.forEach((off) => off?.());

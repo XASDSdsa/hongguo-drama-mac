@@ -178,9 +178,14 @@ function SettingsPage({ active = true }) {
         const applied = await window.electronAPI.quchongSetConcurrency(Number(submitted.quchong_jobs));
         if (!applied?.success) throw new Error(applied?.error || '去重并发设置保存失败');
       }
-      setSettings(submitted);
-      if (isProxy) closeProxy();
-      setDirty(false);
+      if (isProxy) {
+        // 代理弹窗只保存代理这几项；主表单里还没点「保存」的修改保留在界面上，不跟着存、也不丢。
+        setSettings((previous) => ({ ...previous, ...next }));
+        closeProxy();
+      } else {
+        setSettings(submitted);
+        setDirty(false);
+      }
       setSaved(true);
       clearTimeout(savedTimer.current);
       savedTimer.current = setTimeout(() => setSaved(false), 2000);
@@ -237,7 +242,8 @@ function SettingsPage({ active = true }) {
     }
   };
 
-  const applyProxy = () => persist({ ...settings, ...proxyDraft }, true);
+  const applyProxy = () =>
+    persist(Object.fromEntries(Object.entries(proxyDraft).filter(([key]) => key.startsWith('proxy_'))), true);
 
   useDialogKeyboard(
     active && proxyOpen,
@@ -642,9 +648,9 @@ function SettingsPage({ active = true }) {
           <header className="settings-section-head">
             <h3>视频反推提示词</h3>
             <p>
-              在「管理剧集」里勾选「生成剪映草稿」并打开「同时反推 Seedance 2.5
-              提示词」后使用。用火山方舟的视频理解模型看成品视频， 每集在这部剧的「视频提示词」文件夹里生成一份按
-              Seedance 2.5 分段写好的文本。
+              在「管理剧集」里勾选「生成剪映草稿」和「生产 AI 分镜工程图」后使用。用火山方舟的视频理解模型看成品视频，
+              每集在这部剧的「视频提示词」文件夹里生成一份分镜工程图页面（按 Seedance 2.5 分段写好提示词），
+              也会直接显示在「管理剧集」里。
             </p>
           </header>
           <div className="ai-settings-grid">

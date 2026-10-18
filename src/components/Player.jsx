@@ -21,6 +21,7 @@ function Player({ target, onNavigate, active = true }) {
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [submittingMissing, setSubmittingMissing] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false); // 剧集选择面板
   const [pickerQuery, setPickerQuery] = useState('');
   const [dismissedCount, setDismissedCount] = useState(0);
@@ -249,6 +250,14 @@ function Player({ target, onNavigate, active = true }) {
 
   const toggleAutoDelete = async () => {
     const next = !autoDelete;
+    // 开启前说清楚：看完就永久删除，「管理剧集」里就没有这集的原片可以去重了。
+    if (
+      next &&
+      !window.confirm(
+        '开启后，每看完一集就会永久删除这一集的本地文件（不进回收站）。\n删除后「管理剧集」里就没有这集的原片可以去重了。确定开启吗？',
+      )
+    )
+      return;
     setAutoDelete(next);
     try {
       const s = await window.electronAPI.getSettings();
@@ -821,17 +830,24 @@ function Player({ target, onNavigate, active = true }) {
   };
 
   const downloadMissing = async () => {
+    if (submittingMissing) return;
     const missing = episodes.filter((e) => !e.locked && e.status !== 'completed');
     if (!missing.length) {
       showToast('可下载的集数已全部下载');
       return;
     }
-    let ok = 0;
-    for (const ep of missing) {
-      const r = await window.electronAPI.downloadSingleEpisode(activeSeriesId, ep.vid_index);
-      if (r && r.success) ok++;
+    setSubmittingMissing(true);
+    try {
+      const r = await window.electronAPI.downloadSeriesEpisodes(
+        activeSeriesId,
+        missing.map((ep) => ep.vid_index),
+      );
+      showToast(r?.success ? `已把 ${r.count} 集加入下载队列` : r?.error || '加入下载失败');
+    } catch (_) {
+      showToast('加入下载失败，请稍后再试');
+    } finally {
+      setSubmittingMissing(false);
     }
-    showToast(`已把 ${ok} 集加入下载队列`);
   };
 
   // 一键合并当前这部剧（弹出格式选择）
@@ -947,9 +963,9 @@ function Player({ target, onNavigate, active = true }) {
             <Trash2 size={15} />
             看完自动删 {autoDelete ? '开' : '关'}
           </button>
-          <button className="btn btn-outline" onClick={downloadMissing}>
+          <button className="btn btn-outline" onClick={downloadMissing} disabled={submittingMissing}>
             <Download size={15} />
-            下载未完成集
+            {submittingMissing ? '正在加入…' : '下载未完成集'}
           </button>
           <button
             className="btn btn-primary"
@@ -1048,7 +1064,7 @@ function Player({ target, onNavigate, active = true }) {
                                 e.stopPropagation();
                                 setConfirmAsk({
                                   title: '删除本地文件',
-                                  message: `将删除《${s.series_title}》已下载的 ${st.files} 个文件，释放 ${fmtSize(st.bytes)}。\n剧集仍保留在列表中，之后可以随时在线播放或重新下载。`,
+                                  message: `将永久删除《${s.series_title}》已下载的 ${st.files} 个文件，释放 ${fmtSize(st.bytes)}（不进回收站，无法恢复）。\n删除后「管理剧集」里这部剧就没有原片可以去重了；剧集仍保留在列表中，之后可以在线播放或重新下载。正在处理中的文件会被跳过。`,
                                   okText: '删除文件',
                                   danger: true,
                                   onOk: async () => {
@@ -1117,7 +1133,7 @@ function Player({ target, onNavigate, active = true }) {
                 onClick={() => {
                   setConfirmAsk({
                     title: '删除全部本地文件',
-                    message: `将删除所有已下载的剧集文件，共 ${storageTotal.files} 个文件、${fmtSize(storageTotal.bytes)}。\n剧集列表与分集信息会保留，之后仍可在线播放或重新下载。`,
+                    message: `将永久删除所有已下载的剧集文件，共 ${storageTotal.files} 个文件、${fmtSize(storageTotal.bytes)}（不进回收站，无法恢复）。\n删除后「管理剧集」里就没有原片可以去重了；剧集列表与分集信息会保留，之后仍可在线播放或重新下载。正在处理中的文件会被跳过。`,
                     okText: '全部删除',
                     danger: true,
                     onOk: async () => {

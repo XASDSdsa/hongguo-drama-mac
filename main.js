@@ -3483,6 +3483,7 @@ ipcMain.handle('library-overview', () => {
         downloads: downloadTasks,
         jobs: [...libraryJobs.values()],
         planning: libraryPlanning,
+        drafts: [...libraryDraftJobs.values()].map((job) => ({ dir: job.dir, ...libraryDraftSnapshot(job) })),
       }),
     };
   } catch (error) {
@@ -3616,6 +3617,11 @@ ipcMain.handle('library-import', async () => {
 // 只是不再显示这个文件夹，不会删除或改动里面的任何文件。
 ipcMain.handle('library-remove-import', (_event, dir) => {
   try {
+    // 这部剧还有任务在跑时先不移除：移除后列表里看不到它，正在跑的任务就没法查看和停止了。
+    const busy =
+      libraryBusyReason(String(dir || '')) ||
+      (libraryDraftJobs.get(path.resolve(String(dir || '')))?.status === 'running' ? '剪映草稿正在生成' : '');
+    if (busy) return { success: false, error: `${busy}，做完或停止后再移除` };
     libraryFolders().remove(dir);
     return { success: true };
   } catch (error) {
@@ -6694,6 +6700,29 @@ ipcMain.handle('hongguo-download-batch', async (event, payload) => {
     return { success: true, count, requested: episodes.length };
   } catch (error) {
     console.error('[Hongguo] 提交批量下载失败:', error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+// 播放器里「下载未完成集」：一次把这部剧要补的集都排进队列（一次保存），不再一集一集提交。
+ipcMain.handle('download-series-episodes', async (_event, seriesId, indices) => {
+  try {
+    const entry = seriesRegistry.find((s) => String(s.series_id) === String(seriesId));
+    if (!entry) return { success: false, error: '未找到该剧档案，请先解析一次' };
+    const wanted = new Set((Array.isArray(indices) ? indices : []).map(Number).filter(Number.isSafeInteger));
+    const episodes = (entry.episodes || [])
+      .filter((ep) => wanted.has(Number(ep.vid_index)))
+      .map((ep) => ({ ...ep, cover: entry.cover }));
+    if (!episodes.length) return { success: false, error: '没有要下载的集' };
+    const count = await enqueueEpisodes({
+      seriesId: entry.series_id,
+      seriesTitle: entry.series_title,
+      episodes,
+      cover: entry.cover,
+    });
+    return { success: true, count, requested: episodes.length };
+  } catch (error) {
+    console.error('[Player] 批量补下载失败:', error.message);
     return { success: false, error: error.message };
   }
 });

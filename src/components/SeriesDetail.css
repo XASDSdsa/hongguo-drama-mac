@@ -544,3 +544,12 @@ button.lib-ep.is-missing:hover {
   background: var(--danger);
   border-color: var(--danger);
 }
+
+/* 导入的文件没有集号时显示文件名：一行显示不下就省略，不压到旁边的格子。 */
+.lib-ep-no {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

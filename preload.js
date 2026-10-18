@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 红果解析与下载
   hongguoResolve: (input) => ipcRenderer.invoke('hongguo-resolve', input),
   hongguoDownloadBatch: (payload) => ipcRenderer.invoke('hongguo-download-batch', payload),
+  downloadSeriesEpisodes: (seriesId, indices) => ipcRenderer.invoke('download-series-episodes', seriesId, indices),
 
   // 搜索（内嵌浏览器嗅探）
   searchSeries: (keyword, options) => ipcRenderer.invoke('search-series', keyword, options),

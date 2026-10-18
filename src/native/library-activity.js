@@ -132,7 +132,7 @@ function summarizeProcessing(batches) {
  * folders: [{ name, path, seriesId }]；batches: 处理批次快照（带 libraryDir）；downloads: 下载任务；
  * jobs: 补下载后自动处理的任务；planning: Map(dir -> { done, total })。
  */
-function buildOverview({ folders, batches, downloads, jobs = [], planning = new Map() }) {
+function buildOverview({ folders, batches, downloads, jobs = [], planning = new Map(), drafts = [] }) {
   const byDir = new Map();
   const itemFor = (folder) => {
     const key = dirKey(folder.path);
@@ -144,6 +144,7 @@ function buildOverview({ folders, batches, downloads, jobs = [], planning = new 
         processing: null,
         planning: null,
         job: null,
+        draft: null,
         downloads: { active: 0, pending: 0, failed: 0, stopped: 0 },
         updatedAt: 0,
       });
@@ -176,6 +177,14 @@ function buildOverview({ folders, batches, downloads, jobs = [], planning = new 
     item.job = { id: job.id, status: job.status, message: job.message };
     item.updatedAt = Math.max(item.updatedAt, job.updatedAt || 0);
   }
+  // 正在生成的剪映草稿 / 分镜工程图：总览里也要看得到，不然一部剧做了一小时草稿，列表里却显示没有任务。
+  for (const draft of drafts) {
+    const folder = folderByDir.get(dirKey(draft.dir));
+    if (!folder || draft.status !== 'running') continue;
+    const item = itemFor(folder);
+    item.draft = { done: draft.done || 0, total: draft.total || 0, message: draft.message || '' };
+    item.updatedAt = Math.max(item.updatedAt, Date.now());
+  }
   for (const task of downloads) {
     const folder = folderBySeries.get(String(task.hongguoInfo?.series_id ?? ''));
     if (!folder) continue;
@@ -197,7 +206,8 @@ function buildOverview({ folders, batches, downloads, jobs = [], planning = new 
 
   const rank = (item) => {
     const p = item.processing?.state;
-    if (item.planning || p === 'running' || item.downloads.active || item.job?.status === 'starting') return 0;
+    if (item.planning || p === 'running' || item.draft || item.downloads.active || item.job?.status === 'starting')
+      return 0;
     if (p === 'queued' || item.downloads.pending || item.job?.status === 'waiting') return 1;
     if (p === 'failed' || item.downloads.failed || item.job?.status === 'failed') return 2;
     if (p === 'stopped' || item.downloads.stopped) return 3;

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
 import { Settings, Play, Home, Search, Folder } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import SettingsPage from './components/Settings';
@@ -135,7 +136,7 @@ export default function App() {
         )}
         {visited.map((id) => (
           <main className="main-content" data-page={id} hidden={page !== id} key={id}>
-            {renderPage(id)}
+            <ErrorBoundary>{renderPage(id)}</ErrorBoundary>
           </main>
         ))}
       </div>

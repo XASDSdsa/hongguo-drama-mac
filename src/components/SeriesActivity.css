@@ -139,7 +139,7 @@
   background: var(--bg-inset);
   border: 1px solid var(--border-muted);
   border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', monospace;
   font-size: 12px;
   line-height: 1.6;
 }

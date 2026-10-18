@@ -13,7 +13,8 @@ const STATE_TEXT = {
 const SIZES = [5, 10, 20];
 
 export const overviewBusy = (data) =>
-  !!data && data.items.some((item) => item.planning || ['running', 'queued'].includes(item.processing?.state));
+  !!data &&
+  data.items.some((item) => item.planning || item.draft || ['running', 'queued'].includes(item.processing?.state));
 
 function Row({ item, onOpen, onDismissJob }) {
   const p = item.processing;
@@ -39,6 +40,11 @@ function Row({ item, onOpen, onDismissJob }) {
               </span>
             )}
             {p.failed > 0 && <em>失败 {p.failed} 集</em>}
+          </span>
+        )}
+        {item.draft && (
+          <span className="act-chip is-running" title={item.draft.message || ''}>
+            剪映草稿 {item.draft.done}/{item.draft.total}
           </span>
         )}
         {downloading > 0 && <span className="act-chip is-running">下载中 {downloading} 集</span>}

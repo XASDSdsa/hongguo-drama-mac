@@ -29,6 +29,7 @@ function saveView(patch) {
 function cardStatus(item) {
   if (!item) return null;
   if (item.planning || item.processing?.state === 'running') return { kind: 'running', text: '处理中' };
+  if (item.draft) return { kind: 'running', text: '做草稿中' };
   if (item.downloads.active || item.downloads.pending) return { kind: 'running', text: '下载中' };
   if (item.processing?.state === 'queued') return { kind: 'queued', text: '排队中' };
   if (item.processing?.state === 'failed' || item.downloads.failed) return { kind: 'failed', text: '有失败' };
@@ -78,7 +79,8 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
       return result?.success ? result : null;
     },
     isBusy: overviewBusy,
-    active,
+    // 打开了某一部剧时总览不在屏幕上，不用每隔几秒扫一遍所有剧的文件夹；回到列表时会马上重读。
+    active: active && !current,
   });
   const itemByDir = useMemo(() => new Map((overview?.items || []).map((item) => [item.dir, item])), [overview]);
   const openByDir = (item) => {

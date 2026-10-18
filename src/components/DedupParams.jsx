@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './DedupParams.css';
 
 // 去重参数面板：「一键处理」和「管理剧集」共用，参数名与主进程 quchong.validateOptions 一致。
@@ -65,6 +65,56 @@ const TIME_GROUPS = [
 ];
 
 /**
+ * 数字输入框：输入过程中允许临时为空或不完整（比如刚删掉、正在输入负号）；
+ * 只有合法且在范围内的数才交给上层。离开输入框时，空的恢复成原值，超出范围的拉回到边界。
+ * 这样不会把 0、NaN 或越界的值存下来，后台也就不会因为参数无效拒绝处理。
+ */
+function NumberField({ value, step, min, max, disabled, onCommit, ariaLabel }) {
+  const [text, setText] = useState(value ?? '');
+  const parse = (raw) => (String(raw).trim() === '' ? NaN : Number(raw));
+  // 外面改了值（比如「恢复默认值」）才同步进来；正在输入「1.」这种半截数字时不打断。
+  useEffect(() => {
+    setText((current) => (parse(current) === value ? current : (value ?? '')));
+  }, [value]);
+  return (
+    <input
+      className="input-field"
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      aria-label={ariaLabel}
+      value={text}
+      disabled={disabled}
+      onChange={(e) => {
+        setText(e.target.value);
+        const next = parse(e.target.value);
+        if (Number.isFinite(next) && next >= min && next <= max) onCommit(next);
+      }}
+      onBlur={() => {
+        const next = parse(text);
+        if (!Number.isFinite(next)) return setText(value ?? '');
+        const clamped = Math.min(max, Math.max(min, next));
+        setText(clamped);
+        if (clamped !== value) onCommit(clamped);
+      }}
+    />
+  );
+}
+
+/** 最小值大于最大值的成对参数，返回提示文字。 */
+export function rangeProblems(opts = {}, split = null) {
+  const problems = [];
+  for (const [label, minKey, maxKey] of RANGE_PARAMS)
+    if (Number(opts[minKey]) > Number(opts[maxKey])) problems.push(`${label}的最小值大于最大值`);
+  if (Number(opts.speed_min) > Number(opts.speed_max)) problems.push('最小倍速大于最大倍速');
+  if (Number(opts.noise_min) > Number(opts.noise_max)) problems.push('噪点下限大于上限');
+  if (Number(opts.pitch_min) > Number(opts.pitch_max)) problems.push('音调下限大于上限');
+  if (split && Number(split.max_len) - Number(split.min_len) < 1) problems.push('成品时长的最长要比最短至少多 1 秒');
+  return problems;
+}
+
+/**
  * 去重参数面板。传入 split 时分成「时间与速度 / 画面参数」两页（重新拆分用）；
  * 不传 split 时只有画面参数（含变速范围），和以前一样。
  */
@@ -78,21 +128,25 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
     return (
       <label key={key}>
         {label}
-        <input
-          className="input-field"
-          type="number"
+        <NumberField
+          value={source[key]}
           step={step}
           min={min}
           max={max}
-          value={source[key] ?? ''}
-          onChange={(e) => change(key, Number(e.target.value))}
           disabled={disabled}
+          onCommit={(value) => change(key, value)}
         />
       </label>
     );
   };
+  const problems = rangeProblems(opts, split);
   return (
     <div className="dedup-params">
+      {problems.length > 0 && (
+        <p className="dedup-problem" role="alert">
+          参数需要调整：{problems.join('；')}
+        </p>
+      )}
       {tabbed && (
         <div className="dedup-tabs" role="tablist">
           {[
@@ -137,16 +191,15 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
               <React.Fragment key={minKey}>
                 <span className="dedup-range-name">{label}</span>
                 {[minKey, maxKey].map((key) => (
-                  <input
+                  <NumberField
                     key={key}
-                    className="input-field"
-                    type="number"
+                    ariaLabel={`${label}${key === minKey ? '最小值' : '最大值'}`}
+                    value={opts[key]}
                     step={step}
                     min={min}
                     max={max}
-                    value={opts[key] ?? ''}
-                    onChange={(e) => onChange(key, Number(e.target.value))}
                     disabled={disabled}
+                    onCommit={(value) => onChange(key, value)}
                   />
                 ))}
               </React.Fragment>

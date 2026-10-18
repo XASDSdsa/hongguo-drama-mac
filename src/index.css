@@ -635,3 +635,26 @@ h2,
     scroll-behavior: auto !important;
   }
 }
+
+/* 页面出错兜底 */
+.page-error {
+  max-width: 520px;
+  margin: 80px auto;
+  padding: 24px;
+  border: 1px solid var(--border, #e3e5ec);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  text-align: center;
+}
+.page-error h3 {
+  margin: 0 0 8px;
+}
+.page-error p {
+  margin: 0 0 16px;
+  color: var(--text-secondary, #666);
+}
+.page-error-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
 import { Check, ChevronRight, Folder, RefreshCw } from './icons';
-import DedupParams from './DedupParams';
+import DedupParams, { rangeProblems } from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
 import SeriesProgress, { isActiveBatch } from './SeriesProgress';
@@ -11,6 +11,8 @@ import { clampPage, slicePage } from './pagination';
 
 // 画面参数的项目和默认值换过一版：换个键，旧的保存值不再覆盖新默认值。
 const STORAGE_KEY = 'library-params-v2';
+// 旧成品挪去哪里：Mac 叫废纸篓，Windows 叫回收站。
+const TRASH = /Mac/.test((typeof navigator !== 'undefined' && navigator.platform) || '') ? '废纸篓' : '回收站';
 const VIEW_KEY = 'library-view';
 /** 草稿默认做新剧的前 4 集：从「新集编号」起连续 4 个。 */
 const defaultDraftNums = (start) => [0, 1, 2, 3].map((n) => String((Math.floor(Number(start)) || 1) + n));
@@ -112,9 +114,7 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
   }, [dir, selectedNumber, selectedStamp]);
 
   if (!selected) {
-    return enabled ? (
-      <p className="sb-hint">分镜处理完、提示词写好后，所选集的整个分镜工程图会出现在这里。</p>
-    ) : null;
+    return enabled ? <p className="sb-hint">分镜处理完、提示词写好后，所选集的整个分镜工程图会出现在这里。</p> : null;
   }
   const open = async () => {
     setOpenError('');
@@ -136,8 +136,7 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
             }
             onClick={() => setCurrent(item.number)}
           >
-            第 {item.number} 集
-            {item.state === 'none' && <em>未生成</em>}
+            第 {item.number} 集{item.state === 'none' && <em>未生成</em>}
             {item.state === 'no-episode' && <em>无成品</em>}
           </button>
         ))}
@@ -224,7 +223,12 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     setLoading(true);
     setError('');
     setNotice('');
-    const result = await window.electronAPI.libraryEpisodes(folder.path);
+    let result = null;
+    try {
+      result = await window.electronAPI.libraryEpisodes(folder.path);
+    } catch (_) {
+      result = { success: false, error: '读取这部剧失败，请稍后重试' };
+    }
     if (id !== requestId.current) return;
     setLoading(false);
     if (!result?.success) return setError(result?.error || '打开失败');
@@ -233,7 +237,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     setRemoteNote('');
     if (!result.linked) return;
     setRemoteNote('正在向来源平台核对最新集数…');
-    const fresh = await window.electronAPI.libraryRefreshRemote(folder.path);
+    const fresh = await window.electronAPI.libraryRefreshRemote(folder.path).catch(() => null);
     if (id !== requestId.current) return;
     if (fresh?.success) {
       setDetail((previous) =>
@@ -255,7 +259,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
   // 只刷新集和缺集状态（不重新联网核对、不动选择）。下载有变化时调用。
   const reload = useCallback(async () => {
-    const result = await window.electronAPI.libraryEpisodes(folder.path);
+    const result = await window.electronAPI.libraryEpisodes(folder.path).catch(() => null);
     if (!result?.success) return;
     setDetail((previous) =>
       previous
@@ -298,16 +302,26 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
   useEffect(() => {
     let alive = true;
-    window.electronAPI.quchongDefaults?.().then((defaults) => {
-      if (alive && defaults) setOpts({ ...defaults, ...DEFAULT_SPEED, ...(saved.opts || {}) });
-    });
+    // 并发数和编码方式只认「设置」，保存的旧参数里的 jobs/encoder 不再盖回去。
+    const { jobs: _jobs, encoder: _encoder, ...savedOpts } = saved.opts || {};
+    window.electronAPI
+      .quchongDefaults?.()
+      .then((defaults) => {
+        if (alive && defaults) setOpts({ ...defaults, ...DEFAULT_SPEED, ...savedOpts });
+      })
+      .catch(() => {
+        if (alive) setNotice('读取去重参数失败，请重新打开这部剧');
+      });
     return () => {
       alive = false;
     };
   }, [saved]);
 
   useEffect(() => {
-    if (opts) writeJson(STORAGE_KEY, { opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums });
+    if (opts) {
+      const { jobs: _jobs, encoder: _encoder, ...keep } = opts;
+      writeJson(STORAGE_KEY, { opts: keep, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums });
+    }
   }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
@@ -317,7 +331,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   }, [showParams]);
 
   const resetParams = async () => {
-    const defaults = await window.electronAPI.quchongDefaults?.();
+    const defaults = await window.electronAPI.quchongDefaults?.().catch(() => null);
     if (defaults) setOpts({ ...defaults, ...DEFAULT_SPEED });
     setSplit({ ...DEFAULT_SPLIT });
   };
@@ -355,12 +369,14 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     let alive = true;
     setEstimate((previous) => ({ ...previous, loading: true, error: '' }));
     const timer = setTimeout(async () => {
-      const result = await window.electronAPI.libraryEstimate?.({
-        dir: detail.dir,
-        files: selectedKey.split('|'),
-        opts,
-        split,
-      });
+      const result = await window.electronAPI
+        .libraryEstimate?.({
+          dir: detail.dir,
+          files: selectedKey.split('|'),
+          opts,
+          split,
+        })
+        .catch(() => ({ success: false, error: '估算失败，请稍后重试' }));
       if (!alive) return;
       if (result?.success) setEstimate({ loading: false, data: result, error: '' });
       else setEstimate({ loading: false, data: null, error: result?.error || '估算失败' });
@@ -407,7 +423,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   // 点「开始处理」：要去重时先重新读一次「去重」里已有多少成品，已经去重过就在确认窗里强提醒。
   const requestStart = async () => {
     if (!dedupOn) return submit(undefined);
-    const fresh = await window.electronAPI.libraryEpisodes(detail.dir);
+    const fresh = await window.electronAPI.libraryEpisodes(detail.dir).catch(() => null);
     setOutputCount(fresh?.success ? fresh.outputCount || 0 : detail?.outputCount || 0);
     return setPreview(true);
   };
@@ -417,23 +433,29 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     setNotice('');
     setDecision(null);
     setPreview(false);
-    const result = await window.electronAPI.libraryDedup({
-      dir: detail.dir,
-      dedup: dedupOn,
-      mode: 'resplit',
-      files: episodes.filter((item) => selected.has(item.path)).map((item) => item.path),
-      opts,
-      split,
-      gapPolicy,
-      sideTasks: {
-        jianyingDraft: { enabled: draftOn, mode: draftMode, scope: draftScopeValue, prompts: draftPrompts },
-      },
-    });
-    setSubmitting(false);
+    let result;
+    try {
+      result = await window.electronAPI.libraryDedup({
+        dir: detail.dir,
+        dedup: dedupOn,
+        mode: 'resplit',
+        files: episodes.filter((item) => selected.has(item.path)).map((item) => item.path),
+        opts,
+        split,
+        gapPolicy,
+        sideTasks: {
+          jianyingDraft: { enabled: draftOn, mode: draftMode, scope: draftScopeValue, prompts: draftPrompts },
+        },
+      });
+    } catch (_) {
+      result = { success: false, error: '提交没有成功，请稍后再试' };
+    } finally {
+      setSubmitting(false);
+    }
     if (result?.needsDecision) return setDecision(result);
     // 成功后的进度、提示和日志都在「处理进度」里（来自主进程），这里只在失败时提示。
     if (!result?.success) setNotice(result?.error || '提交失败');
-    await refreshActivity();
+    await refreshActivity().catch(() => {});
     if (result?.success) progressRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   };
 
@@ -476,6 +498,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     activeBatches.length > 0 ||
     (activity?.jobs || []).some((job) => ['waiting', 'starting'].includes(job.status));
   const draftBlocked = draftOn && draftNumbers.length === 0;
+  // 参数写反（最小大于最大）时先不让开始，面板里已经标出要改哪一项。
+  const paramsInvalid = dedupOn && !!opts && rangeProblems(opts, split).length > 0;
 
   const hopeless = (decision?.blocking || [])
     .filter((item) => item.reason && item.reason.retryHelps === false)
@@ -686,7 +710,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               </div>
               {dedupOn && (detail?.outputCount || 0) > 0 && (
                 <p className="proc-name is-missing">
-                  已经去重过：「去重」里有 {detail.outputCount} 集成品。再次去重会把它们全部换掉；只想做剪映草稿或分镜工程图，请取消勾选「视频去重」。
+                  已经去重过：「去重」里有 {detail.outputCount}{' '}
+                  集成品。再次去重会把它们全部换掉；只想做剪映草稿或分镜工程图，请取消勾选「视频去重」。
                 </p>
               )}
               {dedupOn && (
@@ -798,12 +823,25 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             <div className="proc-foot">
               <div className="proc-foot-info">
                 {busyText && <div className="lib-status">{busyText}</div>}
+                {!busyText && paramsInvalid && (
+                  <div className="lib-notice">
+                    去重参数需要调整：{rangeProblems(opts, split).join('；')}（点「参数」修改）
+                  </div>
+                )}
                 {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
               </div>
               <button
                 className="btn btn-primary proc-start"
                 onClick={requestStart}
-                disabled={submitting || seriesBusy || nothingToDo || needTitle || draftBlocked || (dedupOn && !opts)}
+                disabled={
+                  submitting ||
+                  seriesBusy ||
+                  nothingToDo ||
+                  needTitle ||
+                  draftBlocked ||
+                  paramsInvalid ||
+                  (dedupOn && !opts)
+                }
               >
                 {startLabel}
               </button>
@@ -829,8 +867,11 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             {outputCount > 0 && (
               <p className="lib-confirm-warn">
                 这部剧已经去重过：「去重」里现在有 <b>{outputCount} 集</b>成品。继续会把它们
-                <b>全部挪进废纸篓</b>，再整部重新生成，要花很长时间。
-                只想做剪映草稿或分镜工程图的话，不用重新去重。
+                <b>全部移到{TRASH}</b>（U 盘等没有{TRASH}的盘，放进这部剧文件夹里的「去重-旧成品」），
+                {selectedCount < episodes.length
+                  ? `然后只按前 ${selectedCount} 集重新生成——后面集数的旧成品也会一起移走，`
+                  : '再整部重新生成，'}
+                要花很长时间。只想做剪映草稿或分镜工程图的话，不用重新去重。
               </p>
             )}
             <ul className="lib-confirm-list lib-preview-list">
@@ -878,7 +919,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                 className={`btn ${outputCount > 0 ? 'btn-danger' : 'btn-primary'}`}
                 onClick={() => submit(undefined)}
               >
-                {outputCount > 0 ? '仍然重新去重（旧成品进废纸篓）' : '开始处理'}
+                {outputCount > 0 ? `仍然重新去重（旧成品移到${TRASH}）` : '开始处理'}
               </button>
               <button className="btn" onClick={() => setPreview(false)}>
                 再调整一下

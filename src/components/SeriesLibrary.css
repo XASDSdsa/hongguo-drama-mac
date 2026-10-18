@@ -164,6 +164,9 @@
 .lib-confirm {
   width: 100%;
   max-width: 520px;
+  /* 窗口很矮（最小 620）而列表很长时，弹窗自己滚动，按钮不会被挤出屏幕。 */
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
   padding: 20px 24px;
   background: var(--bg-card);
   border-radius: 16px;

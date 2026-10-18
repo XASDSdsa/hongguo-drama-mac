@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './PublishPanel.css';
 import { RefreshCw } from './icons';
+import { isSubmitKey } from './episodeRange';
 
 /** 一项内容的状态：没有 / 已保存 / 有改动还没保存。 */
 function StatusBadge({ saved, dirty, emptyText = '还没有' }) {
@@ -194,7 +195,8 @@ export default function PublishPanel({ dir, onResult }) {
           aria-label="新剧名"
           onChange={(e) => setTitleDraft(e.target.value)}
           onKeyDown={(e) =>
-            e.key === 'Enter' &&
+            // 输入法正在选字时按的回车只是确认拼音，不能当成「保存」。
+            isSubmitKey(e) &&
             titleDirty &&
             cleanTitle &&
             save(() => window.electronAPI.publishRetitle({ dir, title: cleanTitle }))
