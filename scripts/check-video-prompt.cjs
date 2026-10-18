@@ -9,7 +9,6 @@ const { execFileSync } = require('node:child_process');
 const { createArkClient, extractText } = require('../src/native/video-prompt/ark');
 const compose = require('../src/native/video-prompt/compose');
 const { deriveEpisodePrompts } = require('../src/native/video-prompt/derive');
-const { readStoryboardOverview } = require('../src/native/video-prompt/html');
 
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 
@@ -205,15 +204,6 @@ async function main() {
   assert.ok(embedded.segments[0].shots[1].line.startsWith('3–7 秒：'));
   assert.ok(!page.slice(page.indexOf('<script>')).includes('${'), '页面脚本里没有没替换的模板占位');
 
-  // 软件里的分镜工程图预览：从页面读出每个分镜的缩略图和时间
-  const overview = readStoryboardOverview(page);
-  assert.equal(overview.segments, 2);
-  assert.deepEqual(overview.shots.map((row) => row.no), [1, 2, 3, 4, 5]);
-  assert.ok(overview.shots.every((row) => row.thumb.startsWith('data:image/jpeg;base64,')), '每个分镜都有起幅缩略图');
-  assert.deepEqual(overview.shots.map((row) => [row.start, row.dur]), [[0, 3], [3, 4], [7, 3], [10, 5], [15, 4]]);
-  assert.deepEqual(overview.shots.map((row) => row.lines), [0, 1, 0, 0, 0], '只有第 2 个分镜有台词');
-  assert.ok(overview.shots.every((row) => row.failed === false));
-
   // 缓存：同一个视频、同一个模型再跑一次，不再请求方舟
   const asked = calls.ask;
   const uploaded = calls.upload;
@@ -269,10 +259,15 @@ async function main() {
   assert.match(detail, /libraryStoryboards/);
   assert.ok(!detail.includes('同时反推 Seedance 2.5 提示词'), '旧的勾选框已经移到「生产 AI 分镜工程图」一行');
   assert.match(main, /ipcMain\.handle\('library-storyboards'/);
+  assert.match(main, /ipcMain\.handle\('library-storyboard-html'/);
+  assert.match(main, /localPlayUrl\(target\.file\)/, '页面里的视频预览改指向成品视频的本地播放地址');
   assert.match(main, /ipcMain\.handle\('library-storyboard-open'/);
   const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   assert.match(preload, /libraryStoryboards:/);
+  assert.match(preload, /libraryStoryboardHtml:/);
   assert.match(preload, /libraryStoryboardOpen:/);
+  assert.match(detail, /<iframe/, '分镜工程图原样显示在界面里');
+  assert.match(detail, /srcDoc=/);
   const settingsUi = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Settings.jsx'), 'utf8');
   for (const key of ['ark_base_url', 'ark_api_key', 'ark_video_model', 'video_prompt_max_seconds']) assert.ok(settingsUi.includes(`'${key}'`), `设置页要保存 ${key}`);
 

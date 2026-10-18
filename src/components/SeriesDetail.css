@@ -474,7 +474,7 @@ button.lib-ep.is-missing:hover {
   color: var(--primary);
 }
 
-/* AI 分镜工程图：所选集的分镜缩略图 */
+/* AI 分镜工程图：原样显示分镜头脚本页面 */
 .sb-hint {
   margin: 10px 0 0 26px;
   font-size: 12px;
@@ -484,62 +484,46 @@ button.lib-ep.is-missing:hover {
   color: var(--danger, #d64550);
 }
 .sb-results {
-  margin: 12px 0 0 26px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  margin: 12px 0 0;
 }
-.sb-ep {
-  padding: 12px 14px;
-  background: var(--bg-inset);
-  border-radius: 10px;
-}
-.sb-head {
+.sb-tabs {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
   margin-bottom: 10px;
-  font-size: 13px;
 }
-.sb-head span {
+.sb-tab {
+  padding: 5px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sb-tab.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.sb-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.sb-tab em {
+  margin-left: 6px;
+  font-style: normal;
+  font-size: 11px;
   color: var(--text-tertiary);
-  font-size: 12px;
 }
 .sb-open {
   margin-left: auto;
 }
-.sb-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-  gap: 8px;
-  max-height: 340px;
-  overflow-y: auto;
-}
-.sb-grid figure {
-  margin: 0;
-  border-radius: 6px;
-  overflow: hidden;
-  background: #000;
-  border: 1px solid var(--border-muted);
-}
-.sb-grid figure.is-failed {
-  border-color: var(--danger, #d64550);
-}
-.sb-grid img,
-.sb-blank {
+.sb-frame {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 5;
-  object-fit: cover;
-}
-.sb-grid figcaption {
-  display: flex;
-  flex-direction: column;
-  padding: 4px 7px 5px;
-  font-size: 11px;
-  line-height: 1.35;
-  background: var(--bg-card);
-}
-.sb-grid figcaption span {
-  color: var(--text-tertiary);
+  height: min(88vh, 980px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #080d16;
 }

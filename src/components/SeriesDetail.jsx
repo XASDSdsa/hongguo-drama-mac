@@ -66,80 +66,96 @@ function ghostLabel(item) {
   return item.text;
 }
 
-const formatClock = (seconds) => {
-  const total = Math.max(0, Math.round(Number(seconds) || 0));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
-};
-
-/** 所选几集的整个分镜工程图：每集一排分镜缩略图（起幅画面），点「打开」看完整的分镜头脚本页面。 */
+/** 所选几集的整个分镜工程图：按集切换，原样显示分镜头脚本页面（三栏分镜卡片）。 */
 function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
-  const [state, setState] = useState({ items: [], error: '' });
+  const [items, setItems] = useState([]);
+  const [current, setCurrent] = useState(null);
+  const [page, setPage] = useState({ html: '', error: '', loading: false });
   const [openError, setOpenError] = useState('');
   const numbersKey = numbers.join(',');
+
   useEffect(() => {
     let alive = true;
     window.electronAPI
       .libraryStoryboards?.({ dir, numbers })
-      .then((result) => {
-        if (!alive) return;
-        setState(result?.success ? { items: result.items, error: '' } : { items: [], error: result?.error || '' });
-      })
-      .catch(() => alive && setState({ items: [], error: '' }));
+      .then((result) => alive && setItems(result?.success ? result.items : []))
+      .catch(() => alive && setItems([]));
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir, numbersKey, refreshKey]);
 
-  const ready = state.items.filter((item) => item.state === 'ready');
-  if (!ready.length) {
+  const ready = items.filter((item) => item.state === 'ready');
+  const selected = ready.find((item) => item.number === current) || ready[0] || null;
+  const selectedNumber = selected?.number;
+  const selectedStamp = selected?.updatedAt;
+  useEffect(() => {
+    if (selectedNumber == null) return undefined;
+    let alive = true;
+    setPage((previous) => ({ ...previous, loading: true, error: '' }));
+    window.electronAPI
+      .libraryStoryboardHtml({ dir, number: selectedNumber })
+      .then((result) => {
+        if (!alive) return;
+        setPage(
+          result?.success
+            ? { html: result.html, error: '', loading: false }
+            : { html: '', error: result?.error || '打不开', loading: false },
+        );
+      })
+      .catch(() => alive && setPage({ html: '', error: '打不开', loading: false }));
+    return () => {
+      alive = false;
+    };
+  }, [dir, selectedNumber, selectedStamp]);
+
+  if (!selected) {
     return enabled ? (
       <p className="sb-hint">分镜处理完、提示词写好后，所选集的整个分镜工程图会出现在这里。</p>
     ) : null;
   }
-  const open = async (number) => {
+  const open = async () => {
     setOpenError('');
-    const result = await window.electronAPI.libraryStoryboardOpen({ dir, number });
+    const result = await window.electronAPI.libraryStoryboardOpen({ dir, number: selected.number });
     if (!result?.success) setOpenError(result?.error || '打开失败');
   };
   return (
     <div className="sb-results">
-      {state.items.map((item) => (
-        <section key={item.number} className="sb-ep">
-          <header className="sb-head">
-            <b>第 {item.number} 集</b>
-            {item.state === 'ready' ? (
-              <>
-                <span>
-                  {item.shots.length} 个分镜 · {item.segments} 段
-                </span>
-                <button className="btn btn-sm sb-open" onClick={() => open(item.number)}>
-                  打开完整分镜头脚本
-                </button>
-              </>
-            ) : (
-              <span className="sb-none">
-                {item.state === 'no-episode' ? '去重成品里还没有这一集' : '还没有生成'}
-              </span>
-            )}
-          </header>
-          {item.state === 'ready' && (
-            <div className="sb-grid">
-              {item.shots.map((shot) => (
-                <figure key={shot.no} className={shot.failed ? 'is-failed' : ''} title={shot.failed ? '这一段没有生成成功' : ''}>
-                  {shot.thumb ? <img src={shot.thumb} alt={`镜头 ${shot.no}`} /> : <div className="sb-blank" />}
-                  <figcaption>
-                    <b>{String(shot.no).padStart(2, '0')}</b>
-                    <span>
-                      {formatClock(shot.start)} · {Math.round(shot.dur * 10) / 10}秒{shot.lines ? ' · 台词' : ''}
-                    </span>
-                  </figcaption>
-                </figure>
-              ))}
-            </div>
-          )}
-        </section>
-      ))}
+      <div className="sb-tabs" role="tablist" aria-label="分镜工程图">
+        {items.map((item) => (
+          <button
+            key={item.number}
+            role="tab"
+            aria-selected={item.number === selected.number}
+            className={`sb-tab ${item.number === selected.number ? 'is-active' : ''}`}
+            disabled={item.state !== 'ready'}
+            title={
+              item.state === 'no-episode' ? '去重成品里还没有这一集' : item.state === 'none' ? '这一集还没有生成' : ''
+            }
+            onClick={() => setCurrent(item.number)}
+          >
+            第 {item.number} 集
+            {item.state === 'none' && <em>未生成</em>}
+            {item.state === 'no-episode' && <em>无成品</em>}
+          </button>
+        ))}
+        <button className="btn btn-sm sb-open" onClick={open}>
+          在浏览器中打开
+        </button>
+      </div>
+      {page.error ? (
+        <p className="sb-hint is-error">{page.error}</p>
+      ) : (
+        <iframe
+          key={`${selected.number}-${selected.updatedAt}`}
+          className="sb-frame"
+          title={`第 ${selected.number} 集分镜工程图`}
+          sandbox="allow-scripts"
+          allowFullScreen
+          srcDoc={page.html}
+        />
+      )}
       {openError && <p className="sb-hint is-error">{openError}</p>}
     </div>
   );
