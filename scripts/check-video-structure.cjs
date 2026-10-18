@@ -150,10 +150,10 @@ async function main() {
     assert.equal(emptyTranscript.duration, m.video_end);
     const a = align(shot.shots, t, 'task');
     assert.equal(a.associations.length, 1);
-    assert.equal(a.shots.length, 1);
-    assert.equal(a.merged_boundary_count, 1);
-    assert.equal(a.boundary_decisions[0].reason, 'speech_not_finished');
-    assert.equal(a.associations[0].shot_ids.length, 1);
+    assert.equal(a.shots.length, 2);
+    assert.equal(a.merged_boundary_count, 0);
+    assert.equal(a.boundary_decisions[0].reason, 'visual_shot_cut');
+    assert.equal(a.associations[0].shot_ids.length, 2);
     assert.equal(a.associations[0].utterance_id, t.utterances[0].utterance_id);
     assert.equal((srt(t.utterances).match(/-->/g) || []).length, 1);
     assert(srt(t.utterances).includes('00:00:00,020 --> 00:00:00,120'));

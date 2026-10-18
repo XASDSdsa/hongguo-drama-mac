@@ -192,15 +192,15 @@ function load(fetchPlayUrlSingle, overrides = {}) {
         modules: {
           transcript: { summary: { acoustic_pauses: 14, pause_cuts: 12 } },
           alignment: {
-            summary: { raw_shot_count: 9, kept_boundary_count: 5, merged_boundary_count: 3, shot_count: 6 },
+            summary: { raw_shot_count: 9, shot_count: 9 },
           },
         },
       })})`,
     );
     assert.match(line, /14 处气口/);
     assert.match(line, /拆开 12 次/);
-    assert.match(line, /画面切点 8 个，留下 5 个，并掉 3 个/);
-    assert.match(line, /最终 6 段/);
+    assert.match(line, /画面切点 8 个，全部作为分镜边界/);
+    assert.match(line, /共 9 个分镜/);
     assert.equal(h.run('describeStructure({})'), '分析完成');
   });
   await check('a 404 on the download link is retried with a fresh link, not given up as missing', async () => {

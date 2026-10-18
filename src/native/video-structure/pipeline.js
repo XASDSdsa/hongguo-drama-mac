@@ -65,14 +65,9 @@ function brief(data) {
     raw_shot_count: data.raw_shot_count,
     merged_boundary_count: data.merged_boundary_count,
     longest_shot_seconds: data.statistics?.longest_shot_seconds,
-    relaxed_cut_count: data.statistics?.relaxed_cut_count,
-    over_limit_shot_count: data.statistics?.over_limit_shot_ids?.length,
     voice_segment_count: data.voice_timeline?.segments?.length,
     acoustic_pauses: data.alignment_summary?.acoustic_pauses,
     pause_cuts: data.alignment_summary?.pause_cuts,
-    kept_boundary_count: Array.isArray(data.boundary_decisions)
-      ? data.boundary_decisions.filter((d) => d.status === 'kept').length
-      : undefined,
     warning_count: Math.max(warnings?.length ?? 0, reviewItems.length),
     needs_review: data.needs_review === true || reviewItems.length > 0,
     review_items: reviewItems,

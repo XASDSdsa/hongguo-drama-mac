@@ -6,9 +6,6 @@ const os = require('node:os');
 const {
   align,
   exportsModule,
-  breathOnCut,
-  speechRanges,
-  acousticPauses,
   ALGORITHM,
   POLICY,
 } = require('../src/native/video-structure/alignment');
@@ -43,51 +40,31 @@ const voicedSpeech = (ranges, duration, text) => {
   return transcript;
 };
 const overlaps = (u, s) => u.start < s.end && u.end > s.start;
-function keptFlags(raw, transcript) {
-  const spoken = speechRanges(transcript);
-  const pauses = acousticPauses(spoken);
-  return raw.slice(1).map((shot) => breathOnCut(shot.start, spoken, pauses));
-}
 function verify(raw, transcript, result) {
   assert.equal(result.algorithm_id, ALGORITHM);
   assert.equal(result.boundary_policy, POLICY);
-  const kept = keptFlags(raw, transcript);
+  // 分镜只看画面：每个画面切点都是分镜边界，和台词、气口无关。
   assert.deepEqual(
     result.boundary_decisions.map((d) => d.time),
     raw.slice(1).map((s) => s.start),
   );
-  assert.deepEqual(
-    result.boundary_decisions.map((d) => d.status),
-    kept.map((ok) => (ok ? 'kept' : 'merged')),
-  );
-  assert.equal(result.merged_boundary_count, kept.filter((ok) => !ok).length);
+  assert.ok(result.boundary_decisions.every((d) => d.status === 'kept' && d.reason === 'visual_shot_cut'));
+  assert.equal(result.merged_boundary_count, 0);
   assert.equal(result.raw_shot_count, raw.length);
-  const groups = [[raw[0]]];
-  raw.slice(1).forEach((shot, index) => {
-    if (kept[index]) groups.push([shot]);
-    else groups.at(-1).push(shot);
-  });
-  assert.equal(result.shots.length, groups.length);
+  assert.equal(result.shots.length, raw.length);
   assert.equal(
     result.shots.reduce((sum, s) => sum + s.end_frame_exclusive - s.start_frame, 0),
     raw.at(-1).end_frame_exclusive - raw[0].start_frame,
   );
   result.shots.forEach((shot, index) => {
-    const group = groups[index];
+    const source = raw[index];
     assert.equal(shot.order, index + 1);
-    assert.equal(shot.start, group[0].start);
-    assert.equal(shot.end, group.at(-1).end);
-    assert.equal(shot.start_frame, group[0].start_frame);
-    assert.equal(shot.end_frame_exclusive, group.at(-1).end_frame_exclusive);
-    assert.deepEqual(
-      shot.source_shot_ids,
-      group.map((item) => item.shot_id),
-    );
-    assert.equal(shot.internal_boundaries.length, group.length - 1);
-    assert.deepEqual(
-      shot.internal_boundaries.map((item) => item.time),
-      group.slice(1).map((item) => item.start),
-    );
+    assert.equal(shot.start, source.start);
+    assert.equal(shot.end, source.end);
+    assert.equal(shot.start_frame, source.start_frame);
+    assert.equal(shot.end_frame_exclusive, source.end_frame_exclusive);
+    assert.deepEqual(shot.source_shot_ids, [source.shot_id]);
+    assert.deepEqual(shot.internal_boundaries, []);
     assert.deepEqual(
       shot.utterance_ids,
       transcript.utterances.filter((u) => overlaps(u, shot)).map((u) => u.utterance_id),
@@ -115,22 +92,6 @@ function verify(raw, transcript, result) {
     assert.equal(rows[0].segments[0].start, u.start);
     assert.equal(rows[0].segments.at(-1).end, u.end);
   }
-  for (const pause of acousticPauses(speechRanges(transcript))) {
-    const visual = raw.slice(1).some((shot) => pause.start - 1e-6 <= shot.start && shot.start <= pause.end + 1e-6);
-    const cutThere = result.boundary_decisions.some(
-      (decision) =>
-        decision.status === 'kept' && pause.start - 1e-6 <= decision.time && decision.time <= pause.end + 1e-6,
-    );
-    assert.equal(
-      cutThere,
-      visual &&
-        result.boundary_decisions.some(
-          (decision) =>
-            decision.status === 'kept' && pause.start - 1e-6 <= decision.time && decision.time <= pause.end + 1e-6,
-        ),
-    );
-    if (!visual) assert.equal(cutThere, false);
-  }
 }
 async function main() {
   const raw = shotsAt([0, 2, 4, 6, 8, 10]);
@@ -155,69 +116,22 @@ async function main() {
     verify(raw, t, align(raw, t, 'test'));
     assert.equal(JSON.stringify({ raw, t }), copy);
   }
-  // 话没说完，画面切了，也不切。句号不算出气口。
+  // 话没说完，画面也照切：分镜不看台词。
   const unfinished = speech([[0.4, 5.6]], 6, '这句话还没说完。镜头已经切了。');
   const unfinishedShots = shotsAt([0, 2, 4, 6]);
   const unfinishedResult = align(unfinishedShots, unfinished, 'unfinished');
   verify(unfinishedShots, unfinished, unfinishedResult);
-  assert.equal(unfinishedResult.shots.length, 1);
-  assert.deepEqual(
-    unfinishedResult.boundary_decisions.map((d) => d.reason),
-    ['speech_not_finished', 'speech_not_finished'],
-  );
-  // 切镜落在气口上才切。5 秒那刀还在说话，不切。
-  const landedShots = shotsAt([0, 2, 5, 8]);
-  const landed = voicedSpeech(
-    [
-      [0.2, 1.9],
-      [2.3, 7.8],
-    ],
-    8,
-  );
-  const landedResult = align(landedShots, landed, 'landed');
-  verify(landedShots, landed, landedResult);
-  assert.deepEqual(
-    landedResult.shots.map((s) => [s.start, s.end]),
-    [
-      [0, 2],
-      [2, 8],
-    ],
-  );
-  assert.deepEqual(
-    landedResult.boundary_decisions.map((d) => d.status),
-    ['kept', 'merged'],
-  );
-  assert.equal(landedResult.boundary_decisions[0].reason, 'acoustic_pause_on_visual_cut');
-  assert.equal(landedResult.boundary_decisions[1].reason, 'speech_not_finished');
-  // 有气口、没有切镜，不另切一刀。
-  const gapOnlyShots = shotsAt([0, 2, 5, 7]);
-  const gapOnly = voicedSpeech(
-    [
-      [0.2, 1.2],
-      [1.5, 4.6],
-    ],
-    7,
-  );
-  const gapOnlyResult = align(gapOnlyShots, gapOnly, 'gap');
-  verify(gapOnlyShots, gapOnly, gapOnlyResult);
-  assert.equal(gapOnlyResult.shots.length, 1);
-  assert.equal(
-    gapOnlyResult.boundary_decisions.some((d) => d.time > 1.2 && d.time < 1.5),
-    false,
-  );
-  assert.equal(gapOnlyResult.boundary_decisions[0].reason, 'speech_not_finished');
-  assert.equal(gapOnlyResult.boundary_decisions[1].reason, 'no_acoustic_pause_on_visual_cut');
-  // 一口气里多个切镜，都不切。
+  assert.equal(unfinishedResult.shots.length, 3);
+  // 一口气里多个切镜，每一刀都切；一句话会跨多个分镜，只作为索引。
   const oneBreath = voicedSpeech([[0.3, 9.7]], 10, '一口气还没断。切了好几镜。还没换气');
   const oneBreathResult = align(raw, oneBreath, 'one-breath');
   verify(raw, oneBreath, oneBreathResult);
-  assert.equal(oneBreathResult.shots.length, 1);
-  assert.equal(oneBreathResult.merged_boundary_count, 4);
-  assert.ok(oneBreathResult.boundary_decisions.every((d) => d.reason === 'speech_not_finished'));
+  assert.equal(oneBreathResult.shots.length, 5);
+  assert.deepEqual(oneBreathResult.associations[0].shot_ids, oneBreathResult.shots.map((s) => s.shot_id));
   const three = speech([[1, 5]], 10),
     threeResult = align(raw, three, 'three');
   verify(raw, three, threeResult);
-  assert.equal(threeResult.shots.length, 1);
+  assert.equal(threeResult.shots.length, 5);
   const same = speech(
       [
         [0.2, 0.8],
@@ -232,37 +146,6 @@ async function main() {
   verify(raw, voice, align(raw, voice, 'voice'));
   assert.throws(() => align([{ ...raw[0] }, { ...raw[1], start: 2.2 }], speech([], 4), 'bad'), /时间缺口/);
   assert.throws(() => align(shotsAt([1, 3]), speech([[0, 2]], 3), 'bad'), /超出/);
-  // 气口在两刀之间，不落在切镜上，整段仍并在一起。
-  const longRaw = shotsAt([0, 5, 10, 15, 20, 25, 30, 35, 40, 47]);
-  const chained = speech(
-    [
-      [1, 11],
-      [11.2, 21],
-      [21.2, 31],
-      [31.2, 46],
-    ],
-    47,
-  );
-  const chainResult = align(longRaw, chained, 'chain');
-  verify(longRaw, chained, chainResult);
-  assert.equal(chainResult.shots.length, 1);
-  const onPause = shotsAt([0, 11.1, 47]);
-  const onPauseSpeech = speech(
-    [
-      [1, 11],
-      [11.2, 46],
-    ],
-    47,
-  );
-  const onPauseResult = align(onPause, onPauseSpeech, 'on-pause');
-  verify(onPause, onPauseSpeech, onPauseResult);
-  assert.deepEqual(
-    onPauseResult.shots.map((s) => [s.start, s.end]),
-    [
-      [0, 11.1],
-      [11.1, 47],
-    ],
-  );
   for (let n = 1; n <= 100; n++) {
     const ranges = Array.from({ length: 5 }, (_, i) => {
       const a = ((n * 17 + i * 31) % 90) / 10;
@@ -271,61 +154,6 @@ async function main() {
     const varied = speech(ranges, 10);
     verify(raw, varied, align(raw, varied, 'varied'));
   }
-  // 切点必须离停顿边缘至少 30 ms：停顿 0.9–1.1 s 里，0.92 和 1.08 太靠边，1.0 在中间。
-  const edgeSpeech = voicedSpeech(
-    [
-      [0, 0.9],
-      [1.1, 2],
-    ],
-    2.5,
-  );
-  for (const [time, expected] of [
-    [0.92, 'merged'],
-    [1.0, 'kept'],
-    [1.08, 'merged'],
-  ]) {
-    const edgeShots = shotsAt([0, time, 2.5]);
-    assert.equal(align(edgeShots, edgeSpeech, 'edge').boundary_decisions[0].status, expected, `cut at ${time}`);
-  }
-  // 超过最长时长的段，用更短的停顿在已有画面切点处拆开；说话中间永远不切。
-  const longShots = shotsAt([0, 30, 62, 90]);
-  const shortPauses = voicedSpeech(
-    [
-      [0, 29.95],
-      [30.05, 61.95],
-      [62.05, 89.5],
-    ],
-    90,
-  );
-  const relaxed = align(longShots, shortPauses, 'relaxed');
-  assert.deepEqual(
-    relaxed.shots.map((shot) => [shot.start, shot.end]),
-    [
-      [0, 30],
-      [30, 90],
-    ],
-  );
-  assert.equal(relaxed.boundary_decisions[0].tier, 1);
-  assert.equal(relaxed.boundary_decisions[0].reason, 'shorter_pause_to_limit_shot_length');
-  assert.equal(relaxed.boundary_decisions[1].status, 'merged');
-  assert.equal(relaxed.statistics.relaxed_cut_count, 1);
-  assert.equal(relaxed.statistics.longest_shot_seconds, 60);
-  assert.deepEqual(relaxed.statistics.over_limit_shot_ids, []);
-  assert.equal(relaxed.merged_boundary_count, 1);
-  assert.equal(relaxed.max_shot_seconds, 60);
-  // 不超限、或明确关闭上限时，不放宽。
-  assert.equal(align(longShots, shortPauses, 'unlimited', { maxShotSeconds: 0 }).shots.length, 1);
-  assert.equal(align(longShots, shortPauses, 'roomy', { maxShotSeconds: 100 }).shots.length, 1);
-  // 一口气说到底：没有可用停顿，保持整段并记录，不在话中间硬切。
-  const nonStop = voicedSpeech([[0, 90]], 90);
-  const kept = align(longShots, nonStop, 'non-stop');
-  assert.equal(kept.shots.length, 1);
-  assert.equal(
-    kept.boundary_decisions.every((d) => d.status === 'merged' && d.reason === 'speech_not_finished'),
-    true,
-  );
-  assert.equal(kept.statistics.over_limit_shot_ids.length, 1);
-  assert.equal(kept.statistics.longest_shot_seconds, 90);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dialogue-boundaries-'));
   try {
     await fs.writeFile(path.join(dir, 'clip.mp4'), 'fixture');
@@ -345,7 +173,8 @@ async function main() {
       final.shots.map((s) => [s.start, s.end]),
       [
         [0, 2],
-        [2, 6],
+        [2, 4],
+        [4, 6],
         [6, 8],
         [8, 10],
       ],
@@ -425,7 +254,7 @@ async function main() {
       );
     const rounded = align(precise, spoken, 'rounding');
     verify(precise, spoken, rounded);
-    assert.equal(rounded.shots.length, 1);
+    assert.equal(rounded.shots.length, 2);
     const roundingClips = {
       boundary_policy: POLICY,
       alignment_algorithm_id: ALGORITHM,
@@ -439,7 +268,7 @@ async function main() {
       tailSpeech = voicedSpeech([[0.0004, 4.083667]], 4.083667);
     const tail = align(tailShots, tailSpeech, 'tail');
     verify(tailShots, tailSpeech, tail);
-    assert.equal(tail.shots.length, 1);
+    assert.equal(tail.shots.length, 2);
     const tailClips = {
       boundary_policy: POLICY,
       alignment_algorithm_id: ALGORITHM,
@@ -449,14 +278,14 @@ async function main() {
     assert.equal(tailExport.subtitle_cues.length, 1);
     assert.equal(tailExport.subtitle_cues[0].start, 0.0004);
     assert.equal(tailExport.subtitle_cues[0].end, 4.083667);
-    assert.equal(tailExport.subtitle_cues[0].shot_ids.length, 1);
+    assert.equal(tailExport.subtitle_cues[0].shot_ids.length, 2);
     assert.equal(tailExport.subtitle_cues[0].text, tailSpeech.utterances[0].text);
     assert(tailExport.subtitle_cues[0].end <= tailSpeech.duration);
     assert((await fs.readFile(path.join(dir, 'subtitles.srt'), 'utf8')).includes('00:00:00,000 --> 00:00:04,083'));
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
-  console.log('PASS 话没说完不切，气口落在切镜上才切，有气口无切镜不切，一口气里多个切镜不切');
+  console.log('PASS 每个画面切点都是分镜边界；台词只作为索引，字幕按人声片段（气口断句）放在自己的时间线上');
 }
 main().catch((error) => {
   console.error(error);

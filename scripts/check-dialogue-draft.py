@@ -27,7 +27,7 @@ def write_srt(srt, cues):
 
 
 def assemble(adapter, raw, transcript, cues):
-    groups = adapter.output_groups(raw["shots"], transcript)
+    groups = [[row] for row in raw["shots"]]
     shots = []
     for group in groups:
         first, last = group[0], group[-1]
@@ -57,15 +57,8 @@ def assemble(adapter, raw, transcript, cues):
             cue["shot_id"] = owners[0]
         else:
             cue.pop("shot_id", None)
-    decisions = []
-    for group in groups:
-        for index, row in enumerate(group):
-            if row is raw["shots"][0]:
-                continue
-            decisions.append({"time": row["start"], "frame": row["start_frame"], "status": "merged" if index else "kept"})
+    decisions = [{"time": row["start"], "frame": row["start_frame"], "status": "kept", "reason": "visual_shot_cut"} for row in raw["shots"][1:]]
     aligned = {
-        "pause_tiers": list(adapter.PAUSE_TIERS),
-        "max_shot_seconds": 60,
         "boundary_decisions": decisions,
         "algorithm_id": adapter.ALIGNMENT_ALGORITHM,
         "boundary_policy": adapter.BOUNDARY_POLICY,
@@ -93,15 +86,16 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="hongguo-dialogue-draft-") as directory:
         root = Path(directory)
         srt = root / "字幕.srt"
-        for first_end, clip_count in ((1.2, 2), (2.2, 1)):
+        for first_end in (1.2, 2.2):
             values = fixture(adapter, srt, first_end)
             clip_rows, voice_rows, subtitles = adapter.validate_dialogue_timeline(*values)
-            # 1.2s 结束的话在 2 秒气口上切开；2.2s 的话盖住两刀，整集并成一段。
-            assert len(clip_rows) == clip_count
+            # 分镜只看画面：不管台词多长、盖住几刀，3 个视觉镜头就是 3 个分镜。
+            assert len(clip_rows) == 3
+            expected_shots = [row["shot_id"] for row in clip_rows if 0.2 < row["end"] and first_end > row["start"]]
             assert len(subtitles) == len(voice_rows) == 3
             assert voice_rows[0]["segment_id"] == subtitles[0]["voice_segment_id"] == "v0"
-            assert voice_rows[0]["shot_ids"] == [clip_rows[0]["shot_id"]]
-            assert subtitles[0]["shot_ids"] == [clip_rows[0]["shot_id"]]
+            assert voice_rows[0]["shot_ids"] == expected_shots
+            assert subtitles[0]["shot_ids"] == expected_shots
             later = clip_rows[-1]["shot_id"]
             assert subtitles[1]["shot_ids"] == subtitles[2]["shot_ids"] == [later]
             assert subtitles[0]["duration_us"] == round((first_end - 0.2) * 1000000)
@@ -124,9 +118,8 @@ def main() -> int:
             ("missing subtitle", lambda a, c, t, e, s, r: e["subtitle_cues"].pop()),
             ("truncated subtitle", lambda a, c, t, e, s, r: e["subtitle_cues"][0].update(end=1)),
             ("changed subtitle text", lambda a, c, t, e, s, r: e["subtitle_cues"][0].update(text="被改了")),
-            ("cut kept inside speech", lambda a, c, t, e, s, r: a["boundary_decisions"][0].update(status="kept", tier=0)),
-            ("relaxed cut without a limit", lambda a, c, t, e, s, r: (a.update(max_shot_seconds=None), a["boundary_decisions"][-1].update(status="kept", tier=1))),
-            ("missing decision record", lambda a, c, t, e, s, r: a["boundary_decisions"].pop()),
+            ("a visual cut recorded as merged", lambda a, c, t, e, s, r: a.update(merged_boundary_count=1)),
+            ("shot with a hidden internal cut", lambda a, c, t, e, s, r: a["shots"][0].update(internal_boundaries=[{"time": .5, "frame": 12, "status": "merged"}])),
             ("old subtitle policy", lambda a, c, t, e, s, r: e.pop("subtitle_policy")),
             ("duplicated voice reference", lambda a, c, t, e, s, r: e["subtitle_cues"][1].update(voice_segment_id="v0")),
             ("sub-millisecond subtitle drift", lambda a, c, t, e, s, r: e["subtitle_cues"][0].update(start=.200001)),
@@ -160,8 +153,7 @@ def main() -> int:
         values = (aligned, clips, transcript, export, srt, raw)
         write_srt(srt, export["subtitle_cues"])
         _, gaps, subtitles = adapter.validate_dialogue_timeline(*values)
-        # The breath at 1s is a real pause on a visual cut, so that cut stays.
-        # The later visual cut sits inside the second span and is merged.
+        # Voice clips and subtitles follow the breath; shots follow the picture.
         assert len(subtitles) == len(gaps) == 4
         source_gap_rows = [row for row in gaps if row["segment_id"] in {"v0-span0", "v0-span1"}]
         assert [(row["start"], row["end"]) for row in source_gap_rows] == [(.2, .800333), (1.200123, 2.2)]
@@ -298,7 +290,7 @@ def main() -> int:
             assert result.returncode != 0, f"accepted corrupt manifest: {label}"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         run(sys.executable, checker, draft_dir)
-    print("PASS voice-paired subtitles: exact microseconds, real silence gaps, no text loss or repetition, cuts only where a breath lands on a visual cut")
+    print("PASS voice-paired subtitles: exact microseconds, real silence gaps, no text loss or repetition, shots are exactly the visual shots")
     return 0
 
 

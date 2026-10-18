@@ -3,84 +3,14 @@ const path = require('node:path');
 const fs = require('node:fs').promises;
 const { atomicJson } = require('./io');
 const { envelope, requireThat, validateIntervals } = require('./contracts');
-// A visual cut becomes an output boundary only when a real voice gap lands on it.
-// Punctuation, subtitle cues, and topic changes are not breaths.
-const ALGORITHM = 'visual-shot-on-acoustic-pause-v1';
-const POLICY = 'shot_cut_requires_acoustic_pause';
-// A breath between clauses is ~0.15-0.3 s; the voice gap left after trimming 20 ms of padding is what is measured here.
-const ACOUSTIC_PAUSE_SECONDS = 0.12;
-// A cut must sit inside the pause, not on its edge: voice-activity edges are only accurate to a few tens of ms.
-// Levels 1-2 are used only to break up a segment longer than the maximum, never to cut inside speech.
-const PAUSE_TIERS = Object.freeze([
-  Object.freeze({ level: 0, pause: ACOUSTIC_PAUSE_SECONDS, margin: 0.03 }),
-  Object.freeze({ level: 1, pause: 0.09, margin: 0.02 }),
-  Object.freeze({ level: 2, pause: 0.07, margin: 0.015 }),
-]);
-const DEFAULT_MAX_SHOT_SECONDS = 60;
+// Final shots are the visual shots: every detected picture cut is a cut. Dialogue and subtitles follow their own
+// breath-split timeline and are only indexed against the shots they overlap, never used to merge or move a cut.
+const ALGORITHM = 'visual-shots-dialogue-index-v2';
+const POLICY = 'every_visual_shot_cut';
 const SUBTITLE_POLICY = 'voice-segments-v1';
 const overlaps = (range, shot) => range.start < shot.end && range.end > shot.start;
 const sameList = (actual, expected) =>
   Array.isArray(actual) && actual.length === expected.length && actual.every((value, i) => value === expected[i]);
-function speechRanges(transcript) {
-  const voices = transcript?.voice_timeline?.segments;
-  const source = Array.isArray(voices) && voices.length ? voices : transcript?.utterances || [];
-  const ranges = source
-    .map((item) => ({ start: Number(item.start), end: Number(item.end) }))
-    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
-    .sort((a, b) => a.start - b.start || a.end - b.end);
-  const merged = [];
-  for (const range of ranges) {
-    const last = merged.at(-1);
-    if (last && range.start <= last.end + 1e-9) last.end = Math.max(last.end, range.end);
-    else merged.push({ start: range.start, end: range.end });
-  }
-  return merged;
-}
-function acousticPauses(ranges, minPause = ACOUSTIC_PAUSE_SECONDS) {
-  const pauses = [];
-  for (let index = 0; index < ranges.length - 1; index += 1) {
-    const start = ranges[index].end,
-      end = ranges[index + 1].start;
-    if (end - start >= minPause - 1e-4) pauses.push({ start, end });
-  }
-  return pauses;
-}
-function breathOnCut(time, ranges, pauses, margin = PAUSE_TIERS[0].margin) {
-  if (ranges.some((range) => range.start < time && time < range.end)) return false;
-  return pauses.some((pause) => pause.start + margin - 1e-6 <= time && time <= pause.end - margin + 1e-6);
-}
-// Split segments longer than `maxSeconds` at the best visual cut that a progressively shorter pause allows.
-// `levels[i]` is the tier at which the boundary before shots[i + 1] is kept (null = merged).
-function relaxLongSegments(shots, levels, spoken, maxSeconds) {
-  if (!(maxSeconds > 0)) return levels;
-  const tierPauses = PAUSE_TIERS.map((tier) => acousticPauses(spoken, tier.pause));
-  for (const tier of PAUSE_TIERS.slice(1)) {
-    for (;;) {
-      let split = false;
-      let first = 0;
-      for (let index = 0; index <= levels.length; index += 1) {
-        if (index < levels.length && levels[index] === null) continue;
-        const last = index; // the segment holds shots[first..last]
-        if (shots[last].end - shots[first].start > maxSeconds) {
-          let best = null;
-          for (let cut = first; cut < last; cut += 1) {
-            if (levels[cut] !== null) continue;
-            if (!breathOnCut(shots[cut + 1].start, spoken, tierPauses[tier.level], tier.margin)) continue;
-            const worst = Math.max(shots[cut].end - shots[first].start, shots[last].end - shots[cut + 1].start);
-            if (!best || worst < best.worst - 1e-9) best = { cut, worst };
-          }
-          if (best) {
-            levels[best.cut] = tier.level;
-            split = true;
-          }
-        }
-        first = index + 1;
-      }
-      if (!split) break;
-    }
-  }
-  return levels;
-}
 function dialogueIndex(range, shots) {
   const owners = shots.filter((shot) => overlaps(range, shot));
   return {
@@ -153,19 +83,16 @@ function validateDialogueIndex(aligned, transcript) {
     );
   }
 }
-function segmentStatistics(finalShots, decisions, maxShotSeconds) {
+function segmentStatistics(finalShots) {
   const lengths = finalShots.map((shot) => shot.end - shot.start);
-  const overLimit = maxShotSeconds > 0 ? finalShots.filter((shot) => shot.end - shot.start > maxShotSeconds) : [];
   return {
     final_shot_count: finalShots.length,
     longest_shot_seconds: Math.max(...lengths),
+    shortest_shot_seconds: Math.min(...lengths),
     mean_shot_seconds: lengths.reduce((sum, value) => sum + value, 0) / lengths.length,
-    relaxed_cut_count: decisions.filter((decision) => decision.tier > 0).length,
-    // Continuous speech with no usable pause: left whole rather than cut inside speech.
-    over_limit_shot_ids: overLimit.map((shot) => shot.shot_id),
   };
 }
-function align(shots, transcript, taskId, { maxShotSeconds = DEFAULT_MAX_SHOT_SECONDS } = {}) {
+function align(shots, transcript, taskId) {
   requireThat(Array.isArray(shots) && shots.length > 0, '缺少视觉分镜，无法关联台词');
   validateIntervals(shots, transcript.duration, 'shot_id');
   validateIntervals(transcript.utterances, transcript.duration, 'utterance_id');
@@ -194,52 +121,24 @@ function align(shots, transcript, taskId, { maxShotSeconds = DEFAULT_MAX_SHOT_SE
     ranges.every((r) => r.start >= shots[0].start && r.end <= shots.at(-1).end),
     '台词或人声超出视频画面覆盖范围，不能通过裁字或截断人声对齐',
   );
-  const spoken = speechRanges(transcript);
-  const tierPauses = PAUSE_TIERS.map((tier) => acousticPauses(spoken, tier.pause));
-  const levels = shots
-    .slice(1)
-    .map((shot) => (breathOnCut(shot.start, spoken, tierPauses[0], PAUSE_TIERS[0].margin) ? 0 : null));
-  relaxLongSegments(shots, levels, spoken, maxShotSeconds);
-  const decisions = shots.slice(1).map((shot, index) => {
-    const time = shot.start;
-    const level = levels[index];
-    const ongoing = spoken.some((range) => range.start < time && time < range.end);
-    const pause = tierPauses[level ?? 0].find((item) => item.start - 1e-6 <= time && time <= item.end + 1e-6);
-    return {
-      time,
-      frame: shot.start_frame,
-      status: level === null ? 'merged' : 'kept',
-      ...(level === null ? {} : { tier: level }),
-      reason:
-        level === 0
-          ? 'acoustic_pause_on_visual_cut'
-          : level > 0
-            ? 'shorter_pause_to_limit_shot_length'
-            : ongoing
-              ? 'speech_not_finished'
-              : 'no_acoustic_pause_on_visual_cut',
-      ...(pause ? { pause_start: pause.start, pause_end: pause.end } : {}),
-      utterance_ids: transcript.utterances.filter((u) => u.start < time && u.end > time).map((u) => u.utterance_id),
-      voice_segment_ids: voices.filter((v) => v.start < time && v.end > time).map((v) => v.segment_id),
-    };
-  });
-  const groups = [[shots[0]]];
-  shots.slice(1).forEach((shot, index) => {
-    if (decisions[index].status === 'kept') groups.push([shot]);
-    else groups.at(-1).push(shot);
-  });
-  const finalShots = groups.map((group, index) => ({
-    shot_id: `${taskId}:final-shot:${group[0].start_frame}-${group.at(-1).end_frame_exclusive}`,
+  const decisions = shots.slice(1).map((shot) => ({
+    time: shot.start,
+    frame: shot.start_frame,
+    status: 'kept',
+    reason: 'visual_shot_cut',
+    utterance_ids: transcript.utterances.filter((u) => u.start < shot.start && u.end > shot.start).map((u) => u.utterance_id),
+    voice_segment_ids: voices.filter((v) => v.start < shot.start && v.end > shot.start).map((v) => v.segment_id),
+  }));
+  const finalShots = shots.map((shot, index) => ({
+    shot_id: `${taskId}:final-shot:${shot.start_frame}-${shot.end_frame_exclusive}`,
     order: index + 1,
-    start_frame: group[0].start_frame,
-    end_frame_exclusive: group.at(-1).end_frame_exclusive,
-    start: group[0].start,
-    end: group.at(-1).end,
-    source_shot_ids: group.map((shot) => shot.shot_id),
-    internal_boundaries: group
-      .slice(1)
-      .map((shot) => ({ time: shot.start, frame: shot.start_frame, status: 'merged' })),
-    adjustment: group.length === 1 ? 'visual_cut_on_acoustic_pause' : 'merged_until_breath',
+    start_frame: shot.start_frame,
+    end_frame_exclusive: shot.end_frame_exclusive,
+    start: shot.start,
+    end: shot.end,
+    source_shot_ids: [shot.shot_id],
+    internal_boundaries: [],
+    adjustment: 'visual_cut',
     utterance_ids: [],
     voice_segment_ids: [],
   }));
@@ -259,7 +158,6 @@ function align(shots, transcript, taskId, { maxShotSeconds = DEFAULT_MAX_SHOT_SE
       });
     } else owners.forEach((owner) => owner.voice_segment_ids.push(range.id));
   }
-  const mergedBoundaryCount = decisions.filter((decision) => decision.status === 'merged').length;
   const result = envelope(taskId, {
     algorithm_id: ALGORITHM,
     boundary_policy: POLICY,
@@ -267,10 +165,8 @@ function align(shots, transcript, taskId, { maxShotSeconds = DEFAULT_MAX_SHOT_SE
     duration: transcript.duration,
     frame_count: shots.at(-1).end_frame_exclusive,
     raw_shot_count: shots.length,
-    merged_boundary_count: mergedBoundaryCount,
-    pause_tiers: PAUSE_TIERS,
-    max_shot_seconds: maxShotSeconds > 0 ? maxShotSeconds : null,
-    statistics: segmentStatistics(finalShots, decisions, maxShotSeconds),
+    merged_boundary_count: 0,
+    statistics: segmentStatistics(finalShots),
     boundary_decisions: decisions,
     shots: finalShots,
     associations: matches,
@@ -280,8 +176,8 @@ function align(shots, transcript, taskId, { maxShotSeconds = DEFAULT_MAX_SHOT_SE
   return result;
 }
 async function alignment(ctx, shots, transcript) {
-  ctx.onProgress?.({ progress: 0, message: '只在气口落在画面切镜上时切断，并建立台词关联' });
-  const result = align(shots.shots, transcript, ctx.taskId, { maxShotSeconds: ctx.params?.max_shot_seconds });
+  ctx.onProgress?.({ progress: 0, message: '按画面切点分镜，并建立台词关联' });
+  const result = align(shots.shots, transcript, ctx.taskId);
   result.source_algorithm_id = shots.algorithm_id;
   result.review_items = shots.review_items || [];
   result.warnings = [...(shots.warnings || []), ...(transcript.warnings || [])];
@@ -289,7 +185,7 @@ async function alignment(ctx, shots, transcript) {
   await atomicJson(path.join(ctx.dir, 'aligned.json'), result);
   ctx.onProgress?.({
     progress: 100,
-    message: `输出 ${result.shots.length} 段，并掉 ${result.merged_boundary_count} 个没落在气口上的切镜；最长一段 ${result.statistics.longest_shot_seconds.toFixed(1)} 秒；已关联 ${result.associations.length} 条台词`,
+    message: `输出 ${result.shots.length} 个分镜；最长 ${result.statistics.longest_shot_seconds.toFixed(1)} 秒、最短 ${result.statistics.shortest_shot_seconds.toFixed(1)} 秒；已关联 ${result.associations.length} 条台词`,
   });
   return result;
 }
@@ -482,7 +378,7 @@ async function exportsModule(ctx, aligned, clips, transcript, clipsDir, transcri
     clips.boundary_policy === POLICY &&
       clips.alignment_algorithm_id === ALGORITHM &&
       clips.clips.length === aligned.shots.length,
-    '切片尚未按气口切镜导出，请重新导出分镜',
+    '切片尚未按当前分镜逻辑导出，请重新导出分镜',
   );
   const mediaFiles = [];
   for (const [index, clip] of clips.clips.entries()) {
@@ -534,18 +430,12 @@ async function exportsModule(ctx, aligned, clips, transcript, clipsDir, transcri
   return result;
 }
 module.exports = {
-  PAUSE_TIERS,
-  DEFAULT_MAX_SHOT_SECONDS,
   align,
   alignment,
   srt,
   exportsModule,
   voiceSubtitleCues,
-  speechRanges,
-  acousticPauses,
-  breathOnCut,
   ALGORITHM,
   POLICY,
   SUBTITLE_POLICY,
-  ACOUSTIC_PAUSE_SECONDS,
 };

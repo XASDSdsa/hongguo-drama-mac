@@ -1211,8 +1211,8 @@ function workflowDraftExists(record) {
     if (!fs.existsSync(manifestPath)) return false;
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     return (
-      manifest.boundary_policy === 'shot_cut_requires_acoustic_pause' &&
-      manifest.alignment_algorithm === 'visual-shot-on-acoustic-pause-v1'
+      manifest.boundary_policy === 'every_visual_shot_cut' &&
+      manifest.alignment_algorithm === 'visual-shots-dialogue-index-v2'
     );
   } catch (_) {
     return false;
@@ -1260,7 +1260,7 @@ function getSeriesWorkflowStatus(seriesId) {
       record.stage = 'jianying';
       record.error = inputChanged
         ? '输入视频已变化，请重新生成工作流'
-        : '剪映草稿缺失或仍按画面切点直接切断，请继续完整流程按气口重切';
+        : '剪映草稿缺失或不是按最新分镜逻辑生成的，请重新生成';
       record.updatedAt = Date.now();
     }
     return { ...record, episodeIndex };
@@ -4054,7 +4054,7 @@ async function cleanupAndLog(dir, files, reason) {
     libLog(dir, 'info', `剪映草稿：${reason}，已清理 ${count} 集的分析中间文件，释放 ${formatBytes(freed)}`, 'side');
 }
 
-/** 一句话讲清楚这一集是怎么切的：气口找到几个、台词切了几刀、画面切点留了几个、并掉几个。 */
+/** 一句话讲清楚这一集是怎么切的：画面分成几个镜头，文案按气口断成几条。 */
 function describeStructure(structure) {
   const m = structure?.modules || {};
   const speech = m.transcript?.summary || {};
@@ -4064,11 +4064,9 @@ function describeStructure(structure) {
     parts.push(`检测到 ${speech.acoustic_pauses} 处气口，按气口拆开 ${speech.pause_cuts ?? 0} 次`);
   }
   if (Number.isFinite(cut.raw_shot_count)) {
-    parts.push(
-      `画面切点 ${cut.raw_shot_count - 1} 个，留下 ${cut.kept_boundary_count ?? 0} 个，并掉 ${cut.merged_boundary_count ?? 0} 个没落在气口上的`,
-    );
+    parts.push(`画面切点 ${cut.raw_shot_count - 1} 个，全部作为分镜边界`);
   }
-  if (Number.isFinite(cut.shot_count)) parts.push(`最终 ${cut.shot_count ?? '?'} 段`);
+  if (Number.isFinite(cut.shot_count)) parts.push(`共 ${cut.shot_count ?? '?'} 个分镜`);
   return parts.length ? parts.join('；') : '分析完成';
 }
 

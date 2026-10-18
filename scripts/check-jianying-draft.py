@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def validate_dialogue_tracks(content: dict, manifest: dict, tracks: dict) -> None:
-    if manifest.get("boundary_policy") != "shot_cut_requires_acoustic_pause" or manifest.get("alignment_algorithm") != "visual-shot-on-acoustic-pause-v1":
+    if manifest.get("boundary_policy") != "every_visual_shot_cut" or manifest.get("alignment_algorithm") != "visual-shots-dialogue-index-v2":
         raise SystemExit("草稿未按气口落在切镜上才切，请继续完整流程后重新生成。")
     expected_tracks = manifest["tracks"]
     video_rows = expected_tracks["video"].get("clips", [])

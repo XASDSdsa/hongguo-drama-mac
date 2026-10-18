@@ -23,7 +23,7 @@ const checks = [
   ],
   ['主进程会校验剪映草稿', main.includes('check-jianying-draft.py') && main.includes('workflowDraftExists')],
   [
-    '工作流要求气口落在切镜上才切断',
+    '工作流只接受按最新分镜逻辑生成的草稿',
     main.includes(`manifest.boundary_policy === '${POLICY}'`) &&
       main.includes(`manifest.alignment_algorithm === '${ALGORITHM}'`),
   ],

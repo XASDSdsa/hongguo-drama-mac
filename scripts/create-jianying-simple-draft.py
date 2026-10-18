@@ -226,10 +226,8 @@ def main() -> int:
             logic.update({
                 "boundary_policy": data.get("boundary_policy"),
                 "alignment_algorithm": data.get("algorithm_id"),
-                "pause_tiers": data.get("pause_tiers"),
                 "visual_shots": data.get("raw_shot_count"),
                 "final_shots": len(data.get("shots") or []),
-                "merged_boundaries": data.get("merged_boundary_count"),
             })
         else:
             summary = data.get("alignment_summary") or {}

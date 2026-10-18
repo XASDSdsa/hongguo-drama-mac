@@ -8,7 +8,7 @@ async function clips(ctx, media, shotResult) {
     shotResult.algorithm_id === ALGORITHM && shotResult.boundary_policy === POLICY,
     '请先关联台词与视觉分镜，再导出分镜视频',
   );
-  requireThat(Array.isArray(shotResult.shots) && shotResult.shots.length > 0, '缺少按气口切断后的分镜');
+  requireThat(Array.isArray(shotResult.shots) && shotResult.shots.length > 0, '缺少分镜');
   const mergedBoundaries = shotResult.shots.reduce(
     (sum, shot) => sum + (Array.isArray(shot.internal_boundaries) ? shot.internal_boundaries.length : 0),
     0,
@@ -16,7 +16,7 @@ async function clips(ctx, media, shotResult) {
   requireThat(
     shotResult.raw_shot_count === shotResult.shots.length + mergedBoundaries &&
       shotResult.merged_boundary_count === mergedBoundaries,
-    '气口切断记账和视觉镜头数量不一致',
+    '分镜记账和视觉镜头数量不一致',
   );
   const sourceIds = new Set();
   let previousFrame = 0;
@@ -36,7 +36,7 @@ async function clips(ctx, media, shotResult) {
         shot.source_shot_ids.every((id) => !sourceIds.has(id)) &&
         Array.isArray(shot.internal_boundaries) &&
         shot.internal_boundaries.length === shot.source_shot_ids.length - 1,
-      '没落在气口上的切镜必须并进同一段，且不能重复引用视觉镜头',
+      '每个分镜必须对应一个视觉镜头，且不能重复引用',
     );
     requireThat(
       Math.abs(shot.start - media.frames[shot.start_frame].start) < 0.000001 &&
@@ -62,7 +62,7 @@ async function clips(ctx, media, shotResult) {
   const progressOf = new Array(total).fill(0);
   const emitProgress = (shot) =>
     ctx.onProgress?.({
-      message: `分镜 ${shot.order}/${total}（气口落在切镜上才切开）`,
+      message: `分镜 ${shot.order}/${total}`,
       progress: (progressOf.reduce((sum, value) => sum + value, 0) / total) * 100,
     });
   const abort = new AbortController();

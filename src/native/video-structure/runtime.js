@@ -4,7 +4,6 @@ const path = require('node:path');
 const os = require('node:os');
 const { run, blocked, sha256 } = require('./io');
 const { resolveBundledRuntime } = require('../faster-whisper');
-const { DEFAULT_MAX_SHOT_SECONDS } = require('./alignment');
 const SENTENCE_ALIGNMENT = 'paraformer-ct-global-whisper-audio-pause-v5';
 const root = path.resolve(__dirname, '../../..');
 function runtime(settings = {}) {
@@ -83,12 +82,6 @@ function params(id, settings, rt) {
       sentence_device: 'cpu',
       sentence_compute_type: 'int8',
     };
-  if (id === 'alignment') {
-    // 单段最长秒数；0 表示不限制。超过时会用更短的停顿在已有画面切点处拆开，但绝不在说话中间切。
-    const maxShot = Number(settings.structure_max_shot_seconds ?? DEFAULT_MAX_SHOT_SECONDS);
-    if (!Number.isFinite(maxShot) || maxShot < 0 || maxShot > 3600) throw new Error('单段最长秒数必须为 0–3600');
-    return { max_shot_seconds: maxShot };
-  }
   return {};
 }
 async function identity(id, config, rt, signal) {
