@@ -328,6 +328,28 @@ async function probeMedia(ffprobePath, file, signal) {
   };
 }
 
+const ENCODER_RETRY_DELAYS = [1500, 4000];
+
+/** 从 FFmpeg 的一大段输出里挑出真正的报错行：输入文件信息放在最前面，直接截头会把原因截掉。 */
+function keyDiagnostics(message) {
+  const lines = String(message)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const exit = lines.find((line) => /^ffmpeg 退出码/.test(line)) || '';
+  const hits = lines.filter(
+    (line) =>
+      !/^(Input #|Stream #|Metadata:|Duration:|major_brand|minor_version|compatible_brands|encoder\s*:|comment\s*:)/i.test(
+        line,
+      ) &&
+      /error|invalid|fail|cannot|can't|unable|not supported|no such|unknown|incompatible|out of range|too many|session/i.test(
+        line,
+      ),
+  );
+  const picked = hits.slice(-3).join(' / ');
+  return (picked || lines.slice(-2).join(' / ') || exit).slice(0, 300);
+}
+
 function tailPush(state, chunk) {
   state.text += chunk.toString('utf8');
   if (state.text.length > 10000) state.text = state.text.slice(-10000);
@@ -506,24 +528,43 @@ async function runJob({
       `[开始] ${path.basename(inputs[0])}${pieces ? ` 等 ${pieces.length} 段` : ''} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`,
     );
     onStage?.('encoding');
-    try {
-      await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
-    } catch (error) {
-      if (signal?.aborted) throw new Error('已取消');
-      const nvencApi =
-        encoder === 'nvenc' &&
-        error.message.match(
-          /Driver does not support the required nvenc API version\.\s*Required:\s*([\d.]+)\s+Found:\s*([\d.]+)/i,
-        );
-      if (nvencApi) {
-        throw new Error(
-          `NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`,
-        );
+    // 硬件编码器同时开多路时偶尔会初始化失败（同一秒起 4 路最常见），隔几秒重来一次就好了；
+    // 重试用的仍是同一个编码器，不会悄悄换成别的。显卡驱动版本不兼容这类必然失败的不重试。
+    const retryable = encoder !== 'cpu' && encoder !== 'auto';
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
+        break;
+      } catch (error) {
+        if (signal?.aborted) throw new Error('已取消');
+        const nvencApi =
+          encoder === 'nvenc' &&
+          error.message.match(
+            /Driver does not support the required nvenc API version\.\s*Required:\s*([\d.]+)\s+Found:\s*([\d.]+)/i,
+          );
+        if (nvencApi) {
+          throw new Error(
+            `NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`,
+          );
+        }
+        if (retryable && attempt < ENCODER_RETRY_DELAYS.length) {
+          const wait =
+            ENCODER_RETRY_DELAYS[attempt] + Math.floor(Math.random() * Math.min(1500, ENCODER_RETRY_DELAYS[attempt]));
+          onLog?.(
+            `[重试] ${encoder} 编码失败（${keyDiagnostics(error.message)}），${Math.round(wait / 100) / 10} 秒后第 ${attempt + 2} 次尝试`,
+          );
+          onProgress?.(0);
+          await new Promise((resolve) => setTimeout(resolve, wait));
+          if (signal?.aborted) throw new Error('已取消');
+          continue;
+        }
+        if (encoder !== 'cpu') {
+          throw new Error(
+            `${encoder} 编码失败${attempt ? `（已重试 ${attempt} 次）` : ''}，未自动切换编码器。原因：${keyDiagnostics(error.message)}\n${error.message}`,
+          );
+        }
+        throw error;
       }
-      if (encoder !== 'cpu') {
-        throw new Error(`${encoder} 编码失败，未自动切换编码器，请检查对应显卡和驱动。\n${error.message}`);
-      }
-      throw error;
     }
     if (signal?.aborted) throw new Error('已取消');
     onStage?.('validating');
@@ -550,6 +591,8 @@ async function runJob({
 
 module.exports = {
   DEFAULTS,
+  ENCODER_RETRY_DELAYS,
+  keyDiagnostics,
   validateOptions,
   rollParams,
   detectEncoder,

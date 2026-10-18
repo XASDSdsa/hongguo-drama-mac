@@ -2820,7 +2820,8 @@ function pumpQuchongBatch(batch) {
         task.error = error?.message || String(error);
         task.logBuffer = task.logBuffer || [];
         task.logBuffer.push(`[${task.status === 'failed' ? '失败' : '停止'}] ${task.error}`);
-        if (task.status === 'failed') logQuchongTask(batch, task, 'error', `失败：${task.error}`);
+        if (task.status === 'failed')
+          logQuchongTask(batch, task, 'error', `失败：${String(task.error).split('\n')[0]}`);
         else logQuchongTask(batch, task, 'warn', '已停止');
       })
       .finally(() => {
