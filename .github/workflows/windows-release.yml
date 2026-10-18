@@ -7,13 +7,59 @@ on:
         description: Branch, tag or commit to build.
         required: false
         default: ''
+      tag:
+        description: Existing GitHub release tag to receive the Windows assets (empty = keep only a workflow artifact). Never v1.1.30.
+        required: false
+        default: ''
+      artifact_run:
+        description: Skip the build; publish the hongguo-windows artifact of this earlier run id to the tag.
+        required: false
+        default: ''
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 jobs:
+  publish-existing:
+    if: inputs.artifact_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Refuse the official v1.1.30 release
+        if: inputs.tag == '' || inputs.tag == 'v1.1.30'
+        shell: bash
+        run: |
+          echo "A release tag other than v1.1.30 is required to publish." >&2
+          exit 1
+      - uses: actions/download-artifact@v7
+        with:
+          name: hongguo-windows
+          run-id: ${{ inputs.artifact_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/win
+      - name: Upload Windows assets to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/upload"
+          for pattern in '*-win-x64.zip' '*-Setup.exe' '*-portable.exe'; do
+            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "hongguo-downloader-*$pattern" | head -n 1)
+            test -n "$f" || { echo "missing $pattern" >&2; exit 1; }
+            cp "$f" "$RUNNER_TEMP/upload/"
+          done
+          (cd "$RUNNER_TEMP/upload" && sha256sum * > hongguo-downloader-windows.sha256)
+          ls -la "$RUNNER_TEMP/upload"
+          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ inputs.tag }}" "$RUNNER_TEMP"/upload/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "${{ inputs.tag }}" "$RUNNER_TEMP"/upload/* --repo "${{ github.repository }}" --prerelease --title "${{ inputs.tag }}" --notes "Windows build from ${GITHUB_SHA}."
+          fi
+
   build-windows:
+    if: inputs.artifact_run == ''
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
@@ -196,6 +242,20 @@ jobs:
             dist/*.zip
             dist/release/*
           if-no-files-found: error
+
+      - name: Upload Windows assets to the release
+        if: inputs.tag != '' && inputs.tag != 'v1.1.30'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          (cd dist/release && sha256sum hongguo-downloader-* > hongguo-downloader-windows.sha256)
+          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --prerelease --title "${{ inputs.tag }}" --notes "Windows build from ${GITHUB_SHA}."
+          fi
 
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
