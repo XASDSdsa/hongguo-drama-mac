@@ -51,12 +51,17 @@ jobs:
             cp "$f" "$RUNNER_TEMP/upload/"
           done
           (cd "$RUNNER_TEMP/upload" && sha256sum * > hongguo-downloader-windows.sha256)
-          ls -la "$RUNNER_TEMP/upload"
-          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "${{ inputs.tag }}" "$RUNNER_TEMP"/upload/* --repo "${{ github.repository }}" --clobber
-          else
-            gh release create "${{ inputs.tag }}" "$RUNNER_TEMP"/upload/* --repo "${{ github.repository }}" --prerelease --title "${{ inputs.tag }}" --notes "Windows build from ${GITHUB_SHA}."
-          fi
+          sizes=$(ls -l "$RUNNER_TEMP/upload" | awk 'NR>1{printf "%s %s; ", $5, $9}')
+          echo "::notice title=asset sizes::$sizes"
+          gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || gh release create "${{ inputs.tag }}" --repo "${{ github.repository }}" --prerelease --title "${{ inputs.tag }}" --notes "Windows build from ${GITHUB_SHA}."
+          failed=0
+          for f in "$RUNNER_TEMP"/upload/*; do
+            if ! gh release upload "${{ inputs.tag }}" "$f" --repo "${{ github.repository }}" --clobber > "$RUNNER_TEMP/up.log" 2>&1; then
+              failed=1
+              echo "::error title=upload $(basename "$f")::$(tail -n 8 "$RUNNER_TEMP/up.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+            fi
+          done
+          exit $failed
 
   build-windows:
     if: inputs.artifact_run == ''
