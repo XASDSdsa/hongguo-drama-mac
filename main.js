@@ -2731,13 +2731,11 @@ function finishQuchongBatch(batch) {
         mode: draftTask.mode,
         scope: draftTask.scope,
         prompts: draftTask.prompts,
-      }).then(
-        (started) => {
-          if (!started.success) {
-            libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
-          }
-        },
-      );
+      }).then((started) => {
+        if (!started.success) {
+          libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
+        }
+      });
     } else libLog(batch.libraryDir, 'warn', '剪映草稿：这一批没有成功的去重成品，没有生成草稿', 'side');
   }
   sendToRenderer('quchong-complete', {
@@ -2782,7 +2780,6 @@ function pumpQuchongBatch(batch) {
         src: task.src,
         dst: task.dst,
         segments: task.segments || null,
-        speed: task.speed ?? null,
         bgm: batch.bgm,
         opts: batch.opts,
         signal: controller.signal,
@@ -3133,8 +3130,8 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
         src: segment.file,
         start: segment.start,
         duration: segment.duration,
+        speed: segment.speed,
       })),
-      speed: piece.speed,
       label: path.basename(destinations[index], '.mp4'),
       dst: destinations[index],
     })),
@@ -4121,7 +4118,12 @@ async function deriveLibraryPrompts(job, file, item, structure) {
   }
   const model = String(settings.ark_video_model || '').trim();
   const log = (level, text) =>
-    libLog(key, level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info', `视频提示词：${label}：${text}`, 'side');
+    libLog(
+      key,
+      level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info',
+      `视频提示词：${label}：${text}`,
+      'side',
+    );
   item.message = '反推视频提示词';
   item.detail = '';
   item.stageStartedAt = Date.now();
@@ -4154,7 +4156,10 @@ async function deriveLibraryPrompts(job, file, item, structure) {
       signal: job.controller.signal,
     });
     if (result.failed) {
-      log('warn', `共 ${result.segments} 段，有 ${result.failed} 段没有生成，重新开始一次会只补这几段 → ${result.file}`);
+      log(
+        'warn',
+        `共 ${result.segments} 段，有 ${result.failed} 段没有生成，重新开始一次会只补这几段 → ${result.file}`,
+      );
     } else log('ok', `已生成 → ${result.htmlFile || result.file}`);
   } catch (error) {
     if (job.cancelled || job.controller.signal.aborted) throw Object.assign(new Error('已停止'), { stopped: true });

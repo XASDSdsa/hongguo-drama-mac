@@ -164,7 +164,7 @@ function audioChain({ safe, speed, pitch, eq, volume, audioDelay, padTo }) {
   return af;
 }
 
-function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, segments, audioMode = 'full' }) {
+function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, audioMode = 'full' }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
   // 不改分辨率：成品和原视频一样大（宽高取偶数）。裁掉边缘后再放回原尺寸，不加黑边、不横竖屏改构图。
@@ -186,29 +186,8 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
     `crop=iw*${opts.crop_ratio}:ih*${opts.crop_ratio}:x=(iw-ow)*${r.CX.toFixed(6)}:y=(ih-oh)*${r.CY.toFixed(6)}`,
   ];
   const filters = [];
-  // 多个片段时，先在滤镜图里把它们按顺序接成一条，后面的处理和单个文件完全一致。
-  const pieces = Array.isArray(segments) && segments.length ? segments : null;
-  const joined = !!pieces && pieces.length > 1;
-  if (joined) {
-    const width0 = media.video_width,
-      height0 = media.video_height;
-    const labels = [];
-    pieces.forEach((_, index) => {
-      // 先缩放再定 setsar：缩放会按新旧尺寸改写像素宽高比，顺序反了各段的 SAR 对不上，concat 会直接报 Invalid argument。
-      filters.push(`[${index}:V:0]scale=${width0}:${height0},setsar=1[sv${index}]`);
-      labels.push(`[sv${index}]`);
-      if (hasAudio) {
-        filters.push(
-          `[${index}:a:0]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[sa${index}]`,
-        );
-        labels.push(`[sa${index}]`);
-      }
-    });
-    filters.push(`${labels.join('')}concat=n=${pieces.length}:v=1:a=${hasAudio ? 1 : 0}[cv]${hasAudio ? '[ca]' : ''}`);
-  }
-  const sourceVideo = joined ? '[cv]' : '[0:V:0]';
-  const sourceAudio = joined ? '[ca]' : '[0:a:0]';
-  const videoInput = sourceVideo;
+  const videoInput = '[0:V:0]';
+  const sourceAudio = '[0:a:0]';
   if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
   // 裁剪和旋转会改变尺寸，这里统一缩回原来的大小。
   vf.push(`scale=${width}:${height}`, 'setsar=1');
@@ -226,17 +205,8 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   if (opts.black_intro) vf.push(`fade=t=in:st=${videoDelay.toFixed(6)}:d=0.3`);
 
   filters.push(`${videoInput}${vf.join(',')}[v]`);
-  const inputs = pieces
-    ? pieces.flatMap((piece) => [
-        '-ss',
-        Number(piece.start).toFixed(3),
-        '-t',
-        Number(piece.duration).toFixed(3),
-        '-i',
-        piece.src,
-      ])
-    : ['-i', src];
-  const bgmIndex = pieces ? pieces.length : 1;
+  const inputs = ['-i', src];
+  const bgmIndex = 1;
   const audioOutput = hasAudio || (Boolean(bgm) && !external);
   if (hasAudio) {
     // safe：音频编码反复失败时的最简音频链——只变速，不改音高、不均衡、不补静音，换取这一集能出成品。
@@ -475,13 +445,12 @@ async function sameFileOrPath(src, dst) {
 
 /**
  * 保底：同一条命令里音频编码反复失败时，视频和音频分开做。
- * 视频照常出（不带声音）；每段原声单独解成标准 PCM 再接起来，最后才编码成 AAC，和视频直接封装在一起。
+ * 视频照常出（不带声音）；原声单独解成标准 PCM，最后才编码成 AAC，和视频直接封装在一起。
  * 这样 AAC 编码器吃到的是干净、规整的音频，不受原视频里各种怪时间戳、怪声道的影响。
  */
 async function renderSeparately({
   ffmpegPath,
   build,
-  pieces,
   src,
   bgm,
   options,
@@ -511,52 +480,9 @@ async function renderSeparately({
       onLog,
     );
     onStage?.('finalizing');
-    const parts = pieces
-      ? pieces.map((piece) => ({ src: piece.src, start: Number(piece.start), duration: Number(piece.duration) }))
-      : [{ src, start: 0, duration: 0 }];
-    const wavs = [];
-    let silent = 0;
-    for (let i = 0; i < parts.length; i += 1) {
-      const part = parts[i];
-      const wav = path.join(work, `p${i}.wav`);
-      const cut = part.duration > 0 ? ['-t', part.duration.toFixed(3)] : [];
-      try {
-        await quiet([
-          ...(part.duration > 0 ? ['-ss', part.start.toFixed(3)] : []),
-          ...cut,
-          '-i',
-          part.src,
-          '-map',
-          '0:a:0',
-          '-vn',
-          '-sn',
-          '-ac',
-          '2',
-          '-ar',
-          '44100',
-          // 这一段原声比画面短时补静音，保证每段都和画面一样长，接起来后音画不会错位。
-          ...(part.duration > 0 ? ['-af', `apad=whole_dur=${part.duration.toFixed(3)}`, ...cut] : []),
-          '-c:a',
-          'pcm_s16le',
-          wav,
-        ]);
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        if (!(part.duration > 0)) throw error;
-        silent += 1;
-        onLog?.(`[提示] 第 ${i + 1} 段的原声读不出来（${keyDiagnostics(error.message)}），这一段补静音`);
-        await quiet(['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', ...cut, '-c:a', 'pcm_s16le', wav]);
-      }
-      wavs.push(wav);
-    }
-    if (silent === parts.length) throw new Error('所有片段的原声都读不出来');
-    let full = wavs[0];
-    if (wavs.length > 1) {
-      full = path.join(work, 'full.wav');
-      const list = path.join(work, 'list.txt');
-      await fsp.writeFile(list, wavs.map((file) => `file '${path.basename(file)}'`).join('\n'));
-      await quiet(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', full]);
-    }
+    // 原声单独解成标准 PCM（44.1k 立体声），后面的编码只吃这份干净的音频。
+    const full = path.join(work, 'audio.wav');
+    await quiet(['-i', src, '-map', '0:a:0', '-vn', '-sn', '-ac', '2', '-ar', '44100', '-c:a', 'pcm_s16le', full]);
     const audioFile = path.join(work, 'audio.m4a');
     const encode = async (safe) => {
       const filters = [
@@ -620,19 +546,18 @@ async function renderSeparately({
       '+faststart',
       output,
     ]);
-    if (silent) onLog?.(`[提示] 共有 ${silent} 段原声读不出来，已补静音，成品里这几段没有声音`);
     return command;
   } finally {
     await fsp.rm(work, { recursive: true, force: true });
   }
 }
 
-async function runJob({
+/** 单个视频：加去重特效，重新编码成成品。 */
+async function encodeOne({
   ffmpegPath,
   ffprobePath,
   src,
   dst,
-  segments = null,
   speed = null,
   bgm = null,
   opts,
@@ -642,15 +567,7 @@ async function runJob({
   onStage,
 }) {
   const options = validateOptions(opts);
-  // segments：[{ src, start, duration }]，按顺序接成一条再处理；只传 src 就是整个文件。
-  const pieces = Array.isArray(segments) && segments.length ? segments : null;
-  const inputs = pieces ? pieces.map((piece) => piece.src) : [src];
-  if (pieces) {
-    for (const piece of pieces) {
-      if (!Number.isFinite(piece.start) || piece.start < 0 || !Number.isFinite(piece.duration) || piece.duration <= 0)
-        throw new Error('片段时间无效');
-    }
-  }
+  const inputs = [src];
   if (inputs.some((file) => !path.isAbsolute(file)) || !path.isAbsolute(dst))
     throw new Error('输入和输出路径必须是绝对路径');
   for (const file of inputs) {
@@ -659,30 +576,8 @@ async function runJob({
   if (fs.existsSync(dst)) throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
   if (speed != null && !(Number.isFinite(speed) && speed >= 0.5 && speed <= 2)) throw new Error('变速倍数无效');
   onStage?.('probing');
-  let media;
-  if (pieces) {
-    const probed = new Map();
-    for (const file of new Set(inputs)) probed.set(file, await probeMedia(ffprobePath, file, signal));
-    const first = probed.get(inputs[0]);
-    for (const [file, info] of probed) if (!info.has_video) throw new Error(`输入没有可用视频轨：${file}`);
-    const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
-    if (withAudio !== 0 && withAudio !== probed.size) throw new Error('各集的音轨不一致，无法拼接');
-    const total = pieces.reduce((sum, piece) => sum + piece.duration, 0);
-    // 拼接后的时间轴从 0 开始，音画起点都是 0。
-    media = {
-      duration: total,
-      video_duration: total,
-      has_video: true,
-      has_audio: withAudio > 0,
-      video_width: first.video_width,
-      video_height: first.video_height,
-      video_start: 0,
-      audio_start: 0,
-    };
-  } else {
-    media = await probeMedia(ffprobePath, src, signal);
-    if (!media.has_video) throw new Error(`输入没有可用视频轨：${src}`);
-  }
+  const media = await probeMedia(ffprobePath, src, signal);
+  if (!media.has_video) throw new Error(`输入没有可用视频轨：${src}`);
   if (bgm) {
     const music = await probeMedia(ffprobePath, bgm, signal);
     if (!music.has_audio) throw new Error(`BGM 没有可用音频轨：${bgm}`);
@@ -692,7 +587,7 @@ async function runJob({
   let rolled;
   try {
     rolled = rollParams(options);
-    // 重新拆分时变速倍数由规划阶段按成品时长算好，这里不再随机。
+    // 重新拆分时变速已经在前一步做完，这一步固定按 1 倍走。
     if (speed != null) rolled.SPEED = speed;
     if (signal?.aborted) throw new Error('已取消');
     const encoder = await resolveEncoder(options.encoder, process.platform);
@@ -705,13 +600,10 @@ async function runJob({
         rolled,
         media,
         encoder,
-        segments: pieces,
         audioMode,
       });
     let command = build('full');
-    onLog?.(
-      `[开始] ${path.basename(inputs[0])}${pieces ? ` 等 ${pieces.length} 段` : ''} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`,
-    );
+    onLog?.(`[开始] ${path.basename(dst)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
     onStage?.('encoding');
     // 硬件编码器同时开多路时偶尔会初始化失败（同一秒起 4 路最常见），隔几秒重来一次就好了；
     // 重试用的仍是同一个编码器，不会悄悄换成别的。显卡驱动版本不兼容这类必然失败的不重试。
@@ -758,7 +650,6 @@ async function runJob({
               await renderSeparately({
                 ffmpegPath,
                 build,
-                pieces,
                 src: inputs[0],
                 bgm,
                 options,
@@ -821,6 +712,135 @@ async function runJob({
     try {
       await fsp.unlink(tmp);
     } catch (_) {}
+  }
+}
+
+/**
+ * 第一步（重新拆分）：每一段按自己的倍数变速，首尾接成一集，存成「去重前」的中间文件。
+ * 视频用高质量 x264，声音存成 PCM（不经过 AAC），所以这一步不会碰到 AAC 编码；
+ * 后面的去重特效和重新编码只面对这一个干净的文件。
+ */
+function buildPrepareCommand({ segments, media, dst }) {
+  const even = (value) => Math.max(2, Math.floor(Number(value) / 2) * 2);
+  const width = even(media.video_width);
+  const height = even(media.video_height);
+  const filters = [];
+  const labels = [];
+  segments.forEach((segment, index) => {
+    const speed = segment.speed ?? 1;
+    // 先缩放再定 setsar：缩放会按新旧尺寸改写像素宽高比，顺序反了各段的 SAR 对不上，concat 会直接报 Invalid argument。
+    filters.push(
+      `[${index}:V:0]scale=${width}:${height},setsar=1,setpts=(PTS-STARTPTS)/${speed.toFixed(6)}[sv${index}]`,
+    );
+    labels.push(`[sv${index}]`);
+    if (media.has_audio) {
+      const tempo = speed === 1 ? '' : `,atempo=${speed.toFixed(6)}`;
+      filters.push(
+        `[${index}:a:0]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS${tempo}[sa${index}]`,
+      );
+      labels.push(`[sa${index}]`);
+    }
+  });
+  filters.push(
+    `${labels.join('')}concat=n=${segments.length}:v=1:a=${media.has_audio ? 1 : 0}[v]${media.has_audio ? '[a]' : ''}`,
+  );
+  const args = [
+    '-hide_banner',
+    '-loglevel',
+    'info',
+    '-nostdin',
+    '-y',
+    ...segments.flatMap((segment) => [
+      '-ss',
+      Number(segment.start).toFixed(3),
+      '-t',
+      Number(segment.duration).toFixed(3),
+      '-i',
+      segment.src,
+    ]),
+    '-filter_complex',
+    filters.join(';'),
+    '-map',
+    '[v]',
+  ];
+  if (media.has_audio) args.push('-map', '[a]');
+  args.push('-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p');
+  if (media.has_audio) args.push('-c:a', 'pcm_s16le');
+  args.push('-progress', 'pipe:1', '-nostats', dst);
+  const duration = segments.reduce((sum, segment) => sum + segment.duration / (segment.speed ?? 1), 0);
+  return { args, duration, filters: filters.join(';') };
+}
+
+/**
+ * 一集成品。只传 src：整个文件加去重特效、重新编码。
+ * 传 segments（[{ src, start, duration, speed }]，重新拆分）：
+ *   ① 各段按各自倍数变速并接成一集，存成去重前的中间文件；
+ *   ② 对中间文件统一加去重特效、重新编码，成品写好后中间文件删除。
+ */
+async function runJob(args) {
+  const { segments } = args;
+  if (!Array.isArray(segments) || !segments.length) return encodeOne(args);
+  const { ffmpegPath, ffprobePath, dst, signal, onProgress, onLog, onStage } = args;
+  const parts = segments.map((segment) => ({
+    src: segment.src,
+    start: Number(segment.start),
+    duration: Number(segment.duration),
+    speed: segment.speed == null ? 1 : Number(segment.speed),
+  }));
+  for (const part of parts) {
+    if (!Number.isFinite(part.start) || part.start < 0 || !Number.isFinite(part.duration) || part.duration <= 0)
+      throw new Error('片段时间无效');
+    if (!(part.speed >= 0.5 && part.speed <= 2)) throw new Error('变速倍数无效');
+  }
+  const files = [...new Set(parts.map((part) => part.src))];
+  if (files.some((file) => !path.isAbsolute(file)) || !path.isAbsolute(dst))
+    throw new Error('输入和输出路径必须是绝对路径');
+  for (const file of files) {
+    if (await sameFileOrPath(file, dst)) throw new Error('输入与输出指向同一文件，已拒绝覆盖');
+  }
+  if (fs.existsSync(dst)) throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
+  onStage?.('probing');
+  const probed = new Map();
+  for (const file of files) probed.set(file, await probeMedia(ffprobePath, file, signal));
+  for (const [file, info] of probed) if (!info.has_video) throw new Error(`输入没有可用视频轨：${file}`);
+  const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
+  if (withAudio !== 0 && withAudio !== probed.size) throw new Error('各集的音轨不一致，无法拼接');
+  const first = probed.get(parts[0].src);
+  await fsp.mkdir(path.dirname(dst), { recursive: true });
+  const middle = path.join(path.dirname(dst), `.hongguo-quchong-pre-${randomUUID()}.mkv`);
+  try {
+    const command = buildPrepareCommand({
+      segments: parts,
+      media: { has_audio: withAudio > 0, video_width: first.video_width, video_height: first.video_height },
+      dst: middle,
+    });
+    onStage?.('merging');
+    onLog?.(`[合并] ${parts.length} 段按各自的倍数变速并接成一集（去重前），再统一加去重特效重新编码`);
+    try {
+      await runProcess(
+        ffmpegPath,
+        command.args,
+        command.duration,
+        (value) => onProgress?.(value * 0.25),
+        signal,
+        null,
+        onLog,
+      );
+    } catch (error) {
+      if (signal?.aborted) throw new Error('已取消');
+      throw new Error(
+        `合并变速这一步失败（还没到去重编码）。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
+      );
+    }
+    return await encodeOne({
+      ...args,
+      src: middle,
+      segments: undefined,
+      speed: 1,
+      onProgress: (value) => onProgress?.(25 + value * 0.75),
+    });
+  } finally {
+    await fsp.rm(middle, { force: true });
   }
 }
 

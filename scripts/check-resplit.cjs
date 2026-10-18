@@ -74,15 +74,44 @@ const plan = (sources, split = {}, overrides = {}) =>
     assert.deepEqual(warnings, []);
     for (const piece of pieces) {
       assert.ok(piece.finalDuration >= 30 && piece.finalDuration <= 65, `final ${piece.finalDuration}`);
-      assert.ok(piece.speed >= 1.03 && piece.speed <= 1.21, `speed ${piece.speed}`);
+      for (const segment of piece.segments)
+        assert.ok(segment.speed >= 1.03 && segment.speed <= 1.21, `speed ${segment.speed}`);
+      // 成品时长就是切出来的长度加片头黑场：每段原片秒数 ÷ 自己的倍数，加起来再加 0.3。
+      const made = piece.segments.reduce((sum, segment) => sum + segment.duration / segment.speed, 0);
+      assert.ok(Math.abs(made + 0.3 - piece.finalDuration) < 0.05, `${made} vs ${piece.finalDuration}`);
     }
     const kept = pieces.reduce((sum, piece) => sum + piece.length, 0);
-    assert.ok(Math.abs(kept - 10 * (92 - 1.1 - 1.2)) < 0.05, 'whole timeline is used exactly once');
+    assert.ok(Math.abs(kept - (10 * (92 - 1.1 - 1.2)) / 1.12) < 0.05, 'whole timeline is used exactly once');
     assert.deepEqual(
       pieces.map((piece) => piece.number),
       pieces.map((_, i) => i + 1),
     );
   });
+
+  await check(
+    'every original episode gets its own random speed inside the range, and a piece spanning two keeps both',
+    () => {
+      const values = [0, 0.25, 0.5, 0.75, 1];
+      let at = 0;
+      const random = () => values[at++ % values.length];
+      const { pieces } = plan(
+        Array.from({ length: 5 }, (_, i) => mk('e' + i, 40, { candidates: [] })),
+        { min_len: 50, max_len: 60 },
+        { random },
+      );
+      const speeds = new Map();
+      for (const segment of pieces.flatMap((piece) => piece.segments)) {
+        assert.ok(segment.speed >= 1.03 && segment.speed <= 1.21);
+        assert.ok(!speeds.has(segment.file) || speeds.get(segment.file) === segment.speed, 'one episode, one speed');
+        speeds.set(segment.file, segment.speed);
+      }
+      assert.equal(new Set(speeds.values()).size, 5, '每个原集各取一个');
+      assert.equal(speeds.get('/x/e0.mp4'), 1.03);
+      assert.equal(speeds.get('/x/e4.mp4'), 1.21);
+      const mixed = pieces.find((piece) => new Set(piece.segments.map((segment) => segment.speed)).size > 1);
+      assert.ok(mixed, '有一集跨了两个原集，前后两段倍数不同');
+    },
+  );
 
   await check('head and tail trims are removed from every source', () => {
     const { pieces } = plan([mk('a', 60), mk('b', 60)]);
@@ -110,7 +139,7 @@ const plan = (sources, split = {}, overrides = {}) =>
   await check('a missing-episode junction is preferred as the cut position', () => {
     const sources = [mk('a', 70, { candidates: [] }), mk('b', 70, { candidates: [], gapBefore: true })];
     const { pieces } = plan(sources, { min_len: 30, max_len: 65 });
-    const junction = 70 - 1.1 - 1.2;
+    const junction = (70 - 1.1 - 1.2) / 1.12; // 变速后的时间线上，第一个原集占的长度
     let at = 0;
     const cuts = pieces.map((piece) => (at += piece.length));
     assert.ok(
@@ -129,10 +158,11 @@ const plan = (sources, split = {}, overrides = {}) =>
   });
 
   await check('a small leftover at the end is merged into the last episode instead of being forced into range', () => {
-    const slack = (30 - 0.3) * 1.03 * resplit.TAIL_ABSORB_RATIO;
+    const slack = (30 - 0.3) * resplit.TAIL_ABSORB_RATIO;
     let absorbed = 0;
     for (let total = 40; total <= 700; total += 7) {
-      const { pieces, tailAbsorbed } = plan([mk('a', total + 2.3, { candidates: [] })]);
+      // 随机数固定取中间，倍数 1.12：要让变速后的总长正好是 total，原片要 total × 1.12 秒。
+      const { pieces, tailAbsorbed } = plan([mk('a', total * 1.12 + 2.3, { candidates: [] })]);
       const length = pieces.reduce((sum, piece) => sum + piece.length, 0);
       assert.ok(Math.abs(length - total) < 0.05, `${total}: every second is used, got ${length}`);
       assert.ok(tailAbsorbed >= 0 && tailAbsorbed <= slack + 0.01, `${total}: leftover ${tailAbsorbed}`);
@@ -141,8 +171,8 @@ const plan = (sources, split = {}, overrides = {}) =>
       });
       const last = pieces[pieces.length - 1];
       assert.ok(last.finalDuration >= 30 || pieces.length === 1, `${total}: last ${last.finalDuration}`);
-      // 最后一集最多比最长时长多出那一点零头（按最快变速折算）。
-      assert.ok(last.finalDuration <= 65 + tailAbsorbed / 1.03 + 0.5, `${total}: last ${last.finalDuration}`);
+      // 最后一集最多比最长时长多出那一点零头。
+      assert.ok(last.finalDuration <= 65 + tailAbsorbed + 0.5, `${total}: last ${last.finalDuration}`);
       if (tailAbsorbed > 0) absorbed += 1;
     }
     assert.ok(absorbed > 0, 'the leftover rule is actually used');
@@ -245,28 +275,37 @@ const plan = (sources, split = {}, overrides = {}) =>
       assert.deepEqual(again.get(a), found.get(a));
     });
 
-    await check('real ffmpeg: a piece cut from two episodes is joined, sped up by the planned factor', async () => {
+    const durationOf = (file) =>
+      Number(
+        execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file])
+          .toString()
+          .trim(),
+      );
+    const leftovers = () => fs.readdirSync(path.join(tmp, 'out')).filter((name) => name.startsWith('.hongguo'));
+
+    await check('real ffmpeg: each segment keeps its own speed, then the whole piece is re-encoded once', async () => {
       const dst = path.join(tmp, 'out', 'piece.mp4');
       const options = { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false };
-      // 第一集 8–12 秒（4 秒）+ 第二集 0–6 秒（6 秒）= 10 秒，变速 1.25 倍 => 8 秒。
+      const logs = [];
+      // 第一集 8–12 秒（4 秒，1.25 倍 => 3.2 秒）+ 第二集 0–6 秒（6 秒，1.5 倍 => 4 秒）= 7.2 秒。
       await quchong.runJob({
         ffmpegPath: 'ffmpeg',
         ffprobePath: 'ffprobe',
         src: a,
         dst,
         segments: [
-          { src: a, start: 8, duration: 4 },
-          { src: b, start: 0, duration: 6 },
+          { src: a, start: 8, duration: 4, speed: 1.25 },
+          { src: b, start: 0, duration: 6, speed: 1.5 },
         ],
-        speed: 1.25,
         opts: options,
+        onLog: (line) => logs.push(String(line)),
       });
       const probe = JSON.parse(
         execFileSync('ffprobe', [
           '-v',
           'error',
           '-show_entries',
-          'stream=codec_type,width,height,duration:format=duration',
+          'stream=codec_type,codec_name,width,height,duration:format=duration',
           '-of',
           'json',
           dst,
@@ -277,10 +316,49 @@ const plan = (sources, split = {}, overrides = {}) =>
       const video = probe.streams.find((stream) => stream.codec_type === 'video');
       assert.equal(video.width, 270, 'joined pieces keep the source resolution');
       assert.equal(video.height, 480);
-      assert.ok(Math.abs(Number(probe.format.duration) - 8) < 0.5, `duration ${probe.format.duration}`);
+      assert.equal(probe.streams.find((stream) => stream.codec_type === 'audio').codec_name, 'aac');
+      assert.ok(Math.abs(Number(probe.format.duration) - 7.2) < 0.5, `duration ${probe.format.duration}`);
+      assert.ok(logs.some((line) => line.startsWith('[合并]')));
+      // 去重编码那一步面对的是合并后的中间文件，倍数固定 1：参数里的 SPEED 必须是 1。
+      assert.match(
+        logs.find((line) => line.startsWith('[开始]')),
+        /"SPEED":1[,}]/,
+      );
+      assert.deepEqual(leftovers(), [], '成品写好后中间文件必须删掉');
     });
 
-    await check('real ffmpeg: one segment with a fixed speed trims exactly', async () => {
+    await check(
+      'real ffmpeg: the pre-dedup file is cut and merged first, then dedup encoding reads that one file',
+      async () => {
+        const dst = path.join(tmp, 'out', 'order.mp4');
+        const spy = path.join(tmp, 'spy.sh');
+        fs.writeFileSync(spy, `#!/bin/bash\necho "$*" >> "${path.join(tmp, 'calls.log')}"\nexec ffmpeg "$@"\n`, {
+          mode: 0o755,
+        });
+        await quchong.runJob({
+          ffmpegPath: spy,
+          ffprobePath: 'ffprobe',
+          src: a,
+          dst,
+          segments: [
+            { src: a, start: 1, duration: 3, speed: 1.2 },
+            { src: b, start: 2, duration: 3, speed: 1.1 },
+          ],
+          opts: { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false },
+        });
+        const calls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n');
+        assert.ok(calls.length >= 2);
+        assert.match(calls[0], /atempo=1\.2/, '第一步：按各自倍数变速并合并');
+        assert.match(calls[0], /concat=n=2/);
+        assert.doesNotMatch(calls[0], /unsharp|hue=|rotate=/, '第一步不加任何去重特效');
+        assert.match(calls[0], /\.mkv/);
+        assert.match(calls[1], /unsharp/, '第二步：统一加去重特效');
+        assert.doesNotMatch(calls[1], /concat/);
+        assert.match(calls[1], /\.hongguo-quchong-pre-.*\.mkv/, '第二步读的是中间文件');
+      },
+    );
+
+    await check('real ffmpeg: one segment at speed 1 trims exactly', async () => {
       const dst = path.join(tmp, 'out', 'single.mp4');
       await quchong.runJob({
         ffmpegPath: 'ffmpeg',
@@ -288,21 +366,11 @@ const plan = (sources, split = {}, overrides = {}) =>
         src: a,
         dst,
         segments: [{ src: a, start: 2, duration: 5 }],
-        speed: 1,
         opts: { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false },
       });
-      const duration = Number(
-        execFileSync('ffprobe', [
-          '-v',
-          'error',
-          '-show_entries',
-          'format=duration',
-          '-of',
-          'default=nw=1:nk=1',
-          dst,
-        ]).toString(),
-      );
+      const duration = durationOf(dst);
       assert.ok(Math.abs(duration - 5) < 0.4, `duration ${duration}`);
+      assert.deepEqual(leftovers(), []);
     });
 
     await check('segments with bad times or an invalid speed are rejected before encoding', async () => {
@@ -316,7 +384,7 @@ const plan = (sources, split = {}, overrides = {}) =>
       await assert.rejects(quchong.runJob({ ...base, segments: [{ src: a, start: -1, duration: 3 }] }), /片段时间无效/);
       await assert.rejects(quchong.runJob({ ...base, segments: [{ src: a, start: 0, duration: 0 }] }), /片段时间无效/);
       await assert.rejects(
-        quchong.runJob({ ...base, segments: [{ src: a, start: 0, duration: 3 }], speed: 5 }),
+        quchong.runJob({ ...base, segments: [{ src: a, start: 0, duration: 3, speed: 5 }] }),
         /变速倍数无效/,
       );
     });

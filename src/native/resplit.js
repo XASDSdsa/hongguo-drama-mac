@@ -1,7 +1,11 @@
 'use strict';
 // 重新拆分：把选中的若干集接成一条连续时间线，按「成品时长范围」重新切成新的集。
 // 切点优先落在镜头切换、人说完话的停顿处和原集交界处，不会硬切在半句话中间。
-// 这个模块只负责「找切点」和「规划每一集」，真正的裁剪、拼接、去重由 quchong.runJob 完成。
+// 这个模块只负责「找切点」和「规划每一集」。顺序是：
+//   1. 每个原集先各自在倍数区间里随机取一个变速倍数；
+//   2. 变速后的各集首尾相接成一条时间线（这条线上的时间就是成品里的时间）；
+//   3. 按成品时长在切点处切开，得到去重前的新集；
+// 之后由 quchong.runJob 把每个新集存成去重前的中间文件，再统一加去重特效、重新编码。
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -192,7 +196,9 @@ function cutCandidates({ pauses = [], scenes = [] }, lo, hi) {
 /**
  * 在连续时间线上选一组切点，使每一集的成品时长落在 [min_len, max_len]。
  * sources: [{ file, duration, candidates?: [{t, score}], gapBefore?: boolean }]，按播放顺序。
- * 变速在 [speedMin, speedMax] 里选：先定切多长，再反推这一集能用的倍数范围，所以成品时长一定在范围内。
+ * 每个原集先各自在 [speedMin, speedMax] 里随机取一个倍数，再按变速后的时间线切：
+ * 切出来多长，成品就多长（再加片头黑场 intro），不需要再反推倍数。
+ * 每一段 segment 带着自己所属原集的倍数；跨两个原集的新集里，前后两段倍数可以不同。
  */
 function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Math.random }) {
   const options = validateSplit(split);
@@ -206,8 +212,10 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
       warnings.push(`${path.basename(source.file)} 裁掉片头片尾后不足 1 秒，已跳过`);
       continue;
     }
-    timeline.push({ file: source.file, from, to, offset, source });
-    offset += to - from;
+    const speed = Number((speedMin + random() * (speedMax - speedMin)).toFixed(4));
+    const span = (to - from) / speed; // 变速后这一集占多长
+    timeline.push({ file: source.file, from, to, speed, span, offset, source });
+    offset += span;
   }
   const total = offset;
   if (!timeline.length) return { pieces: [], warnings: [...warnings, '没有可用的视频'] };
@@ -224,7 +232,7 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
     if (index > 0) put(item.offset, item.source.gapBefore ? GAP_JUNCTION_SCORE : JUNCTION_SCORE);
     for (const cut of item.source.candidates || []) {
       if (cut.t > item.from + EDGE_MARGIN && cut.t < item.to - EDGE_MARGIN)
-        put(item.offset + cut.t - item.from, cut.score);
+        put(item.offset + (cut.t - item.from) / item.speed, cut.score);
     }
   });
   nodes.delete(0);
@@ -233,10 +241,10 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
   const scores = [0, ...inner.map((node) => node.score), 1];
 
   const midFinal = (options.min_len + options.max_len) / 2;
-  const lengthMin = (options.min_len - intro) * speedMin;
-  const lengthMax = (options.max_len - intro) * speedMax;
+  const lengthMin = options.min_len - intro;
+  const lengthMax = options.max_len - intro;
   if (!(lengthMin > 0)) throw new Error('成品时长太短');
-  const preferred = (midFinal - intro) * ((speedMin + speedMax) / 2);
+  const preferred = midFinal - intro;
 
   const tailSlack = lengthMin * TAIL_ABSORB_RATIO;
   let tailAbsorbed = 0;
@@ -307,23 +315,21 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
     const segments = [];
     for (const item of timeline) {
       const a = Math.max(start, item.offset);
-      const b = Math.min(end, item.offset + (item.to - item.from));
+      const b = Math.min(end, item.offset + item.span);
       if (b - a < 0.05) continue;
+      // 变速后时间线上的 [a, b]，折回原片里就是 from + (a - offset) × 倍数 起的 (b - a) × 倍数 秒。
       segments.push({
         file: item.file,
-        start: Number((item.from + (a - item.offset)).toFixed(3)),
-        duration: Number((b - a).toFixed(3)),
+        start: Number((item.from + (a - item.offset) * item.speed).toFixed(3)),
+        duration: Number(((b - a) * item.speed).toFixed(3)),
+        speed: item.speed,
       });
     }
-    const low = Math.max(speedMin, length / (options.max_len - intro));
-    const high = Math.min(speedMax, length / (options.min_len - intro));
-    const speed = low <= high ? low + random() * (high - low) : Math.min(speedMax, Math.max(speedMin, low));
     pieces.push({
       number: options.start_number + order,
       segments,
       length: Number(length.toFixed(3)),
-      speed: Number(speed.toFixed(4)),
-      finalDuration: Number((length / speed + intro).toFixed(2)),
+      finalDuration: Number((length + intro).toFixed(2)),
     });
   });
   return { pieces, warnings, tailAbsorbed: Number(tailAbsorbed.toFixed(2)), totalSeconds: Number(total.toFixed(2)) };
@@ -345,9 +351,10 @@ function estimatePlan({ sources, split, speedMin, speedMax, intro = 0 }) {
       used += 1;
     }
   }
-  const lengthMin = (options.min_len - intro) * speedMin;
-  const lengthMax = (options.max_len - intro) * speedMax;
-  const preferred = ((options.min_len + options.max_len) / 2 - intro) * ((speedMin + speedMax) / 2);
+  const lengthMin = options.min_len - intro;
+  const preferred = (options.min_len + options.max_len) / 2 - intro;
+  // 变速后的总时长：按倍数区间的中间值估。
+  const finalTotal = total / ((speedMin + speedMax) / 2);
   if (!(total > 0) || !(lengthMin > 0)) {
     return {
       count: 0,
@@ -362,7 +369,7 @@ function estimatePlan({ sources, split, speedMin, speedMax, intro = 0 }) {
   }
   const bound = (value) => Math.max(1, Math.floor(value));
   // 实际切点会让每集比「预定时长」平均略长一点点（模拟 10～80 集的整部剧，平均长约 1.1 倍），按这个估。
-  const count = bound(Math.round(total / (preferred * 1.1)));
+  const count = bound(Math.round(finalTotal / (preferred * 1.1)));
   return {
     count,
     minCount: bound(Math.round(count * 0.9)),
