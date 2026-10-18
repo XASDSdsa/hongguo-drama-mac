@@ -110,14 +110,18 @@ try {
     segment.target_timerange.start,
     segment.target_timerange.duration,
   ]);
-  assert.deepEqual(ranges, [
-    [0, 2400000],
-    [2400000, 1600000],
-    [4000000, 2000000],
-  ]);
-  // 直接从原视频切：每段的素材起点等于它在时间线上的位置，不是另外导出的分镜文件。
+  // 最后一个镜头的末尾可能为了让素材够用被让掉不到 1/4 帧（25fps = 10ms）。
+  assert.deepEqual(
+    ranges.map(([start]) => start),
+    [0, 2400000, 4000000],
+  );
+  assert.deepEqual(ranges[0], [0, 2400000]);
+  assert.deepEqual(ranges[1], [2400000, 1600000]);
+  assert.ok(ranges[2][1] >= 2000000 - 10000 && ranges[2][1] <= 2000000);
+  // 直接从原视频切：素材起点 = 时间线位置后移 1/4 帧（25fps = 10ms），保证取到的是这个镜头自己的第一帧，不是前一个镜头的最后一帧。
   for (const segment of byName['视频'].segments) {
-    assert.equal(segment.source_timerange.start, segment.target_timerange.start);
+    assert.equal(segment.source_timerange.start, segment.target_timerange.start + 10000);
+    assert.equal(segment.source_timerange.duration, segment.target_timerange.duration);
     assert.equal(segment.volume, 0, 'the video segments are muted; sound is on its own track');
   }
   assert.equal(byName['音频'].segments.length, 1);

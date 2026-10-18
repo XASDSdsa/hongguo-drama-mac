@@ -134,9 +134,14 @@ def main() -> int:
     avg_rate = str(video_stream.get("avg_frame_rate") or "")
     try:
         numerator, denominator = avg_rate.split("/", 1)
-        fps = max(1, int(round(float(numerator) / float(denominator))))
+        exact_fps = float(numerator) / float(denominator)
+        fps = max(1, int(round(exact_fps)))
     except (ValueError, ZeroDivisionError):
         fps = int(round(float(str(video_stream.get("r_frame_rate", "25/1")).split("/")[0])))
+        exact_fps = float(fps)
+    # 剪映按「落在哪一帧的时间段里」取画面。镜头起点正好踩在帧的边界上，微秒取整往小的一边偏一点，
+    # 就会取到前一个镜头的最后一帧。把素材取画面的位置整体后移 1/4 帧：仍在这一帧里，取整、四舍五入都不会掉到上一帧。
+    nudge_us = max(1, int(round(1_000_000 / max(exact_fps, 1.0) / 4)))
     duration = float(media["video_end"])
     duration_us = base.us(duration)
     has_audio = any(item.get("codec_type") == "audio" for item in media.get("streams") or [])
@@ -177,10 +182,18 @@ def main() -> int:
 
     video = base.video_material_from_ffprobe(asset, ffprobe, probe_cache)
     for row in shots:
-        window = draft.trange(row["start_us"], duration=row["duration_us"])
+        length = row["duration_us"]
+        source_start = row["start_us"] + nudge_us
+        if video.duration and source_start + length > video.duration:
+            # 最后一个镜头：素材不够往后挪，就把末尾那不到 1/4 帧让掉，起点仍然后移。
+            length = video.duration - source_start
+            if length <= 0:
+                source_start, length = row["start_us"], row["duration_us"]
+        window = draft.trange(row["start_us"], duration=length)
+        source_window = draft.trange(source_start, duration=length)
         # 音频单独一条轨，画面片段静音，避免声音叠两层。
         script.add_segment(
-            draft.VideoSegment(video, window, source_timerange=window, speed=1.0, volume=0.0),
+            draft.VideoSegment(video, window, source_timerange=source_window, speed=1.0, volume=0.0),
             track=TRACK_VIDEO,
         )
     if has_audio:
