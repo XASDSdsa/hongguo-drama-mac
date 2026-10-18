@@ -507,6 +507,48 @@ function runProcess(ffmpegPath, args, duration, onProgress, signal, onStage, onL
   });
 }
 
+/**
+ * 把同一文件夹里的临时成品改成正式名字，绝不覆盖已有文件。
+ * 优先用硬链接（目标已存在时直接失败）；U 盘、移动硬盘常见的 FAT32/exFAT 和部分网络盘不支持硬链接，
+ * 这时先确认目标不存在再改名（同一文件夹内改名不占额外空间）。
+ */
+async function publishOutput(tmp, dst) {
+  try {
+    await fsp.link(tmp, dst);
+    return;
+  } catch (error) {
+    if (error.code === 'EEXIST') throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
+    if (!['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS', 'EINVAL'].includes(error.code)) throw error;
+  }
+  if (fs.existsSync(dst)) throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
+  await fsp.rename(tmp, dst);
+}
+
+/**
+ * 删掉文件夹里上次中断（崩溃、断电、强制退出）留下的临时文件：.hongguo-quchong-*.mp4 / -pre-*.mkv / -sep-* 目录。
+ * 只删超过 maxAgeMs 没动过的，正在写的临时文件一直在更新修改时间，不会被误删。
+ */
+async function sweepStaleTemps(dir, maxAgeMs = 2 * 60 * 60 * 1000) {
+  let entries;
+  try {
+    entries = await fsp.readdir(dir);
+  } catch (_) {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of entries) {
+    if (!name.startsWith('.hongguo-quchong-')) continue;
+    const full = path.join(dir, name);
+    try {
+      const stat = await fsp.stat(full);
+      if (Date.now() - stat.mtimeMs < maxAgeMs) continue;
+      await fsp.rm(full, { recursive: true, force: true });
+      removed += 1;
+    } catch (_) {}
+  }
+  return removed;
+}
+
 async function sameFileOrPath(src, dst) {
   if (path.resolve(src) === path.resolve(dst)) return true;
   try {
@@ -774,12 +816,7 @@ async function encodeOne({
     if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
     if (signal?.aborted) throw new Error('已取消');
     onStage?.('saving');
-    try {
-      await fsp.link(tmp, dst);
-    } catch (error) {
-      if (error.code === 'EEXIST') throw new Error(`输出已存在，已拒绝覆盖：${dst}`);
-      throw error;
-    }
+    await publishOutput(tmp, dst);
     onProgress?.(100);
     onLog?.(`[完成] ${path.basename(dst)}`);
     return {
@@ -943,4 +980,6 @@ module.exports = {
   buildCommand,
   probeMedia,
   runJob,
+  sweepStaleTemps,
+  publishOutput,
 };

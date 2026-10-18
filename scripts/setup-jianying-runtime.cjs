@@ -41,7 +41,9 @@ function run(command, args) {
 }
 
 try {
-  if (target !== 'darwin-arm64') throw new Error(`Unsupported Jianying runtime target: ${target}`);
+  if (!['darwin-arm64', 'win32-x64'].includes(target))
+    throw new Error(`Unsupported Jianying runtime target: ${target}`);
+  const executableName = process.platform === 'win32' ? 'hongguo-jianying.exe' : 'hongguo-jianying';
   const output = path.join(root, 'build', 'jianying', target);
   const manifestPath = path.join(output, 'manifest.json');
   if (!process.argv.includes('--force') && fs.existsSync(manifestPath)) {
@@ -49,7 +51,7 @@ try {
     if (
       manifest.buildId === buildId &&
       manifest.offlineSelfTest === true &&
-      fs.existsSync(path.join(output, 'hongguo-jianying'))
+      fs.existsSync(path.join(output, executableName))
     ) {
       console.log(`剪映 Python 运行时已经就绪：${target}`);
       process.exit(0);
@@ -57,7 +59,9 @@ try {
   }
   const candidates = process.env.JIANYING_BUILD_PYTHON
     ? [[process.env.JIANYING_BUILD_PYTHON]]
-    : [['python3.12'], ['python3']];
+    : process.platform === 'win32'
+      ? [['py', '-3.12'], ['python']]
+      : [['python3.12'], ['python3']];
   const found = candidates.find(
     ([command, ...args]) =>
       spawnSync(command, [...args, '-c', 'import sys;sys.exit(0 if sys.version_info[:2] == (3,12) else 1)'], {
@@ -66,7 +70,7 @@ try {
   );
   if (!found) throw new Error('构建机需要 Python 3.12，可设置 JIANYING_BUILD_PYTHON；用户安装包不需要此环境');
   const venv = path.join(root, '.cache', 'jianying-venv');
-  const python = path.join(venv, 'bin', 'python');
+  const python = path.join(venv, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   if (!fs.existsSync(python)) run(found[0], [...found.slice(1), '-m', 'venv', venv]);
   run(python, ['-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', 'pyinstaller>=6,<7']);
   // NumPy 2.5 currently publishes arm64 wheels with a macOS 14 minimum.

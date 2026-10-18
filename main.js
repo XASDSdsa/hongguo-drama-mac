@@ -8,7 +8,7 @@
  *   4. 下载管理：进度推送、暂停/取消、重试、删除、打开所在文件夹
  *   5. 设置：下载目录、命名规则、并发数（JSON 文件持久化）
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu, powerSaveBlocker } = require('electron');
 const path = require('path');
 const os = require('node:os');
 const fs = require('fs');
@@ -46,6 +46,17 @@ const APP_VERSION = app.getVersion() || '1.0.0';
 const APP_TITLE = '红果短剧';
 
 let mainWindow = null;
+// 只允许开一个：两个进程同时读写 data.json、同时往同一个「去重」文件夹写成品会互相覆盖。
+// 再次打开时把已有窗口拉到前面。
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) app.quit();
+else
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 // Window teardown can race with long-running download/transcode tasks.  Once
 // close starts, renderer events are no longer useful and must not be sent.
 let rendererClosing = false;
@@ -3043,6 +3054,13 @@ function registerQuchongBatch({
   batch.queue = [...batch.tasks];
   quchongBatches.set(id, batch);
   persistQuchongBatch(batch);
+  // 上次崩溃、断电或强制退出留下的半成品临时文件（隐藏的 .hongguo-quchong-*），开新批次时顺手清掉。
+  for (const dir of new Set(batch.tasks.map((task) => path.dirname(task.dst)).filter(Boolean))) {
+    quchong
+      .sweepStaleTemps(dir)
+      .then((removed) => removed && libLog(libraryDir, 'info', `清理了上次中断留下的 ${removed} 个临时文件`))
+      .catch(() => {});
+  }
   libLog(
     libraryDir,
     'info',
@@ -7968,6 +7986,7 @@ function createWindow() {
 
 // ===== 应用生命周期 =====
 app.whenReady().then(async () => {
+  if (!singleInstance) return;
   // 主进程里的未捕获错误只记录，不弹出 Electron 的致命错误对话框，也不让正在运行的下载/处理任务陪葬。
   process.on('unhandledRejection', (reason) => console.error('[Main] 未处理的 Promise 拒绝:', reason?.stack || reason));
   process.on('uncaughtException', (error) => console.error('[Main] 未捕获异常:', error?.stack || error));
@@ -8113,6 +8132,37 @@ async function rememberWindowsEncoder() {
   await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 1500))]);
   if (!settled) console.warn('[Quchong] 显卡信息尚未返回，编码开始前会再使用缓存结果');
 }
+
+// 有下载、去重、草稿、拆解、字幕在跑时不让系统自动睡眠（屏幕可以照常关），
+// 否则夜里挂着处理，电脑一睡 FFmpeg 就停在半路。全部空闲后立刻放开。
+let sleepBlocker = null;
+function appBusy() {
+  return (
+    activeDownloads > 0 ||
+    downloadQueue.some((task) => task.status === 'pending') ||
+    quchongActive > 0 ||
+    [...quchongBatches.values()].some((batch) => !batch.finished) ||
+    libraryPlanning.size > 0 ||
+    [...libraryDraftJobs.values()].some((job) => job.status === 'running') ||
+    mergeTasks.some((task) => ['running', 'queued'].includes(task.status)) ||
+    !!transcriptionManager?.hasActive() ||
+    !!reconstructionPipeline?.hasActive()
+  );
+}
+function refreshSleepBlocker() {
+  let busy = false;
+  try {
+    busy = appBusy();
+  } catch (_) {}
+  if (busy && sleepBlocker == null) sleepBlocker = powerSaveBlocker.start('prevent-app-suspension');
+  else if (!busy && sleepBlocker != null) {
+    if (powerSaveBlocker.isStarted(sleepBlocker)) powerSaveBlocker.stop(sleepBlocker);
+    sleepBlocker = null;
+  }
+}
+app.whenReady().then(() => {
+  if (singleInstance) setInterval(refreshSleepBlocker, 15_000).unref?.();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

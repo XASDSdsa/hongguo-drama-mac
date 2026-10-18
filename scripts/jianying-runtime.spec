@@ -41,15 +41,30 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name="hongguo-jianying",
-    console=True,
-    strip=False,
-    upx=False,
-    onefile=True,
-)
+if sys.platform == "win32":
+    # Windows: one folder (exe + _internal).  No unpacking to %TEMP% on every start and
+    # no second worker process that outlives a killed parent.
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="hongguo-jianying",
+        console=True,
+        strip=False,
+        upx=False,
+    )
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="hongguo-jianying")
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name="hongguo-jianying",
+        console=True,
+        strip=False,
+        upx=False,
+        onefile=True,
+    )

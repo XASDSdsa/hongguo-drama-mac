@@ -84,13 +84,21 @@ def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit(f"usage: {sys.argv[0]} TARGET BUILD_ID")
     target, build_id = sys.argv[1:]
-    if target != "darwin-arm64" or sys.platform != "darwin" or platform.machine() != "arm64":
-        raise SystemExit("Jianying runtime currently supports Apple Silicon macOS only")
+    windows = target == "win32-x64"
+    if windows:
+        if sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64"):
+            raise SystemExit("win32-x64 Jianying runtime must be built on 64-bit Windows")
+    elif target != "darwin-arm64" or sys.platform != "darwin" or platform.machine() != "arm64":
+        raise SystemExit("Jianying runtime supports Apple Silicon macOS and 64-bit Windows only")
 
     cache = ROOT / ".cache" / "jianying"
     dist = cache / "dist" / target
     work = cache / "work" / target
-    frozen = dist / "hongguo-jianying"
+    # macOS: one self-contained file.  Windows: a folder (exe + _internal).  A one-file exe on
+    # Windows unpacks itself to %TEMP% on every start (slow, often blocked by antivirus) and its
+    # real worker is a second process that is orphaned when only the parent is killed.
+    executable_name = "hongguo-jianying.exe" if windows else "hongguo-jianying"
+    frozen = (dist / "hongguo-jianying" / executable_name) if windows else (dist / "hongguo-jianying")
     subprocess.run(
         [
             sys.executable,
@@ -113,13 +121,16 @@ def main() -> None:
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True)
-    executable = output / "hongguo-jianying"
-    shutil.copy2(frozen, executable)
-    executable.chmod(executable.stat().st_mode | 0o111)
+    executable = output / executable_name
+    if windows:
+        shutil.copytree(frozen.parent, output, dirs_exist_ok=True)
+    else:
+        shutil.copy2(frozen, executable)
+        executable.chmod(executable.stat().st_mode | 0o111)
     versions = copy_licenses(output)
     env = {
         **os.environ,
-        "PATH": "/usr/bin:/bin",
+        "PATH": os.environ.get("SystemRoot", "C:\\Windows") + "\\System32" if windows else "/usr/bin:/bin",
         "PYTHONNOUSERSITE": "1",
         "HF_HUB_OFFLINE": "1",
     }
@@ -132,7 +143,7 @@ def main() -> None:
         "schema_version": "1.0.0",
         "platform": target,
         "buildId": build_id,
-        "runtime": "hongguo-jianying",
+        "runtime": executable_name,
         "python": platform.python_version(),
         "sourceCommit": subprocess.check_output(
             ["git", "-C", str(source), "rev-parse", "HEAD"], text=True

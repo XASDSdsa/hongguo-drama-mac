@@ -43,6 +43,7 @@ function main() {
 
   const done = [];
   const missing = [];
+  const skipped = [];
 
   for (const m of MAP) {
     const src = findInDist(m.from);
@@ -50,9 +51,15 @@ function main() {
       missing.push(m.from);
       continue;
     }
+    // GitHub Release 单个文件上限 2 GiB：超过的放不上去，整个上传步骤会失败。跳过并说明，不影响其余文件。
+    const size = fs.statSync(src).size;
+    if (size >= 2 * 1024 * 1024 * 1024) {
+      skipped.push({ ...m, size });
+      continue;
+    }
     const dst = path.join(OUT, m.to);
     fs.copyFileSync(src, dst); // 复制而不是改名，保留 dist 里的原始产物
-    done.push({ ...m, size: fs.statSync(dst).size });
+    done.push({ ...m, size });
   }
 
   console.log('已准备 Release 资产 → ' + OUT);
@@ -60,6 +67,9 @@ function main() {
     console.log(`  ${d.to}`);
     console.log(`      ${(d.size / 1048576).toFixed(1)} MB   （${d.desc}）`);
   }
+  for (const item of skipped)
+    console.log(`  跳过 ${item.to}：${(item.size / 1048576).toFixed(1)} MB，超过 GitHub 单文件 2 GiB 上限`);
+  if (!done.some((item) => /Setup\.exe$/.test(item.to))) throw new Error('安装包 Setup.exe 缺失或超过 2 GiB，无法发布');
   if (missing.length) {
     console.log('\n未找到以下本地产物，请先打包：');
     missing.forEach((m) => console.log('  ' + m));

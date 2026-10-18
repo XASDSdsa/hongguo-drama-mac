@@ -104,6 +104,16 @@ jobs:
           if [ $code -ne 0 ]; then echo "::error title=structure::$(tail -n 25 "$RUNNER_TEMP/s.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; fi
           exit $code
 
+      - name: Bundle Jianying draft runtime
+        shell: bash
+        run: |
+          set +e
+          (npm run setup:jianying && node scripts/check-jianying-runtime.cjs) > "$RUNNER_TEMP/j.log" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/j.log"
+          if [ $code -ne 0 ]; then echo "::error title=jianying::$(tail -n 25 "$RUNNER_TEMP/j.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; fi
+          exit $code
+
       - name: Download tested Windows FFmpeg build artifact
         uses: actions/download-artifact@v7
         with:
@@ -174,6 +184,28 @@ jobs:
           node scripts/check-ffmpeg-setup.cjs
           node scripts/setup-ffmpeg.js
 
+      - name: Check processing with bundled Windows FFmpeg
+        shell: bash
+        run: |
+          ffdir="$(cygpath -u "$GITHUB_WORKSPACE")/build/ffmpeg"
+          export PATH="$ffdir:$PATH"
+          export FFMPEG_PATH="$GITHUB_WORKSPACE\\build\\ffmpeg\\ffmpeg.exe"
+          export FFPROBE_PATH="$GITHUB_WORKSPACE\\build\\ffmpeg\\ffprobe.exe"
+          ffmpeg -hide_banner -version | head -n 1
+          # 每条检查失败时，把输出末尾写成注释，不用打开完整日志就能看到原因。
+          run_check() {
+            if ! "$@" > check.out 2>&1; then
+              cat check.out
+              echo "::error title=$*::$(tail -n 25 check.out | head -c 3500 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+              exit 1
+            fi
+            cat check.out
+          }
+          run_check node scripts/check-quchong.cjs
+          run_check node scripts/check-quchong-size.cjs
+          run_check node scripts/check-dedup-defaults.cjs
+          run_check node scripts/check-resplit.cjs
+
       - name: Build local whisper.cpp and prepare tiny model
         shell: bash
         run: |
@@ -195,7 +227,14 @@ jobs:
       - name: Run Windows-safe checks
         shell: bash
         run: |
+          set -e
           node scripts/check-download-series.cjs
+          node scripts/check-download-errors.cjs
+          node scripts/check-pagination.cjs
+          node scripts/check-library-activity.cjs
+          node scripts/check-download-safety.cjs
+          node scripts/check-series-episode-panel.cjs
+          node scripts/check-renderer-lifecycle.cjs
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-jianying-simple-draft.cjs

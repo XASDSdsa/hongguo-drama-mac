@@ -81,8 +81,12 @@ jobs:
             fi
             cat check.out
           }
+          export PATH="$(dirname "$FFMPEG_PATH"):$PATH"
           run_check node scripts/check-quchong.cjs
           run_check node scripts/check-quchong-size.cjs
+          run_check node scripts/check-dedup-defaults.cjs
+          run_check node scripts/check-resplit.cjs
+          run_check node scripts/check-encoder-retry.cjs
           run_check npm run check:subtitles
           run_check python scripts/check-subtitle-alignment.py
           run_check npm run check:premium

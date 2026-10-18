@@ -9,11 +9,11 @@
     "dev": "node scripts/dev.js",
     "dev:react": "vite",
     "build:react": "vite build",
-    "build": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win",
-    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
-    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win --dir",
-    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win portable",
-    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run build:react && electron-builder --win nsis",
+    "build": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win",
+    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
+    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir",
+    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win portable",
+    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
     "check:openai": "node scripts/check-openai-adapter.cjs",
     "check:pipeline": "node scripts/check-pipeline-gate.cjs",
@@ -136,6 +136,10 @@
         {
           "from": "build/video-structure/win32-x64",
           "to": "video-structure"
+        },
+        {
+          "from": "build/jianying/win32-x64",
+          "to": "jianying"
         },
         {
           "from": "build/title-fonts",
