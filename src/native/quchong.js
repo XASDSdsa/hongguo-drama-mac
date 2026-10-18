@@ -145,7 +145,7 @@ function encoderArgs(name, lean, width, height) {
   return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', lean ? '23' : '20'];
 }
 
-function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, segments }) {
+function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, segments, audioMode = 'full' }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
   // 不改分辨率：成品和原视频一样大（宽高取偶数）。裁掉边缘后再放回原尺寸，不加黑边、不横竖屏改构图。
@@ -216,17 +216,22 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   const bgmIndex = pieces ? pieces.length : 1;
   const audioOutput = hasAudio || Boolean(bgm);
   if (hasAudio) {
-    const af = [
-      'asetpts=PTS-STARTPTS',
-      'aresample=44100',
-      `asetrate=44100*${r.PITCH.toFixed(6)}`,
-      'aresample=44100',
-      `atempo=${(speed / r.PITCH).toFixed(6)}`,
-    ];
-    if (opts.eq_enable) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
+    // safe：音频编码反复失败时的最简音频链——只变速，不改音高、不均衡、不补静音，换取这一集能出成品。
+    const safe = audioMode === 'safe';
+    const af = safe
+      ? ['asetpts=PTS-STARTPTS', 'aresample=44100', `atempo=${speed.toFixed(6)}`]
+      : [
+          'asetpts=PTS-STARTPTS',
+          'aresample=44100',
+          `asetrate=44100*${r.PITCH.toFixed(6)}`,
+          'aresample=44100',
+          `atempo=${(speed / r.PITCH).toFixed(6)}`,
+        ];
+    if (opts.eq_enable && !safe) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
     if (audioDelay > 0) af.push(`adelay=delays=${(audioDelay * 1000).toFixed(3)}:all=1`);
     // 补静音只补到成片结束稍后一点，不用无限长的 apad：配合 -shortest 时，较老的 FFmpeg 会在收尾时报错。
-    af.push(`volume=${opts.orig_volume}`, `apad=whole_dur=${(outputDuration + 1).toFixed(3)}`);
+    af.push(`volume=${opts.orig_volume}`);
+    if (!safe) af.push(`apad=whole_dur=${(outputDuration + 1).toFixed(3)}`);
     filters.push(`${sourceAudio}${af.join(',')}[oa]`);
   }
   if (bgm) {
@@ -237,7 +242,9 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
     const source =
       hasAudio && bgm ? '[oa][ba]amix=inputs=2:duration=first:dropout_transition=0' : hasAudio ? '[oa]' : '[ba]';
     const separator = source.includes('amix=') ? ',' : '';
-    filters.push(`${source}${separator}aformat=channel_layouts=stereo,aresample=async=1[a]`);
+    filters.push(
+      `${source}${separator}aformat=channel_layouts=stereo${audioMode === 'safe' ? '' : ',aresample=async=1'}[a]`,
+    );
   }
   // The info-level mov muxer message is the only reliable start signal for
   // faststart's second pass; media timestamp progress stops during that pass.
@@ -265,7 +272,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   args.push('-map_metadata', '-1', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', dst);
   // Audio/container duration can exceed the video. -shortest finishes at the
   // transformed video end, so the progress denominator must use that stream.
-  return { args, rolled: r, duration: outputDuration };
+  return { args, rolled: r, duration: outputDuration, filters: filters.join(';') };
 }
 
 function execJson(ffprobePath, args, signal) {
@@ -329,6 +336,8 @@ async function probeMedia(ffprobePath, file, signal) {
 }
 
 const ENCODER_RETRY_DELAYS = [1500, 4000];
+// FFmpeg 7 把失败的输出流写在日志里：aost#0:1/aac 是音频编码器。收尾时的 [aac @ …] Qavg 统计行不代表音频失败。
+const AUDIO_FAILURE = /aost#\d+:\d+\/aac[^\n]*(error code|Terminating thread|Invalid argument)/i;
 
 /** 从 FFmpeg 的一大段输出里挑出真正的报错行：输入文件信息放在最前面，直接截头会把原因截掉。 */
 function keyDiagnostics(message) {
@@ -514,16 +523,19 @@ async function runJob({
     if (speed != null) rolled.SPEED = speed;
     if (signal?.aborted) throw new Error('已取消');
     const encoder = await resolveEncoder(options.encoder, process.platform);
-    const command = buildCommand({
-      src: inputs[0],
-      dst: tmp,
-      bgm,
-      opts: options,
-      rolled,
-      media,
-      encoder,
-      segments: pieces,
-    });
+    const build = (audioMode) =>
+      buildCommand({
+        src: inputs[0],
+        dst: tmp,
+        bgm,
+        opts: options,
+        rolled,
+        media,
+        encoder,
+        segments: pieces,
+        audioMode,
+      });
+    let command = build('full');
     onLog?.(
       `[开始] ${path.basename(inputs[0])}${pieces ? ` 等 ${pieces.length} 段` : ''} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`,
     );
@@ -531,6 +543,7 @@ async function runJob({
     // 硬件编码器同时开多路时偶尔会初始化失败（同一秒起 4 路最常见），隔几秒重来一次就好了；
     // 重试用的仍是同一个编码器，不会悄悄换成别的。显卡驱动版本不兼容这类必然失败的不重试。
     const retryable = encoder !== 'cpu' && encoder !== 'auto';
+    let audioStep = 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
@@ -545,6 +558,27 @@ async function runJob({
         if (nvencApi) {
           throw new Error(
             `NVENC 初始化失败：应用自带的 FFmpeg 需要 NVENC API ${nvencApi[1]}，当前显卡驱动提供 ${nvencApi[2]}，版本不兼容。需要使用与当前驱动 API 兼容的 FFmpeg 构建，未自动切换编码器。\n${error.message}`,
+          );
+        }
+        // 失败在音频编码上（和显卡无关）：同样的参数再来一遍也一样会失败，所以先换一组随机参数，再不行用最简音频链。
+        if (AUDIO_FAILURE.test(error.message)) {
+          if (audioStep < 2) {
+            audioStep += 1;
+            if (audioStep === 1) {
+              rolled = rollParams(options);
+              if (speed != null) rolled.SPEED = speed;
+            }
+            command = build(audioStep === 2 ? 'safe' : 'full');
+            onLog?.(
+              audioStep === 1
+                ? `[重试] 音频编码失败（${keyDiagnostics(error.message)}），换一组随机参数重来`
+                : `[降级] 音频编码仍失败，这一集改用最简音频处理（只变速，不改音高）`,
+            );
+            onProgress?.(0);
+            continue;
+          }
+          throw new Error(
+            `音频编码失败（已换参数、简化音频后仍失败），与显卡/编码器无关。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
           );
         }
         if (retryable && attempt < ENCODER_RETRY_DELAYS.length) {

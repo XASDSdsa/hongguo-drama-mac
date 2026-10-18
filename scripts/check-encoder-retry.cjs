@@ -125,6 +125,69 @@ async function run(ffmpegPath, dst, encoder = 'videotoolbox') {
     assert.doesNotMatch(line, /Duration|Stream #/);
   });
 
+  // 失败在音频编码上：先换参数，再用最简音频链；不再把它说成显卡/编码器问题。
+  function audioFake(name, failWhen) {
+    const counter = path.join(tmp, name + '.count');
+    fs.writeFileSync(counter, '0');
+    const file = path.join(tmp, name);
+    fs.writeFileSync(
+      file,
+      `#!/bin/bash
+n=$(cat "${counter}"); echo $((n+1)) > "${counter}"
+if ${failWhen}; then
+  echo "[aost#0:1/aac @ 0x7502838300] Task finished with error code: -22 (Invalid argument)" >&2
+  echo "[aost#0:1/aac @ 0x7502838300] Terminating thread with return code -22 (Invalid argument)" >&2
+  echo "Conversion failed!" >&2
+  exit 234
+fi
+args=(); for a in "$@"; do [ "$a" = h264_videotoolbox ] && a=libx264; args+=("$a"); done
+exec ffmpeg "\${args[@]}"
+`,
+      { mode: 0o755 },
+    );
+    return { file, count: () => Number(fs.readFileSync(counter, 'utf8')) };
+  }
+
+  await check(
+    'an audio-encoder failure re-rolls the parameters, then falls back to the simplest audio chain',
+    async () => {
+      const fake = audioFake('audio-ladder', 'echo "$*" | grep -q asetrate');
+      const { promise, logs } = await run(fake.file, path.join(tmp, 'audio-ok.mp4'));
+      const result = await promise;
+      assert.equal(fake.count(), 3, '原样一次、换参数一次、最简音频链一次');
+      assert.ok(fs.statSync(result.path).size > 0);
+      assert.ok(logs.some((l) => l.startsWith('[重试]') && /换一组随机参数/.test(l)));
+      assert.ok(logs.some((l) => l.startsWith('[降级]') && /只变速/.test(l)));
+    },
+  );
+
+  await check('when even the simple audio chain fails the message says audio, not the GPU', async () => {
+    const fake = audioFake('audio-dead', 'true');
+    const { promise } = await run(fake.file, path.join(tmp, 'audio-bad.mp4'));
+    await assert.rejects(promise, (error) => {
+      assert.equal(fake.count(), 3);
+      const head = error.message.split('\n')[0];
+      assert.match(head, /^音频编码失败.*与显卡\/编码器无关/);
+      assert.match(error.message, /\[滤镜\]/);
+      assert.doesNotMatch(head, /videotoolbox 编码失败/);
+      return true;
+    });
+  });
+
+  await check(
+    'the [aac] Qavg summary line at the end of any failure is not mistaken for an audio failure',
+    async () => {
+      const fake = fakeFfmpeg(
+        'video-fail',
+        99,
+        '[aac @ 0x55] Qavg: 54289.113\nError while opening encoder for output stream #0:0',
+      );
+      const { promise } = await run(fake.file, path.join(tmp, 'video-bad.mp4'));
+      await assert.rejects(promise, /videotoolbox 编码失败/);
+      assert.equal(fake.count(), 3, '仍按硬件编码器重试 2 次');
+    },
+  );
+
   fs.rmSync(tmp, { recursive: true, force: true });
 })().catch((error) => {
   console.error(error);
