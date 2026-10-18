@@ -118,10 +118,8 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
     <div className="lib-container" data-active={active}>
       <header className="lib-header">
         <div>
-          <h2>
-            <Film size={22} /> 管理剧集
-          </h2>
-          <p>
+          <h2>管理剧集</h2>
+          <p className="page-description">
             每部剧是一个文件夹：下载目录下的剧文件夹，加上你导入的文件夹。点开一部剧，选要处理的集，勾选要做的事，结果都放回这部剧的文件夹里。
           </p>
           {root && <span className="lib-root">下载目录：{root}</span>}

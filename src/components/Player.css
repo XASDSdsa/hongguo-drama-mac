@@ -1,5 +1,5 @@
 .player-container {
-  max-width: 1000px;
+  max-width: 1180px;
   margin: 0 auto;
   color: var(--text-primary);
 }
@@ -14,14 +14,7 @@
 }
 
 .player-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.player-title h2 {
-  font-size: 22px;
-  font-weight: 700;
+  min-width: 0;
 }
 
 .player-header-right {
@@ -592,7 +585,7 @@
   display: none;
 }
 .player-header {
-  margin-bottom: 26px;
+  margin-bottom: 28px;
   align-items: flex-start;
 }
 .player-header-right {

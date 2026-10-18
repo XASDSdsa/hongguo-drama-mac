@@ -3594,6 +3594,8 @@ ipcMain.handle('publish-state', (_event, dir) => {
       job: publishSnapshot(context.dir),
       result: publishResultView(context),
       hasCover: !!context.coverPath,
+      // 原始的剧名和简介（改写之前的样子），页面里和「已保存」的分开显示
+      original: { title: context.title, synopsis: context.synopsis },
       styles: posterStyles.STYLES.map((style) => ({ id: style.id, name: style.name })),
     };
   } catch (error) {
@@ -3641,7 +3643,6 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
         job.status = 'done';
         job.message = '已完成';
         libLog(context.dir, 'ok', `发布素材：${PUBLISH_TASK_TEXT[task]}完成`, 'side');
-        if (task === 'titles') renameLibraryOutputs(context.dir);
       } catch (error) {
         job.status = controller.signal.aborted ? 'cancelled' : 'failed';
         job.error = controller.signal.aborted ? '' : aiRedact(error);
@@ -3685,8 +3686,25 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
         layout: payload.layout,
       }),
     );
-    libLog(context.dir, 'ok', '发布素材：已记下剧名/样式，海报有的话已重新排版', 'side');
+    libLog(context.dir, 'ok', '发布素材：剧名/样式已保存，海报有的话已重新排版', 'side');
     renameLibraryOutputs(context.dir);
+    return { success: true, result: publishResultView(context) };
+  } catch (error) {
+    return { success: false, error: aiRedact(error) };
+  }
+});
+
+/** 保存简介：写进简介文件（AI 新写的、手改的都走这里）。 */
+ipcMain.handle('publish-save-synopsis', (_event, payload = {}) => {
+  try {
+    const context = publishContext(payload.dir);
+    if (publishJobs.get(context.dir)?.status === 'running') return { success: false, error: '这部剧正在生成中' };
+    publishMaterials.saveSynopsis({
+      outputDir: context.dir,
+      workDir: context.workDir,
+      synopsis: payload.synopsis,
+    });
+    libLog(context.dir, 'ok', '发布素材：简介已保存', 'side');
     return { success: true, result: publishResultView(context) };
   } catch (error) {
     return { success: false, error: aiRedact(error) };

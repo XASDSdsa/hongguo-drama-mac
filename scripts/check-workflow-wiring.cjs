@@ -43,8 +43,8 @@ const checks = [
   ['工作流状态持久化到短剧档案', main.includes('entry.workflow') && main.includes('saveSeriesRegistry')],
   ['渲染进程暴露工作流接口', preload.includes('startSeriesWorkflow') && preload.includes('onEpisodeWorkflowProgress')],
   [
-    '设置页可调整工作流门禁',
-    settings.includes('workflow_require_dedup') && settings.includes('workflow_validate_draft'),
+    '设置页只放真正有用的项（没有已无入口的字幕识别、工作流门禁、去重/AI 输出目录）',
+    !/faster_whisper_device|workflow_require_dedup|dedup_output_dir|ai_output_dir/.test(settings),
   ],
   [
     '打包包含剪映脚本',

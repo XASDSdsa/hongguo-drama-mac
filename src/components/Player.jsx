@@ -879,8 +879,8 @@ function Player({ target, onNavigate, active = true }) {
       <div className="player-container">
         <div className="player-header">
           <div className="player-title">
-            <Play size={22} />
             <h2>我的剧库</h2>
+            <p className="page-description">已下载的短剧：选集观看、管理，或合并成整剧。</p>
           </div>
         </div>
         <div className="player-empty">
@@ -913,8 +913,8 @@ function Player({ target, onNavigate, active = true }) {
     <div className="player-container">
       <div className="player-header">
         <div className="player-title">
-          <Play size={22} />
           <h2>我的剧库</h2>
+          <p className="page-description">已下载的短剧：选集观看、管理，或合并成整剧。</p>
         </div>
         <div className="player-header-right">
           <span className="player-stat">

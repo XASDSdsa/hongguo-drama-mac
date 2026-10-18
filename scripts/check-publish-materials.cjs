@@ -155,8 +155,11 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
   };
   // 三件事各自独立；这里按「剧名 → 简介 → 海报」顺序都做一遍，再检查结果。
   const full = async (options) => {
-    await publish.generate({ task: 'titles', ...options });
-    await publish.generate({ task: 'synopsis', ...options });
+    const titles = await publish.generate({ task: 'titles', ...options });
+    const synopsis = await publish.generate({ task: 'synopsis', ...options });
+    // AI 的结果只是待保存的草稿：像页面上那样选第一个候选、保存剧名和简介，才算生效。
+    await publish.retitle({ ...options, title: titles.candidates[0] });
+    publish.saveSynopsis({ ...options, synopsis: synopsis.proposedSynopsis });
     return publish.generate({ task: 'poster', ...options });
   };
   const run = (extra) => {
@@ -315,17 +318,31 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       const d = dirs('independent');
       const base = { title: '退婚之后', synopsis: '她被退婚。', coverPath: cover, config, openai, renderer, ...d };
       await publish.generate({ task: 'synopsis', ...base });
+      // AI 改写只给草稿，没点保存之前不写任何文件
+      const drafted = await publish.generate({ task: 'synopsis', ...base });
+      assert.deepEqual(fs.readdirSync(d.outputDir), [], 'a rewritten synopsis is not saved until you save it');
+      assert.match(drafted.proposedSynopsis, /重生回到被退婚/);
+      assert.equal(drafted.synopsis, '', 'nothing is saved yet');
+      const savedSynopsis = publish.saveSynopsis({ ...d, synopsis: drafted.proposedSynopsis });
       assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt']);
+      assert.match(savedSynopsis.synopsis, /重生回到被退婚/);
+      assert.equal(savedSynopsis.proposedSynopsis, '', 'saved: no pending draft left');
+      assert.throws(() => publish.saveSynopsis({ ...d, synopsis: '太短' }), /至少写 10 个字/);
       const afterTitles = await publish.generate({ task: 'titles', ...base });
+      assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt'], 'rewriting titles only offers candidates');
+      assert.equal(afterTitles.title, '', 'no title is chosen until one is saved');
+      assert.ok(afterTitles.candidates.length > 0);
+      assert.match(afterTitles.synopsis, /重生回到被退婚/, 'the saved synopsis is kept');
+      await publish.retitle({ ...d, renderer, title: afterTitles.candidates[0] });
       assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['发布剧名.txt', '发布简介.txt']);
-      assert.equal(afterTitles.title, afterTitles.candidates[0], 'the first candidate is selected by default');
-      assert.match(afterTitles.synopsis, /重生回到被退婚/, 'the earlier synopsis is kept');
       await publish.generate({ task: 'poster', ...base });
       assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['发布剧名.txt', '发布海报.jpg', '发布简介.txt']);
       // 再改写简介：剧名和海报不动
       const posterBefore = fs.readFileSync(path.join(d.outputDir, '发布海报.jpg'));
       const titleBefore = fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'));
       await publish.generate({ task: 'synopsis', ...base });
+      const synopsisBefore = fs.readFileSync(path.join(d.outputDir, '发布简介.txt'), 'utf8');
+      assert.equal(fs.readFileSync(path.join(d.outputDir, '发布简介.txt'), 'utf8'), synopsisBefore);
       assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '发布海报.jpg')), posterBefore);
       assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt')), titleBefore);
     });

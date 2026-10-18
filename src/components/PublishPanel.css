@@ -98,3 +98,73 @@
   font-size: 12px;
   color: var(--primary);
 }
+
+.pub-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.pub-row-head .pub-badge {
+  margin-right: auto;
+  margin-left: 4px;
+}
+.pub-row-actions,
+.pub-savebar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.pub-row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.pub-badge {
+  padding: 1px 9px;
+  font-size: 12px;
+  line-height: 20px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+.pub-badge.is-saved {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+}
+.pub-badge.is-dirty {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  font-weight: 600;
+}
+.pub-badge.is-empty {
+  color: var(--text-tertiary);
+  background: var(--bg-inset);
+}
+.pub-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.pub-meta.is-dirty {
+  color: var(--warning);
+}
+.pub-textarea {
+  min-height: 88px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.pub-details {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.pub-details summary {
+  cursor: pointer;
+}
+.pub-details .pub-synopsis {
+  margin-top: 6px;
+}
+.pub-panel .pub-hint {
+  margin-bottom: 12px;
+}

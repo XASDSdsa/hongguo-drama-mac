@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
-import { Check, ChevronRight, Film, RefreshCw } from './icons';
+import { Check, ChevronRight, RefreshCw } from './icons';
 import DedupParams from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
@@ -388,9 +388,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
       <header className="lib-detail-head">
         <div className="lib-detail-text">
-          <h2>
-            <Film size={22} /> {title}
-          </h2>
+          <h2>{title}</h2>
           <div className="lib-detail-meta">
             {folder.imported ? '导入的文件夹' : folder.source || '下载目录'}
             {` · 已有 ${downloaded} 集`}
@@ -632,18 +630,6 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                 </div>
               )}
             </div>
-
-            {['AI 分镜工程图', '成本配置报告'].map((label) => (
-              <div key={label} className="proc-item is-reserved" title="功能预留，暂未开放">
-                <div className="proc-line">
-                  <label className="proc-check">
-                    <input type="checkbox" disabled />
-                    <b>{label}</b>
-                  </label>
-                  <span className="proc-summary">预留，暂未开放</span>
-                </div>
-              </div>
-            ))}
 
             <div className="proc-foot">
               <div className="proc-foot-info">

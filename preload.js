@@ -197,6 +197,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   publishGenerate: (payload) => ipcRenderer.invoke('publish-generate', payload),
   publishCancel: (dir) => ipcRenderer.invoke('publish-cancel', dir),
   publishRetitle: (payload) => ipcRenderer.invoke('publish-retitle', payload),
+  publishSaveSynopsis: (payload) => ipcRenderer.invoke('publish-save-synopsis', payload),
   onPublishUpdate: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('publish-update', listener);

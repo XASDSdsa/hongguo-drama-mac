@@ -41,14 +41,11 @@ function describeProxy(settings) {
 }
 
 const OUTPUT_DIRS = [
-  { key: 'dedup_output_dir', label: '去重输出目录', hint: '视频去重后的成片保存到这里。' },
   {
-    key: 'structure_output_dir',
-    label: '拆解输出目录',
-    hint: '视频结构化拆解的结果（含分镜和剪映草稿素材）保存到这里。',
+    key: 'merge_output_dir',
+    label: '整剧合并输出目录',
+    hint: '在「我的剧库」里把整部剧合并成一个视频时，保存到这里。',
   },
-  { key: 'merge_output_dir', label: '合集输出目录', hint: '合并后的整剧合集保存到这里。' },
-  { key: 'ai_output_dir', label: 'AI 素材输出目录', hint: 'AI 生成的封面和文案保存到这里。' },
 ];
 
 function SettingsPage({ active = true }) {
@@ -73,6 +70,8 @@ function SettingsPage({ active = true }) {
     try {
       const next = await window.electronAPI.getSettings();
       setSettings(next);
+      setDirty(false);
+      setSaveError('');
     } catch (error) {
       setLoadError(error.message || '设置加载失败，请重试');
     }
@@ -140,12 +139,11 @@ function SettingsPage({ active = true }) {
       const current = await window.electronAPI.getSettings();
       const editable = [
         'root',
-        'dedup_output_dir',
         'structure_output_dir',
         'merge_output_dir',
-        'ai_output_dir',
         'name_format',
         'max_concurrent',
+        'quchong_jobs',
         'proxy_enabled',
         'proxy_mode',
         'proxy_host',
@@ -158,34 +156,23 @@ function SettingsPage({ active = true }) {
         'ai_image_api_key',
         'ai_image_model',
         'ai_text_model',
-        'ai_transcription_model',
-        'ai_transcription_engine',
-        'whisper_binary_path',
-        'whisper_model_path',
-        'whisper_language',
-        'whisper_threads',
-        'faster_whisper_python_path',
-        'faster_whisper_script_path',
-        'faster_whisper_model',
-        'faster_whisper_device',
-        'faster_whisper_compute_type',
-        'faster_whisper_concurrency',
-        'ai_concurrency',
         'structure_threads',
         'structure_cleanup',
         'structure_device',
-        'structure_sherpa_provider',
         'structure_clip_audio',
         'structure_punctuation_model',
         'jianying_python_path',
         'jianying_user_data_path',
-        'workflow_require_dedup',
-        'workflow_validate_draft',
       ];
       const submitted = { ...current };
       for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
       const res = await window.electronAPI.saveSettings(submitted);
       if (!res?.success) throw new Error(res?.error || '设置未保存，请重试');
+      // 去重并发数要让正在跑的批次也跟着变，走专门的接口。
+      if (Number(submitted.quchong_jobs || 2) !== Number(current.quchong_jobs || 2)) {
+        const applied = await window.electronAPI.quchongSetConcurrency(Number(submitted.quchong_jobs));
+        if (!applied?.success) throw new Error(applied?.error || '去重并发设置保存失败');
+      }
       setSettings(submitted);
       if (isProxy) closeProxy();
       setDirty(false);
@@ -281,237 +268,273 @@ function SettingsPage({ active = true }) {
         <Settings size={22} />
         <div>
           <h2>设置</h2>
-          <p className="page-description">让下载、保存和网络连接，按你的习惯运行。</p>
+          <p className="page-description">
+            保存位置、下载、去重与剪映草稿、AI 素材。改完点最下面的「保存设置」才会生效。
+          </p>
         </div>
       </div>
 
-      <fieldset className="settings-card" disabled={saving}>
-        <div className="settings-group">
-          <label className="settings-label">下载目录</label>
-          <div className="folder-row">
-            <input
-              type="text"
-              className="input-field"
-              aria-label="下载目录"
-              value={settings.root || ''}
-              onChange={(e) => update('root', e.target.value)}
-              placeholder="选择下载保存目录"
-            />
-            <button className="btn btn-outline" onClick={() => selectFolder()}>
-              <Folder size={16} />
-              选择文件夹
-            </button>
-          </div>
-          <p className="settings-hint">每部剧会在这里建一个以剧名命名的文件夹，视频保存在里面。</p>
-        </div>
-
-        {OUTPUT_DIRS.map(({ key, label, hint }) => (
-          <div className="settings-group" key={key}>
-            <label className="settings-label">{label}</label>
+      <fieldset className="settings-form" disabled={saving}>
+        <section className="settings-section" aria-label="保存位置">
+          <header className="settings-section-head">
+            <h3>保存位置</h3>
+            <p>视频和成品放在哪里、怎么命名。</p>
+          </header>
+          <div className="settings-group">
+            <label className="settings-label">下载目录</label>
             <div className="folder-row">
               <input
                 type="text"
                 className="input-field"
-                aria-label={label}
-                value={settings[key] || ''}
-                onChange={(e) => update(key, e.target.value)}
-                placeholder="未选择：对应功能会提示先选择"
+                aria-label="下载目录"
+                value={settings.root || ''}
+                onChange={(e) => update('root', e.target.value)}
+                placeholder="选择下载保存目录"
               />
-              <button className="btn btn-outline" onClick={() => selectFolder(key)}>
+              <button className="btn btn-outline" onClick={() => selectFolder()}>
                 <Folder size={16} />
                 选择文件夹
               </button>
             </div>
-            <p className="settings-hint">{hint}</p>
+            <p className="settings-hint">
+              每部剧会在这里建一个以剧名命名的文件夹，视频保存在里面；去重成品、剪映草稿也放在这部剧自己的文件夹里。
+            </p>
           </div>
-        ))}
-
-        <div className="settings-group">
-          <label className="settings-label">文件命名规则</label>
-          <div className="preset-row">
-            {FORMAT_PRESETS.map((p) => (
-              <button
-                key={p.value}
-                className={`btn-chip ${settings.name_format === p.value ? 'btn-chip-primary' : ''}`}
-                onClick={() => update('name_format', p.value)}
-              >
-                {p.label}
-              </button>
-            ))}
+          <div className="settings-group">
+            <label className="settings-label">文件命名规则</label>
+            <div className="preset-row">
+              {FORMAT_PRESETS.map((p) => (
+                <button
+                  key={p.value}
+                  className={`btn-chip ${settings.name_format === p.value ? 'btn-chip-primary' : ''}`}
+                  onClick={() => update('name_format', p.value)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              className="input-field"
+              aria-label="文件命名规则"
+              value={settings.name_format || ''}
+              onChange={(e) => update('name_format', e.target.value)}
+            />
+            <p className="settings-hint">
+              可用变量：<code>剧名</code> · <code>集数</code>（如 001）· <code>标题</code>
+              。每集保留独立集号，避免同名覆盖。
+            </p>
           </div>
-          <input
-            type="text"
-            className="input-field mt8"
-            aria-label="文件命名规则"
-            value={settings.name_format || ''}
-            onChange={(e) => update('name_format', e.target.value)}
-          />
-          <p className="settings-hint">
-            可用变量：<code>剧名</code> · <code>集数</code>（如 001）· <code>标题</code>
-            。每集保留独立集号，避免同名覆盖。
-          </p>
-        </div>
+          {OUTPUT_DIRS.map(({ key, label, hint }) => (
+            <div className="settings-group" key={key}>
+              <label className="settings-label">{label}</label>
+              <div className="folder-row">
+                <input
+                  type="text"
+                  className="input-field"
+                  aria-label={label}
+                  value={settings[key] || ''}
+                  onChange={(e) => update(key, e.target.value)}
+                  placeholder="未选择：用到时会提示先选择"
+                />
+                <button className="btn btn-outline" onClick={() => selectFolder(key)}>
+                  <Folder size={16} />
+                  选择文件夹
+                </button>
+              </div>
+              <p className="settings-hint">{hint}</p>
+            </div>
+          ))}
+        </section>
 
-        <div className="settings-group">
-          <label className="settings-label">最大并发下载数</label>
-          <select
-            className="input-field select-field"
-            aria-label="最大并发下载数"
-            value={settings.max_concurrent || 3}
-            onChange={(e) => update('max_concurrent', parseInt(e.target.value, 10))}
-          >
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-              <option key={n} value={n}>
-                {n} 个同时下载
-              </option>
-            ))}
-          </select>
-          <p className="settings-hint">
-            同时下载 <b>{settings.max_concurrent || 3}</b> 集（保存后立即生效）。 并发越高越快，但可能触发接口限流，建议
-            3~5。
-          </p>
-        </div>
-
-        <div className="settings-group">
-          <label className="settings-label">视频去重同时处理</label>
-          <select
-            className="input-field select-field"
-            aria-label="去重并发数"
-            value={settings.quchong_jobs || 2}
-            onChange={async (e) => {
-              const jobs = parseInt(e.target.value, 10);
-              const res = await window.electronAPI.quchongSetConcurrency(jobs);
-              if (res?.success) setSettings((previous) => ({ ...previous, quchong_jobs: jobs }));
-              else setSaveError(res?.error || '去重并发设置保存失败');
-            }}
-          >
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-              <option key={n} value={n}>
-                {n} 集同时处理
-              </option>
-            ))}
-          </select>
-          <p className="settings-hint">
-            同时去重 <b>{settings.quchong_jobs || 2}</b>{' '}
-            集，改了立即生效（正在跑的也会跟着调整）。越多越快，但更占电脑，一般 2~4。
-          </p>
-        </div>
-
-        <div className="settings-group">
-          <label className="settings-label">完整字幕识别（faster-whisper）</label>
-          <p className="settings-hint">已内置字幕引擎和 tiny 模型，无需安装 Python，离线即可识别。</p>
-          <div className="preset-row mt8">
+        <section className="settings-section" aria-label="下载与网络">
+          <header className="settings-section-head">
+            <h3>下载与网络</h3>
+            <p>下载速度和代理。</p>
+          </header>
+          <div className="settings-group">
+            <label className="settings-label">最大并发下载数</label>
             <select
               className="input-field select-field"
-              aria-label="faster-whisper 设备"
-              value={settings.faster_whisper_device || 'auto'}
-              onChange={(e) => update('faster_whisper_device', e.target.value)}
+              aria-label="最大并发下载数"
+              value={settings.max_concurrent || 3}
+              onChange={(e) => update('max_concurrent', parseInt(e.target.value, 10))}
             >
-              <option value="auto">自动检测（批次固定）</option>
-              <option value="cpu">CPU</option>
-              <option value="cuda">CUDA（未检测到时直接报错）</option>
-            </select>
-            <select
-              className="input-field select-field"
-              aria-label="字幕识别并发数"
-              value={settings.faster_whisper_concurrency || 2}
-              onChange={(e) => update('faster_whisper_concurrency', Number(e.target.value))}
-            >
-              {[1, 2, 3, 4].map((value) => (
-                <option key={value} value={value}>
-                  {value} 集并发
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                <option key={n} value={n}>
+                  {n} 个同时下载
                 </option>
               ))}
             </select>
+            <p className="settings-hint">并发越高越快，但可能触发接口限流，建议 3~5。</p>
           </div>
-          <p className="settings-hint">
-            只读取已去重视频，每批开始时固定处理设备。识别完成后，字幕保存在应用自己的数据目录里，不会写进你的输出目录。
-          </p>
-        </div>
+          <div className="settings-group">
+            <label className="settings-label">网络代理</label>
+            <div className="proxy-status-row">
+              <span className={`proxy-dot ${proxyInfo.on ? 'proxy-dot-on' : 'proxy-dot-off'}`} />
+              <span className="proxy-status-text">
+                {proxyInfo.on ? (
+                  <>
+                    已启用：<code>{proxyInfo.text}</code>
+                  </>
+                ) : (
+                  proxyInfo.text
+                )}
+              </span>
+              <button className="btn btn-outline btn-sm" onClick={openProxyModal}>
+                <Globe size={15} />
+                配置代理
+              </button>
+            </div>
+            <p className="settings-hint">
+              本机有代理（Clash / V2rayN
+              等）时在这里填上，解析剧集与下载视频都会走该代理。代理在弹窗里单独保存，立即生效，无需重启。
+            </p>
+          </div>
+        </section>
 
-        <div className="settings-group">
-          <label className="settings-label">视频结构化拆解（本地）</label>
-          <p className="settings-hint">
-            TransNet V2 分镜、FFmpeg 切片、sherpa-onnx 分离和 Paraformer
-            识别。管理剧集里的剪映草稿会按电脑的线程、内存和负载同时做几集（最多 4 集），电脑忙时自动少开。
-          </p>
-          <div className="settings-grid mt8">
+        <section className="settings-section" aria-label="去重与剪映草稿">
+          <header className="settings-section-head">
+            <h3>去重与剪映草稿</h3>
+            <p>
+              这部分在「管理剧集」里这部剧的页面使用：视频去重、本地结构化拆解（TransNet V2
+              分镜、人声分离、台词识别）、生成剪映草稿。
+            </p>
+          </header>
+          <div className="settings-grid">
             <label className="settings-field">
-              <span>处理线程数（0 = 自动）</span>
+              <span>视频去重同时处理</span>
+              <select
+                className="input-field"
+                aria-label="去重并发数"
+                value={settings.quchong_jobs || 2}
+                onChange={(e) => update('quchong_jobs', parseInt(e.target.value, 10))}
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                  <option key={n} value={n}>
+                    {n} 集同时处理
+                  </option>
+                ))}
+              </select>
+              <em>越多越快但更占电脑，一般 2~4；保存后立即生效，正在跑的批次也会跟着调整。</em>
+            </label>
+            <label className="settings-field">
+              <span>草稿处理线程数</span>
               <input
                 className="input-field"
                 type="number"
                 min="0"
                 max="32"
+                aria-label="处理线程数"
                 value={settings.structure_threads ?? 0}
                 onChange={(e) => update('structure_threads', Number(e.target.value))}
               />
+              <em>0 = 自动。同时做几集由电脑的线程、内存和负载决定（最多 4 集），电脑忙时自动少开。</em>
             </label>
-            <label className="settings-field">
-              <span>草稿生成后清理分析中间文件</span>
+            <label className="settings-field settings-field-wide">
+              <span>草稿生成后的分析中间文件</span>
               <select
                 className="input-field"
+                aria-label="分析中间文件清理"
                 value={settings.structure_cleanup === false ? 'off' : 'on'}
                 onChange={(e) => update('structure_cleanup', e.target.value === 'on')}
               >
-                <option value="on">清理（省磁盘；之后重做草稿要重新分析）</option>
-                <option value="off">保留（重做草稿更快，占磁盘）</option>
+                <option value="on">自动清理（省磁盘；之后重做草稿要重新分析）</option>
+                <option value="off">保留（重做草稿更快，但每集占几百 MB 到几 GB）</option>
               </select>
+              <em>只清理分析用的中间文件，去重成品、剪映草稿和原视频不会动。</em>
             </label>
             <label className="settings-field">
-              <span>已确认分镜算法</span>
-              <input className="input-field" readOnly value="单路 0.5 · 时间结构复核 · 最短 2 秒" />
-            </label>
-            <label className="settings-field">
-              <span>TransNet V2 设备</span>
-              <select
-                className="input-field"
-                value={settings.structure_device || 'cpu'}
-                onChange={(e) => update('structure_device', e.target.value)}
-              >
-                <option value="cpu">CPU</option>
-                <option value="cuda">CUDA（需要兼容运行时）</option>
-                <option value="mps">Apple MPS（需要兼容运行时）</option>
-              </select>
-            </label>
-            <label className="settings-field">
-              <span>分离 / 识别设备</span>
-              <select className="input-field" value="cpu" onChange={() => update('structure_sherpa_provider', 'cpu')}>
-                <option value="cpu">CPU（本版内置，支持线程设置）</option>
-              </select>
-            </label>
-            <label className="settings-field">
-              <span>镜头视频音轨</span>
-              <select
-                className="input-field"
-                value={settings.structure_clip_audio || 'original'}
-                onChange={(e) => update('structure_clip_audio', e.target.value)}
-              >
-                <option value="original">保留原声</option>
-                <option value="mute">静音</option>
-              </select>
-            </label>
-            <label className="settings-field">
-              <span>标点模型（可选覆盖）</span>
+              <span>剪映 Python 路径（可选）</span>
               <input
                 className="input-field"
-                value={settings.structure_punctuation_model || ''}
-                onChange={(e) => update('structure_punctuation_model', e.target.value)}
-                placeholder="留空使用内置中文标点模型"
+                value={settings.jianying_python_path || ''}
+                onChange={(e) => update('jianying_python_path', e.target.value)}
+                placeholder="留空自动查找"
+              />
+            </label>
+            <label className="settings-field">
+              <span>剪映草稿目录（可选）</span>
+              <input
+                className="input-field"
+                value={settings.jianying_user_data_path || ''}
+                onChange={(e) => update('jianying_user_data_path', e.target.value)}
+                placeholder="留空使用剪映默认目录"
               />
             </label>
           </div>
-          <p className="settings-hint">
-            设备在运行前固定，不自动切换。安装包使用内置工具。修改参数后，重跑会使受影响的下游结果失效。
-          </p>
-        </div>
+          <details className="settings-advanced">
+            <summary>高级：拆解设备与模型</summary>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span>TransNet V2 设备</span>
+                <select
+                  className="input-field"
+                  value={settings.structure_device || 'cpu'}
+                  onChange={(e) => update('structure_device', e.target.value)}
+                >
+                  <option value="cpu">CPU</option>
+                  <option value="cuda">CUDA（需要兼容运行时）</option>
+                  <option value="mps">Apple MPS（需要兼容运行时）</option>
+                </select>
+              </label>
+              <label className="settings-field">
+                <span>镜头视频音轨</span>
+                <select
+                  className="input-field"
+                  value={settings.structure_clip_audio || 'original'}
+                  onChange={(e) => update('structure_clip_audio', e.target.value)}
+                >
+                  <option value="original">保留原声</option>
+                  <option value="mute">静音</option>
+                </select>
+              </label>
+              <label className="settings-field settings-field-wide">
+                <span>标点模型（可选覆盖）</span>
+                <input
+                  className="input-field"
+                  value={settings.structure_punctuation_model || ''}
+                  onChange={(e) => update('structure_punctuation_model', e.target.value)}
+                  placeholder="留空使用内置中文标点模型"
+                />
+              </label>
+              <label className="settings-field settings-field-wide">
+                <span>分析中间文件目录（可选）</span>
+                <div className="folder-row">
+                  <input
+                    type="text"
+                    className="input-field"
+                    aria-label="分析中间文件目录"
+                    value={settings.structure_output_dir || ''}
+                    onChange={(e) => update('structure_output_dir', e.target.value)}
+                    placeholder="留空使用软件自己的数据目录"
+                  />
+                  <button
+                    className="btn btn-outline"
+                    type="button"
+                    onClick={() => selectFolder('structure_output_dir')}
+                  >
+                    <Folder size={16} />
+                    选择
+                  </button>
+                </div>
+              </label>
+            </div>
+            <p className="settings-hint">
+              分镜算法固定为「单路 0.5 · 时间结构复核 · 最短 2 秒」，人声分离和台词识别在本机 CPU
+              上运行。设备在运行前固定，不自动切换；修改后重跑会让受影响的下游结果失效。
+            </p>
+          </details>
+        </section>
 
-        <div className="settings-group ai-settings-group">
-          <label className="settings-label">AI 发布素材（简介 / 剧名 / 海报）</label>
-          <p className="settings-hint">
-            填写 OpenAI 兼容接口的中转地址（通常以 <code>/v1</code> 结尾）和
-            Key。文本和作图可以走不同的中转站：作图那组留空就和文本共用。
-          </p>
+        <section className="settings-section" aria-label="AI 发布素材">
+          <header className="settings-section-head">
+            <h3>AI 发布素材</h3>
+            <p>
+              改写剧名、简介和生成海报用。填写 OpenAI 兼容接口的中转地址（通常以 <code>/v1</code> 结尾）和
+              Key；文本和作图可以走不同的中转站，作图那组留空就和文本共用。
+            </p>
+          </header>
           <div className="ai-settings-grid">
             <label className="ai-field ai-field-wide">
               <span>文本中转地址</span>
@@ -585,7 +608,7 @@ function SettingsPage({ active = true }) {
               />
             </label>
           </div>
-          <div className="preset-row mt8">
+          <div className="preset-row">
             <button className="btn btn-outline btn-sm" onClick={testAi} disabled={aiTesting}>
               {aiTesting ? '正在测试…' : '测试文本连接'}
             </button>
@@ -595,88 +618,19 @@ function SettingsPage({ active = true }) {
               </span>
             )}
           </div>
-        </div>
+        </section>
 
-        <div className="settings-group">
-          <label className="settings-label">网络代理</label>
-          <div className="proxy-status-row">
-            <span className={`proxy-dot ${proxyInfo.on ? 'proxy-dot-on' : 'proxy-dot-off'}`} />
-            <span className="proxy-status-text">
-              {proxyInfo.on ? (
-                <>
-                  已启用：<code>{proxyInfo.text}</code>
-                </>
-              ) : (
-                proxyInfo.text
-              )}
-            </span>
-            <button className="btn btn-outline btn-sm" onClick={openProxyModal}>
-              <Globe size={15} />
-              配置代理
-            </button>
-          </div>
-          <p className="settings-hint">
-            本机有代理（Clash / V2rayN 等）时在这里填上，解析剧集与下载视频都会走该代理。保存后立即生效，无需重启。
-          </p>
-        </div>
-
-        <div className="settings-group">
-          <label className="settings-label">整集工作流</label>
-          <p className="settings-hint">
-            工作流按每集独立记录：输入 → 结构化拆解 → 剪映草稿。这里控制两个阶段门禁，不把规则固定在程序里。
-          </p>
-          <label className="proxy-switch-row">
-            <input
-              type="checkbox"
-              checked={settings.workflow_require_dedup !== false}
-              onChange={(e) => update('workflow_require_dedup', e.target.checked)}
-            />
-            <span className="proxy-switch-text">
-              要求去重结果作为输入<em>关闭后允许使用已下载原视频进入结构化</em>
-            </span>
-          </label>
-          <label className="proxy-switch-row">
-            <input
-              type="checkbox"
-              checked={settings.workflow_validate_draft !== false}
-              onChange={(e) => update('workflow_validate_draft', e.target.checked)}
-            />
-            <span className="proxy-switch-text">
-              生成后校验剪映草稿<em>关闭后只检查生成进程，不运行结构校验器</em>
-            </span>
-          </label>
-          <div className="settings-grid mt8">
-            <label className="settings-field">
-              <span>剪映 Python 路径（可选）</span>
-              <input
-                className="input-field"
-                value={settings.jianying_python_path || ''}
-                onChange={(e) => update('jianying_python_path', e.target.value)}
-                placeholder="留空自动查找"
-              />
-            </label>
-            <label className="settings-field">
-              <span>剪映 User Data（可选）</span>
-              <input
-                className="input-field"
-                value={settings.jianying_user_data_path || ''}
-                onChange={(e) => update('jianying_user_data_path', e.target.value)}
-                placeholder="留空使用默认目录"
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="settings-footer">
-          {dirty && (
-            <span className="settings-hint" role="status">
-              有未保存的修改
-            </span>
-          )}
-          <button className="btn btn-primary" onClick={save}>
+        <div className="settings-footer" role="group" aria-label="保存设置">
+          <span className={`settings-state ${dirty ? 'is-dirty' : ''}`} role="status">
+            {saving ? '正在保存…' : dirty ? '有未保存的修改' : saved ? '已保存' : '当前显示的都是已保存的设置'}
+          </span>
+          <button className="btn btn-outline" onClick={loadSettings} disabled={!dirty || saving}>
+            还原
+          </button>
+          <button className="btn btn-primary" onClick={save} disabled={!dirty || saving}>
             {saving ? (
               '正在保存…'
-            ) : saved ? (
+            ) : saved && !dirty ? (
               <>
                 <Check size={16} /> 已保存
               </>

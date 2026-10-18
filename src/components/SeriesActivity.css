@@ -1,9 +1,9 @@
 /* 处理进度、日志（剧子页面）和总任务（剧列表页）共用 */
 .act-panel {
-  padding: 14px 16px;
+  padding: 18px 22px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   font-size: 13px;
 }
 .act-head {

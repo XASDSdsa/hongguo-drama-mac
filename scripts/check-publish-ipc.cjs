@@ -238,11 +238,27 @@ const COPY = {
       delay = 0;
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
-        ['封面.png', '发布剧名.txt', '退婚之后_第001集.mp4'].sort(),
-        'only the title so far',
+        ['封面.png', '退婚之后_第001集.mp4'].sort(),
+        'rewriting only offers candidates: nothing is written until you save',
       );
+      const drafts = await handlers['publish-state']({}, dir);
+      assert.equal(drafts.result.title, '', 'no name chosen yet');
+      assert.equal(drafts.original.title, '退婚之后', 'the original name is shown apart from the saved one');
+      // 选一个候选并保存剧名
+      const saveTitle = await handlers['publish-retitle']({}, { dir, title: drafts.result.candidates[0] });
+      assert.equal(saveTitle.success, true, saveTitle.error);
+      assert.ok(fs.existsSync(path.join(dir, '发布剧名.txt')));
       await runTask('synopsis');
+      assert.ok(!fs.existsSync(path.join(dir, '发布简介.txt')), 'a rewritten synopsis is a draft until saved');
+      const pending = await handlers['publish-state']({}, dir);
+      assert.equal(pending.result.synopsis, '');
+      assert.match(pending.result.proposedSynopsis, /重生回到被退婚/);
+      const tooShort = await handlers['publish-save-synopsis']({}, { dir, synopsis: '短' });
+      assert.equal(tooShort.success, false);
+      const savedSyn = await handlers['publish-save-synopsis']({}, { dir, synopsis: pending.result.proposedSynopsis });
+      assert.equal(savedSyn.success, true, savedSyn.error);
       assert.ok(fs.existsSync(path.join(dir, '发布简介.txt')));
+      assert.equal(savedSyn.result.proposedSynopsis, '');
       assert.ok(!fs.existsSync(path.join(dir, '发布海报.jpg')));
       await runTask('poster');
       assert.deepEqual(

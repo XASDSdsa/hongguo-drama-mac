@@ -8,7 +8,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 
 .settings-header h2 {
@@ -157,15 +157,6 @@
   gap: 6px;
   color: var(--text-secondary);
   font-size: 12px;
-}
-
-.settings-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: flex-end;
-  border-top: 1px solid var(--border-muted);
-  padding-top: 18px;
 }
 
 @media (max-width: 640px) {
@@ -464,10 +455,6 @@
 .settings-header > svg {
   display: none;
 }
-.settings-card > .settings-group {
-  padding: 26px 0;
-  border-bottom: 1px solid var(--border-muted);
-}
 .settings-label {
   font-size: 14px;
   margin-bottom: 4px;
@@ -475,10 +462,6 @@
 .settings-hint {
   font-size: 12px;
   line-height: 1.7;
-}
-.settings-footer {
-  padding: 20px 0;
-  border-top: 0;
 }
 .proxy-status-row {
   background: var(--bg-canvas);
@@ -502,4 +485,93 @@
 }
 .proxy-fields-disabled {
   opacity: 0.5;
+}
+
+/* ===== 分组的设置页 ===== */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 22px 26px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+.settings-section-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.settings-section-head p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-tertiary);
+}
+.settings-section-head code {
+  padding: 1px 5px;
+  background: var(--bg-inset);
+  border-radius: 4px;
+}
+.settings-section .settings-group + .settings-group {
+  padding-top: 20px;
+  border-top: 1px solid var(--border-muted);
+}
+.settings-field > span {
+  font-size: 12px;
+  font-weight: 600;
+}
+.settings-field > em {
+  font-size: 11px;
+  line-height: 1.5;
+  font-style: normal;
+  color: var(--text-tertiary);
+}
+.settings-field-wide {
+  grid-column: 1 / -1;
+}
+.settings-advanced {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-muted);
+}
+.settings-advanced > summary {
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.settings-advanced .settings-hint {
+  margin-top: 12px;
+}
+.settings-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.settings-state {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+.settings-state.is-dirty {
+  font-weight: 600;
+  color: var(--warning);
 }

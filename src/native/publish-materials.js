@@ -314,7 +314,7 @@ function loadState(workDir, originalTitle) {
   return state;
 }
 
-/** 改写剧名：给出一批候选；还没选过剧名时默认选第一个。已选定的剧名不会被替换。 */
+/** 改写剧名：只给出一批候选，不会替换已保存的剧名（选一个并点「保存」才生效）。 */
 async function makeTitles({
   title,
   synopsis = '',
@@ -323,7 +323,6 @@ async function makeTitles({
   workDir,
   config,
   openai,
-  renderer,
   signal,
   onProgress,
 }) {
@@ -333,27 +332,8 @@ async function makeTitles({
   const found = normalizeTitles(raw, { title, synopsis });
   const state = loadState(workDir, title);
   Object.assign(state.copy, found);
-  // 已经选定（或手填）过剧名就不动它，只更新候选；还没选过才默认选第一个。
-  const kept = !!state.chosen?.title;
-  if (!kept) state.chosen = { title: found.titles[0], style: found.style, tagline: found.tagline };
-  const paths = outputPaths(outputDir);
-  writeAtomic(paths.title, state.chosen.title + '\n');
   writeState(workDir, state);
-  if (!kept && state.art?.file && renderer) {
-    onProgress?.({ stage: 'titles', message: '正在把新剧名排到海报上' });
-    const meta = await renderPoster({
-      renderer,
-      state,
-      workDir,
-      outputDir,
-      title: state.chosen.title,
-      styleId: state.chosen.style,
-      tagline: state.chosen.tagline,
-      signal,
-    });
-    return summarize(state, paths, meta);
-  }
-  return summarize(state, paths, null);
+  return summarize(state, outputPaths(outputDir), null);
 }
 
 /** 改写简介。 */
@@ -373,9 +353,20 @@ async function makeSynopsis({
   const raw = await openai.chatJson(buildSynopsisMessages({ title, synopsis, source }), { signal }, config);
   const next = normalizeSynopsis(raw);
   const state = loadState(workDir, title);
+  // 只是 AI 写的新版本，放在「待保存」里；点「保存」才会写进简介文件。
   state.copy.synopsis = next;
+  writeState(workDir, state);
+  return summarize(state, outputPaths(outputDir), null);
+}
+
+/** 保存简介（AI 新写的或手改的）：写进简介文件，之后算「已保存」。 */
+function saveSynopsis({ outputDir, workDir, synopsis }) {
+  const text = clip(String(synopsis ?? '').replace(/\r\n?/g, '\n'), 600).trim();
+  if (Array.from(text).length < 10) throw new Error('简介至少写 10 个字');
+  const state = loadState(workDir, '');
+  state.copy.synopsis = text;
   const paths = outputPaths(outputDir);
-  writeAtomic(paths.synopsis, next + '\n');
+  writeAtomic(paths.synopsis, text + '\n');
   writeState(workDir, state);
   return summarize(state, paths, null);
 }
@@ -404,7 +395,7 @@ async function makePoster({
 
   report('scene', '正在构思海报画面');
   const sceneRaw = await openai.chatJson(
-    buildSceneMessages({ title: chosen.title, synopsis: state.copy.synopsis || synopsis }),
+    buildSceneMessages({ title: chosen.title, synopsis: textOf(paths.synopsis).trim() || synopsis }),
     { signal },
     config,
   );
@@ -495,13 +486,17 @@ async function retitle({ outputDir, workDir, renderer, title, styleId, tagline, 
 
 function summarize(state, paths, meta) {
   const chosen = state.chosen || {};
+  const saved = textOf(paths.synopsis).trim();
+  const proposed = state.copy?.synopsis || '';
   return {
     title: chosen.title || '',
     styleId: chosen.style || state.copy?.style || STYLE_IDS[0],
     tagline: chosen.tagline ?? state.copy?.tagline ?? '',
     candidates: state.copy?.titles || [],
     genre: state.copy?.genre || '',
-    synopsis: state.copy?.synopsis || '',
+    synopsis: saved,
+    // AI 刚写好、还没点保存的简介（和已保存的不一样才有）
+    proposedSynopsis: proposed && proposed !== saved ? proposed : '',
     warnings: state.art?.warnings || [],
     paths,
     layout: meta?.layout || '',
@@ -536,6 +531,7 @@ module.exports = {
   makeSynopsis,
   makePoster,
   retitle,
+  saveSynopsis,
   readResult,
   outputPaths,
 };

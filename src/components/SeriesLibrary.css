@@ -1,6 +1,6 @@
 .lib-container {
   width: 100%;
-  max-width: 1200px;
+  max-width: 1180px;
   margin: 0 auto;
 }
 .lib-header {
@@ -8,16 +8,7 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 20px;
-}
-.lib-header h2 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.lib-header p {
-  color: var(--text-secondary);
-  margin-top: 8px;
+  margin-bottom: 28px;
 }
 .lib-root {
   display: inline-block;
