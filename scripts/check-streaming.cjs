@@ -70,6 +70,11 @@ function load(fetchPlayUrlSingle, overrides = {}) {
       r.on('close', () => (streamClosed = true));
       return;
     }
+    if (r.url === '/gone') {
+      s.writeHead(404);
+      s.end();
+      return;
+    }
     if (r.url === '/broken') {
       s.writeHead(200, { 'content-length': '99999' });
       s.write('hello');
@@ -164,6 +169,7 @@ function load(fetchPlayUrlSingle, overrides = {}) {
   });
   await check('broken upstream settles failed download and removes partial file', async () => {
     const h = hload(async () => ({ url: base + '/broken' }));
+    h.run('downloadRetryDelays = []'); // 这一条只看“失败就收尾”，自动重试单独测
     const task = {
       id: 'broken',
       type: 'hongguo',
@@ -178,6 +184,60 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     assert.equal(settled, true, 'upstream failure must not leave queue hanging');
     assert.equal(task.status, 'failed');
     assert.equal(fs.existsSync(path.join(root, 'broken.mp4.enc.tmp')), false);
+  });
+  await check('a 404 on the download link is retried with a fresh link, not given up as missing', async () => {
+    let lookups = 0;
+    const h = hload(async () => {
+      lookups++;
+      return { url: base + (lookups === 1 ? '/gone' : '/range') };
+    });
+    let invalidated = 0;
+    h.run('hongguo').invalidatePlayUrl = () => invalidated++;
+    h.run('downloadRetryDelays = [5, 5]');
+    const task = { id: 'gone', type: 'hongguo', filename: 'gone.mp4', customDir: root, hongguoInfo: { vid: 'gone' } };
+    await h.context.executeHongguoDownload(task);
+    assert.equal(task.status, 'completed', task.error);
+    assert.equal(lookups, 2, 'second attempt asked for a new link');
+    assert.equal(invalidated, 1, 'the stale cached link was dropped');
+    assert.equal(fs.readFileSync(path.join(root, 'gone.mp4'), 'utf8'), '0123456789');
+  });
+  await check('a link that keeps failing ends as failed with the retry count, not as missing', async () => {
+    let lookups = 0;
+    const h = hload(async () => {
+      lookups++;
+      return { url: base + '/gone' };
+    });
+    h.run('downloadRetryDelays = [5, 5]');
+    const task = {
+      id: 'gone2',
+      type: 'hongguo',
+      filename: 'gone2.mp4',
+      customDir: root,
+      hongguoInfo: { vid: 'gone2' },
+    };
+    await h.context.executeHongguoDownload(task);
+    assert.equal(task.status, 'failed');
+    assert.equal(lookups, 3, 'one try plus two automatic retries');
+    assert.equal(task.errorStatus, 404);
+    assert.match(task.error, /已自动换新链接重试 2 次/);
+  });
+  await check('the platform saying the episode is not open is not retried', async () => {
+    let lookups = 0;
+    const h = hload(async () => {
+      lookups++;
+      return { url: null, error: '第 8 集未开放' };
+    });
+    h.run('downloadRetryDelays = [5, 5]');
+    const task = {
+      id: 'closed',
+      type: 'hongguo',
+      filename: 'closed.mp4',
+      customDir: root,
+      hongguoInfo: { vid: 'closed' },
+    };
+    await h.context.executeHongguoDownload(task);
+    assert.equal(task.status, 'failed');
+    assert.equal(lookups, 1);
   });
   await check('stop during lookup stays stopped and retry cannot overlap old run', async () => {
     let resolve;

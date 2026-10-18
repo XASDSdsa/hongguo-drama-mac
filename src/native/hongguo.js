@@ -421,6 +421,11 @@ function parseModelVideo(vm) {
   return best || [null, null, null];
 }
 
+/** 这集的播放直链下载失败（过期、节点没有）后，把缓存的旧地址作废，下次取址一定重新拿。 */
+function invalidatePlayUrl(vid, sid) {
+  responseCache.delete(`play:${sid || ''}:${vid}`);
+}
+
 /**
  * 获取单集播放直链与 spade_a 加密 key
  */
@@ -895,6 +900,7 @@ module.exports = {
   fetchEpisodeList,
   fetchEpisodeListFromWeb,
   fetchPlayUrlSingle,
+  invalidatePlayUrl,
   fetchPlayUrlFromWeb,
   deriveKey,
   decryptMp4File,

@@ -535,7 +535,7 @@ async function check(name, fn) {
     const task = (id, index, fields) =>
       `downloadTasks.push(Object.assign({ id: '${id}', progress: 0, hongguoInfo: { vid: 'v${index}', series_id: '77', vid_index: ${index} } }, ${JSON.stringify(fields)}))`;
     for (const code of [
-      task('t3', 3, { status: 'failed', error: '未获取到有效播放地址' }),
+      task('t3', 3, { status: 'failed', error: '第 3 集未开放' }),
       task('t4', 4, { status: 'failed', error: 'socket hang up', errorCode: 'ECONNRESET' }),
       task('t5', 5, { status: 'stopped' }),
       task('t6', 6, { status: 'downloading', progress: 40 }),
@@ -575,7 +575,7 @@ async function check(name, fn) {
     const reason = asked.blocking.find((item) => item.index === 3).reason;
     assert.equal(reason.label, '资源缺失');
     assert.equal(reason.retryHelps, false);
-    assert.match(reason.detail, /未获取到有效播放地址/);
+    assert.match(reason.detail, /第 3 集未开放/);
     const askedNetwork = await handlers['library-dedup'](
       {},
       { dir, files: [4, 5].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },

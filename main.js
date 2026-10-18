@@ -1862,7 +1862,11 @@ async function executeDownload(task) {
 }
 
 // ===== 红果短剧下载 =====
-async function executeHongguoDownload(task) {
+// 下载失败时程序自己换新链接重试：每次失败后等多久再试（毫秒），空数组 = 不自动重试。
+// 平台的下载链接会过期、个别节点临时没有这集，手动重试几次常常就能下，这里让程序自己做。
+let downloadRetryDelays = [2000, 5000, 12000];
+
+async function executeHongguoDownload(task, attempt = 0) {
   const { id, hongguoInfo, filename } = task;
   const { vid, series_title } = hongguoInfo || {};
   const source = axios.CancelToken.source();
@@ -1972,9 +1976,34 @@ async function executeHongguoDownload(task) {
         task.endTime = Date.now();
         sendToRenderer('download-stopped', { id });
       }
+    } else if (
+      attempt < downloadRetryDelays.length &&
+      downloadErrors.isAutoRetryable({
+        message: error.message,
+        code: error.code,
+        status: error.response?.status || 0,
+      })
+    ) {
+      // 旧的下载地址作废，等一会儿重新取新的再下；等的时候用户点了停止就算停止。
+      try {
+        hongguo.invalidatePlayUrl?.(vid, hongguoInfo?.series_id);
+      } catch (_) {}
+      task.status = 'downloading';
+      task.progress = 0;
+      task.receivedBytes = 0;
+      sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
+      await new Promise((resolve) => setTimeout(resolve, downloadRetryDelays[attempt]));
+      if (source.token.reason || task.cancelled) {
+        task.status = 'stopped';
+        task.error = '';
+        task.endTime = Date.now();
+        sendToRenderer('download-stopped', { id });
+      } else {
+        return executeHongguoDownload(task, attempt + 1);
+      }
     } else {
       task.status = 'failed';
-      task.error = error.message;
+      task.error = attempt ? `${error.message}（已自动换新链接重试 ${attempt} 次）` : error.message;
       // 保留错误码和 HTTP 状态，管理剧集里据此分辨是资源缺失还是网络失败。
       task.errorCode = error.code || '';
       task.errorStatus = error.response?.status || 0;
