@@ -68,6 +68,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .pill{border:1px solid var(--line2);border-radius:6px;padding:4px 12px;color:var(--text);background:var(--panel)}
 .stat{color:var(--muted);display:flex;align-items:center;gap:6px}
 .stat i{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block}
+.stat i.warn{background:var(--amber)}
 .sub{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line)}
 .sub h1{margin:0;font-size:14px;font-weight:600;color:#fff}
 .btn{border:1px solid var(--line2);background:var(--panel2);border-radius:6px;padding:5px 14px;color:var(--text)}
@@ -268,7 +269,7 @@ function assetBlock(item, thumbs) {
   return `<div class="asset">${head}<div><b>${esc(item.name)}</b><em>#${esc(item.id)} · ${KIND_TEXT[item.kind] || ''}</em><br>${esc(item.desc || '（无描述）')}</div></div>`;
 }
 
-function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, frames, thumbs, videoRel, size, segCount, stamp, failedMessage }) {
+function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, frames, thumbs, videoRel, size, segCount, shotTotal, stamp, failedMessage }) {
   const frame = frames?.[row.no] || {};
   const times = keyframeTimes(row);
   const assets = (shot?.assets || []).map((id) => byId.get(id)).filter(Boolean);
@@ -325,6 +326,8 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
     `<p class="kv"><b>配乐：</b>${musicText ? esc(musicText) : '<span class="empty">无</span>'}</p>`,
   ].join('');
 
+  // 这个分镜自己用到的、带参考图的素材（不是整段所有分镜加起来的）
+  const shotImages = (segment.images || []).filter((image) => (shot?.assets || []).includes(image.id)).length;
   const params = [
     ['目标模型', 'Seedance 2.5'],
     ['原片画幅', size ? `${size.width}×${size.height}` : '—'],
@@ -332,8 +335,8 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
     ['所属片段', `第 ${segment.index}/${segCount} 段`],
     ['段内时间', `${seconds(row.start - segment.start).replace('秒', '')}–${seconds(row.end - segment.start)}`],
     ['整集位置', `${clockPrecise(row.start)}–${clockPrecise(row.end)}`],
-    ['参考图', `${(segment.images || []).length} 张`],
-    ['镜头编号', `${row.no}`],
+    ['参考图', `${shotImages} 张`],
+    ['本集镜头', `第 ${row.no}/${shotTotal} 镜`],
   ];
   const ptable = `<div class="ptable">${params.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
 
@@ -398,6 +401,7 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
 /**
  * @param {object} p
  * @param {string} p.title       剧名（可空）
+ * @param {string} p.episodeName 页头显示的集名，如「第3集」（没有就用 label）
  * @param {string} p.label       集名
  * @param {number} p.duration    整集秒数
  * @param {number} p.maxSeconds  每段上限
@@ -409,7 +413,7 @@ function shotCard({ segment, segIndex, row, shot, shotIndex, library, byId, fram
  * @param {{width:number,height:number}} p.size 原片画幅
  * @param {string|Date} p.generatedAt
  */
-function renderEpisodeHtml({ title = '', label, duration, maxSeconds, library, segments, frames = {}, thumbs = {}, videoRel = '', size = null, generatedAt = new Date(), allText = '' }) {
+function renderEpisodeHtml({ title = '', label, episodeName = '', duration, maxSeconds, library, segments, frames = {}, thumbs = {}, videoRel = '', size = null, generatedAt = new Date(), allText = '' }) {
   const byId = new Map(libraryEntries(library).map((item) => [item.id, item]));
   const stamp = localStamp(generatedAt);
   const shotTotal = segments.reduce((sum, segment) => sum + segment.rows.length, 0);
@@ -434,6 +438,7 @@ function renderEpisodeHtml({ title = '', label, duration, maxSeconds, library, s
             videoRel,
             size,
             segCount: segments.length,
+            shotTotal,
             stamp,
             failedMessage: segment.failedMessage,
           }),
@@ -465,12 +470,14 @@ function renderEpisodeHtml({ title = '', label, duration, maxSeconds, library, s
     })),
   };
 
-  const headTitle = [title, label].filter(Boolean).join(' • ');
+  const headTitle = [title, episodeName || label].filter(Boolean).join(' • ');
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>分镜头脚本 · ${esc(headTitle)}</title><style>${CSS}</style></head><body>
 <header class="top"><div class="brand" data-view="shots">分镜头脚本</div><nav><a data-view="library">素材库</a></nav><span class="sp"></span>${
     title ? `<span class="pill">▣ ${esc(title)}</span>` : ''
-  }<span class="stat"><i></i>提示词已生成</span><span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜</span>${
+  }${
+    badShots ? `<span class="stat"><i class="warn"></i>${badShots} 镜没有生成提示词</span>` : '<span class="stat"><i></i>提示词已生成</span>'
+  }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜</span>${
     stamp ? `<span class="stat">${esc(stamp)}</span>` : ''
   }</header>
 <div class="sub"><h1>${esc(headTitle)}</h1><span class="pill">目标模型 Seedance 2.5</span><span class="pill">每段 ≤ ${esc(maxSeconds)} 秒</span><span style="flex:1"></span><button type="button" class="btn primary" data-copy="all">复制全部提示词</button></div>

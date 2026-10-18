@@ -281,9 +281,12 @@ async function deriveEpisodePrompts({
       // 画幅：优先读原片尺寸（海报缩小过，宽高比一致但像素不对）。
       const probe = await grabFrame(ffmpeg, inputPath, rows[0].start, 100000, 31, temp, 'size.jpg', signal);
       if (probe) size = jpegSize(probe.bytes) || size;
+      // 成品文件名是「新剧名_第001集」：页头显示新剧名和「第1集」，不重复文件名
+      const named = /^(.+)_第0*(\d+)集(?:_\d+)?$/.exec(label);
       const html = renderEpisodeHtml({
-        title,
+        title: named ? named[1] : title,
         label,
+        episodeName: named ? `第${named[2]}集` : '',
         duration,
         maxSeconds: maxLimit,
         library,

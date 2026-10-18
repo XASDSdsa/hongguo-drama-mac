@@ -204,6 +204,31 @@ async function main() {
   assert.ok(embedded.segments[0].shots[1].line.startsWith('3–7 秒：'));
   assert.ok(!page.slice(page.indexOf('<script>')).includes('${'), '页面脚本里没有没替换的模板占位');
 
+  // ---- 页面上的数字和名称要和真实数据逐项对上 ----
+  const named = await deriveEpisodePrompts({ ...options, label: '测试剧_第005集', outDir: path.join(dir, 'out5'), cacheFile: path.join(dir, 'cache', 'named.json'), sourceKey: 'hash-5' });
+  const namedPage = await fsp.readFile(named.htmlFile, 'utf8');
+  const bare = namedPage.replace(/data:image\/jpeg;base64,[A-Za-z0-9+/=]+/g, '');
+  assert.ok(bare.includes('<h1>测试剧 • 第5集</h1>'), '页头是「新剧名 • 第N集」');
+  assert.ok(bare.includes('<span class="pill">▣ 测试剧</span>'));
+  assert.ok(!bare.replace(/<script type="application\/json"[\s\S]*?<\/script>/, '').includes('测试剧_第005集'), '页面可见内容里不重复显示文件名');
+  assert.ok(bare.includes('整集 19 秒') && bare.includes('2 段 · 5 镜') && bare.includes('提示词已生成'));
+  assert.ok(bare.includes('第1段</b><span class="meta">0:00–0:15 · 4个镜头') && bare.includes('第2段</b><span class="meta">0:15–0:19 · 1个镜头'));
+  const cards = bare.split('<article class="shot"').slice(1);
+  assert.equal(cards.length, 5);
+  const expectDur = [3, 4, 3, 5, 4];
+  const expectSay = [0, 1, 0, 0, 0];
+  cards.forEach((card, i) => {
+    assert.ok(card.includes(`<h2>镜头 0${i + 1}</h2>`));
+    assert.ok(card.includes(`秒数 ${expectDur[i]}秒`), `镜 ${i + 1} 的秒数`);
+    assert.ok(card.includes(`<span>时长</span><b>${expectDur[i]}秒</b>`));
+    assert.ok(card.includes(`第 ${i + 1}/5 镜`));
+    assert.ok(card.includes(`<span>所属片段</span><b>第 ${i < 4 ? 1 : 2}/2 段</b>`));
+    assert.ok(card.includes('<span>参考图</span><b>1 张</b>'), '参考图数量按这个分镜自己用到的素材算');
+    assert.ok(card.includes(`<small>${expectSay[i]} 句</small>`), `镜 ${i + 1} 的台词句数`);
+  });
+  assert.ok(cards[1].includes('<span>段内时间</span><b>3–7秒</b>') && cards[1].includes('<span>整集位置</span><b>0:03.0–0:07.0</b>'));
+  assert.ok(cards[4].includes('<span>段内时间</span><b>0–4秒</b>') && cards[4].includes('<span>整集位置</span><b>0:15.0–0:19.0</b>'));
+
   // 缓存：同一个视频、同一个模型再跑一次，不再请求方舟
   const asked = calls.ask;
   const uploaded = calls.upload;
