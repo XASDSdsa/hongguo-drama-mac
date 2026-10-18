@@ -156,6 +156,10 @@ function SettingsPage({ active = true }) {
         'ai_image_api_key',
         'ai_image_model',
         'ai_text_model',
+        'ark_base_url',
+        'ark_api_key',
+        'ark_video_model',
+        'video_prompt_max_seconds',
         'structure_threads',
         'structure_cleanup',
         'structure_device',
@@ -617,6 +621,66 @@ function SettingsPage({ active = true }) {
                 {aiTest.success ? `连通正常（${aiTest.model}，${aiTest.elapsed} ms）` : aiTest.error}
               </span>
             )}
+          </div>
+        </section>
+
+        <section className="settings-section" aria-label="视频反推提示词">
+          <header className="settings-section-head">
+            <h3>视频反推提示词</h3>
+            <p>
+              在「管理剧集」里勾选「生成剪映草稿」并打开「同时反推 Seedance 2.5 提示词」后使用。用火山方舟的视频理解模型看成品视频，
+              每集在这部剧的「视频提示词」文件夹里生成一份按 Seedance 2.5 分段写好的文本。
+            </p>
+          </header>
+          <div className="ai-settings-grid">
+            <label className="ai-field ai-field-wide">
+              <span>方舟接口地址</span>
+              <input
+                className="input-field"
+                aria-label="方舟接口地址"
+                value={settings.ark_base_url || ''}
+                onChange={(e) => update('ark_base_url', e.target.value)}
+                placeholder="https://ark.cn-beijing.volces.com/api/v3"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>方舟 API Key</span>
+              <input
+                className="input-field"
+                type="password"
+                autoComplete="off"
+                aria-label="方舟 API Key"
+                value={settings.ark_api_key || ''}
+                onChange={(e) => update('ark_api_key', e.target.value)}
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field">
+              <span>视频理解模型</span>
+              <input
+                className="input-field"
+                aria-label="视频理解模型"
+                value={settings.ark_video_model || ''}
+                onChange={(e) => update('ark_video_model', e.target.value)}
+                placeholder="填方舟控制台里的模型名或接入点 ID"
+                spellCheck={false}
+              />
+              <em>要能看视频的模型。没有默认值，必须自己填。</em>
+            </label>
+            <label className="ai-field">
+              <span>每段最长（秒）</span>
+              <input
+                className="input-field"
+                type="number"
+                min="5"
+                max="30"
+                aria-label="每段最长秒数"
+                value={settings.video_prompt_max_seconds || 15}
+                onChange={(e) => update('video_prompt_max_seconds', Number(e.target.value) || 15)}
+              />
+              <em>相邻分镜合并成一段，不会把单个分镜切开；Seedance 2.5 单次最长 30 秒。</em>
+            </label>
           </div>
         </section>
 

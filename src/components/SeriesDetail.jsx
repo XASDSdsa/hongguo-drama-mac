@@ -80,6 +80,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
+  // 做草稿的同时，从视频里反推 Seedance 2.5 提示词（要在设置里填火山方舟）。
+  const [draftPrompts, setDraftPrompts] = useState(saved.draftPrompts === true);
   // 草稿最多做 4 集，每格自由填成品集号（默认 1–4）。
   const [draftNums, setDraftNums] = useState(
     Array.isArray(saved.draftNums) && saved.draftNums.length === 4
@@ -202,8 +204,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   }, [saved]);
 
   useEffect(() => {
-    if (opts) writeJson(STORAGE_KEY, { opts, split, dedupOn, draftOn, draftMode, draftNums });
-  }, [opts, split, dedupOn, draftOn, draftMode, draftNums]);
+    if (opts) writeJson(STORAGE_KEY, { opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums });
+  }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
   }, [pageSize]);
@@ -312,7 +314,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
       opts,
       split,
       gapPolicy,
-      sideTasks: { jianyingDraft: { enabled: draftOn, mode: draftMode, scope: draftScopeValue } },
+      sideTasks: {
+        jianyingDraft: { enabled: draftOn, mode: draftMode, scope: draftScopeValue, prompts: draftPrompts },
+      },
     });
     setSubmitting(false);
     if (result?.needsDecision) return setDecision(result);
@@ -637,6 +641,18 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     ))}
                     集
                   </div>
+                  <label
+                    className="proc-check"
+                    title="需要先在设置里填火山方舟的 Key 和视频理解模型名。每集会在这部剧的「视频提示词」文件夹里生成一份文本，按 Seedance 2.5 分段写好。"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={draftPrompts}
+                      onChange={(e) => setDraftPrompts(e.target.checked)}
+                      disabled={submitting}
+                    />
+                    同时反推 Seedance 2.5 提示词
+                  </label>
                 </div>
               )}
             </div>

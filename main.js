@@ -38,6 +38,8 @@ const { createAnalysisManager } = require('./src/native/analysis-manager');
 const { createAiMaterialQueue } = require('./src/native/ai-material-queue');
 const { createVideoStructurePipeline } = require('./src/native/video-structure/pipeline');
 const { createJianyingDraft } = require('./src/native/video-structure/jianying');
+const arkVideo = require('./src/native/video-prompt/ark');
+const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
@@ -197,6 +199,11 @@ function getDefaultSettings() {
     ai_image_size: '1024x1536',
     ai_image_quality: 'high',
     ai_concurrency: 2,
+    // 视频反推提示词（火山方舟视频理解）：模型名没有默认值，要用户自己填。
+    ark_base_url: arkVideo.DEFAULT_BASE_URL,
+    ark_api_key: '',
+    ark_video_model: '',
+    video_prompt_max_seconds: 15,
     // 本地视频结构化拆解。
     // 0 = 自动（按本机核心数选择）。
     structure_threads: 0,
@@ -2718,7 +2725,13 @@ function finishQuchongBatch(batch) {
   if (draftTask?.enabled && batch.libraryDir && !batch.cancelled) {
     const outputs = batch.tasks.filter((task) => task.status === 'completed' && task.dst).map((task) => task.dst);
     if (outputs.length) {
-      startLibraryDrafts({ dir: batch.libraryDir, files: outputs, mode: draftTask.mode, scope: draftTask.scope }).then(
+      startLibraryDrafts({
+        dir: batch.libraryDir,
+        files: outputs,
+        mode: draftTask.mode,
+        scope: draftTask.scope,
+        prompts: draftTask.prompts,
+      }).then(
         (started) => {
           if (!started.success) {
             libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
@@ -3861,7 +3874,12 @@ function normalizeSideTasks(value) {
   const draft = value?.jianyingDraft;
   if (!draft?.enabled) return null;
   return {
-    jianyingDraft: { enabled: true, mode: normalizeDraftMode(draft.mode), scope: normalizeDraftScope(draft.scope) },
+    jianyingDraft: {
+      enabled: true,
+      mode: normalizeDraftMode(draft.mode),
+      scope: normalizeDraftScope(draft.scope),
+      prompts: draft.prompts === true,
+    },
   };
 }
 
@@ -3912,6 +3930,7 @@ function libraryDraftSnapshot(job) {
   return {
     id: job.id,
     mode: job.mode,
+    prompts: job.prompts === true,
     modeText: DRAFT_MODE_TEXT[job.mode],
     status: job.status,
     total: job.total,
@@ -4070,6 +4089,76 @@ function describeStructure(structure) {
   return parts.length ? parts.join('；') : '分析完成';
 }
 
+/** 要反推视频提示词时，先确认方舟的 Key 和模型名填了，免得拆解跑了很久才发现。 */
+function videoPromptProblem() {
+  const settings = getCurrentSettings();
+  if (!String(settings.ark_api_key || '').trim()) return '要反推视频提示词，请先在设置里填火山方舟的 API Key';
+  if (!String(settings.ark_video_model || '').trim()) return '要反推视频提示词，请先在设置里填视频理解模型名';
+  return '';
+}
+
+/**
+ * 这一集拆解完成后，用同一份分镜和台词结果反推 Seedance 2.5 提示词，写成「视频提示词/集名.txt」。
+ * 失败只记日志、不影响剪映草稿。
+ */
+async function deriveLibraryPrompts(job, file, item, structure) {
+  const key = path.resolve(job.dir);
+  const label = path.basename(file, path.extname(file));
+  const settings = getCurrentSettings();
+  const readResult = async (id) =>
+    JSON.parse(await fsp.readFile(path.join(structure.projectDir, structure.modules[id].result_path), 'utf8'));
+  let sourceKey = '';
+  try {
+    sourceKey = JSON.parse(await fsp.readFile(structure.manifestPath, 'utf8')).source_sha256 || '';
+  } catch (_) {
+    sourceKey = '';
+  }
+  if (!sourceKey) {
+    const stat = await fsp.stat(file);
+    sourceKey = `${stat.size}-${Math.round(stat.mtimeMs)}`;
+  }
+  const model = String(settings.ark_video_model || '').trim();
+  const log = (level, text) =>
+    libLog(key, level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info', `视频提示词：${label}：${text}`, 'side');
+  item.message = '反推视频提示词';
+  item.detail = '';
+  item.stageStartedAt = Date.now();
+  libLog(key, 'info', `视频提示词：${label} 开始`, 'side');
+  libraryDraftEmit(job);
+  try {
+    const [alignment, transcript] = await Promise.all([readResult('alignment'), readResult('transcript')]);
+    const result = await deriveEpisodePrompts({
+      ffmpeg: getFfmpegPath(),
+      inputPath: file,
+      label,
+      alignment,
+      transcript,
+      client: arkVideo.createArkClient({
+        baseUrl: String(settings.ark_base_url || '').trim() || arkVideo.DEFAULT_BASE_URL,
+        apiKey: String(settings.ark_api_key || '').trim(),
+        model,
+      }),
+      model,
+      outDir: path.join(job.dir, '视频提示词'),
+      cacheFile: path.join(app.getPath('userData'), 'video-prompt-cache', `${item.projectId}.json`),
+      sourceKey,
+      maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
+      log,
+      onProgress: (_percent, message) => {
+        item.detail = String(message || '').slice(0, 80);
+        libraryDraftEmit(job);
+      },
+      signal: job.controller.signal,
+    });
+    if (result.failed) {
+      log('warn', `共 ${result.segments} 段，有 ${result.failed} 段没有生成，重新开始一次会只补这几段 → ${result.file}`);
+    } else log('ok', `已生成 → ${result.file}`);
+  } catch (error) {
+    if (job.cancelled || job.controller.signal.aborted) throw Object.assign(new Error('已停止'), { stopped: true });
+    log('error', `没有生成：${openai.redactError(error, settings.ark_api_key)}`);
+  }
+}
+
 async function generateLibraryDraft(job, file, item) {
   const pipeline = getReconstructionPipeline();
   const label = path.basename(file, path.extname(file));
@@ -4088,6 +4177,7 @@ async function generateLibraryDraft(job, file, item) {
       throw new Error(structure?.error || `拆解没有完成：${incomplete.map((id) => DRAFT_STAGE_TEXT[id]).join('、')}`);
     }
     libLog(path.resolve(job.dir), 'info', `剪映草稿：${label} ${describeStructure(structure)}`, 'side');
+    if (item.prompts) await deriveLibraryPrompts(job, file, item, structure);
     // 拆解结果是缓存复用的：以前生成的草稿和这次要的分轨方式不一样时，只重做最后一步。
     const manifestOf = (draftPath) => {
       try {
@@ -4113,7 +4203,7 @@ async function generateLibraryDraft(job, file, item) {
 }
 
 /** 对这些去重成品逐集生成剪映草稿；后台运行，进度和日志写进这部剧的「支线任务日志」。 */
-async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
+async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts = false }) {
   const key = path.resolve(dir);
   if (!candidates.length)
     return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
@@ -4125,7 +4215,8 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   if (missing.length)
     libLog(path.resolve(dir), 'warn', `剪映草稿：成品里没有第 ${missing.join('、')} 集，已跳过`, 'side');
   const kind = normalizeDraftMode(mode);
-  const problem = await libraryDraftReadiness(kind);
+  const withPrompts = prompts === true;
+  const problem = (await libraryDraftReadiness(kind)) || (withPrompts ? videoPromptProblem() : '');
   if (problem) {
     libLog(key, 'error', `剪映草稿：没有开始：${problem}`, 'side');
     return { success: false, error: problem };
@@ -4139,7 +4230,7 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
       ),
     );
     const added = files.filter((file) => !queued.has(file));
-    for (const file of added) running.queue.push({ file, mode: kind });
+    for (const file of added) running.queue.push({ file, mode: kind, prompts: withPrompts });
     running.total += added.length;
     libLog(key, 'info', `剪映草稿：正在生成，这 ${added.length} 集排到后面接着做`, 'side');
     libraryDraftEmit(running);
@@ -4154,7 +4245,9 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
     id: randomUUID(),
     dir: key,
     mode: kind,
-    queue: files.map((file) => ({ file, mode: kind })),
+    prompts: withPrompts,
+    controller: new AbortController(),
+    queue: files.map((file) => ({ file, mode: kind, prompts: withPrompts })),
     active: new Map(), // 正在做的集：projectId -> { file, label, mode, progress, message, detail, stageStartedAt, lastStage }
     status: 'running',
     total: files.length,
@@ -4170,7 +4263,7 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   libLog(
     key,
     'info',
-    `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}）${lanes > 1 ? `，同时做 ${lanes} 集、每集 ${job.threadsEach} 线程` : ''}`,
+    `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}${withPrompts ? '，同时反推视频提示词' : ''}）${lanes > 1 ? `，同时做 ${lanes} 集、每集 ${job.threadsEach} 线程` : ''}`,
     'side',
   );
   libraryDraftEmit(job);
@@ -4189,6 +4282,7 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
         file: item.file,
         label,
         mode: item.mode,
+        prompts: item.prompts === true,
         progress: 0,
         message: '',
         detail: '',
@@ -4276,7 +4370,13 @@ ipcMain.handle('library-draft', async (_event, payload = {}) => {
     if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list())) {
       return { success: false, error: '这不是剧文件夹' };
     }
-    return await startLibraryDrafts({ dir, files: libraryDedupOutputs(dir), mode: payload.mode, scope: payload.scope });
+    return await startLibraryDrafts({
+      dir,
+      files: libraryDedupOutputs(dir),
+      mode: payload.mode,
+      scope: payload.scope,
+      prompts: payload.prompts === true,
+    });
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -4287,6 +4387,7 @@ ipcMain.handle('library-draft-cancel', (_event, dir) => {
     const job = libraryDraftJobs.get(path.resolve(String(dir || '')));
     if (!job || job.status !== 'running') return { success: false, error: '没有在生成的剪映草稿' };
     job.cancelled = true;
+    job.controller?.abort();
     for (const item of job.active.values()) if (item.projectId) getReconstructionPipeline().cancel(item.projectId);
     return { success: true };
   } catch (error) {
@@ -4391,6 +4492,7 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
         files: libraryDedupOutputs(dir),
         mode: draft.mode,
         scope: draft.scope,
+        prompts: draft.prompts,
       });
       return started.success ? { ...started, draftOnly: true } : started;
     }
