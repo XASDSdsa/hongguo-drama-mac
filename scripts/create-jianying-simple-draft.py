@@ -215,8 +215,33 @@ def main() -> int:
     script.save()
     base.progress(92, "视频、音频、文案三条轨道已保存")
 
+    # 记下生成这份草稿所用的分镜/气口逻辑版本和统计，拿到一份草稿就能判断它是不是按最新逻辑做的。
+    logic: dict = {}
+    for module in ("alignment", "transcript"):
+        try:
+            data, _ = base.module_data(project_dir, project, module)
+        except (RuntimeError, FileNotFoundError, KeyError):
+            continue
+        if module == "alignment":
+            logic.update({
+                "boundary_policy": data.get("boundary_policy"),
+                "alignment_algorithm": data.get("algorithm_id"),
+                "pause_tiers": data.get("pause_tiers"),
+                "visual_shots": data.get("raw_shot_count"),
+                "final_shots": len(data.get("shots") or []),
+                "merged_boundaries": data.get("merged_boundary_count"),
+            })
+        else:
+            summary = data.get("alignment_summary") or {}
+            logic.update({
+                "sentence_alignment": data.get("timing_method") or summary.get("algorithm"),
+                "acoustic_pauses": summary.get("acoustic_pauses"),
+                "pause_cuts": summary.get("pause_cuts"),
+            })
+
     manifest = {
         "schema": SCHEMA,
+        "logic": logic,
         "draft_name": args.name,
         "draft_dir": str(draft_dir),
         "source_project": str(project_dir / "project.json"),
