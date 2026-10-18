@@ -161,17 +161,99 @@ exec ffmpeg "\${args[@]}"
     },
   );
 
-  await check('when even the simple audio chain fails the message says audio, not the GPU', async () => {
+  await check('when every way of encoding the audio fails the message says audio, not the GPU', async () => {
     const fake = audioFake('audio-dead', 'true');
     const { promise } = await run(fake.file, path.join(tmp, 'audio-bad.mp4'));
     await assert.rejects(promise, (error) => {
-      assert.equal(fake.count(), 3);
+      assert.equal(fake.count(), 4, '原样、换参数、最简链，再试一次视频音频分开处理');
       const head = error.message.split('\n')[0];
       assert.match(head, /^音频编码失败.*与显卡\/编码器无关/);
       assert.match(error.message, /\[滤镜\]/);
       assert.doesNotMatch(head, /videotoolbox 编码失败/);
       return true;
     });
+    assert.equal(fs.existsSync(path.join(tmp, 'audio-bad.mp4')), false);
+  });
+
+  const leftovers = () => fs.readdirSync(tmp).filter((name) => name.startsWith('.hongguo-quchong'));
+  const audioStreams = (file) =>
+    execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', file])
+      .toString()
+      .trim();
+
+  await check(
+    'when the one-pass command keeps failing on audio, video and audio are made separately and the episode still comes out with sound',
+    async () => {
+      const fake = audioFake('audio-sep', `echo "$*" | grep -q -- '-map \\[a\\] -shortest'`);
+      const out = path.join(tmp, 'audio-sep.mp4');
+      const { promise, logs } = await run(fake.file, out);
+      const result = await promise;
+      assert.ok(fs.statSync(result.path).size > 0);
+      assert.equal(audioStreams(out), 'aac', '成品必须带声音');
+      assert.ok(logs.some((l) => l.startsWith('[降级]') && /分开处理/.test(l)));
+      assert.deepEqual(leftovers(), [], '临时目录和临时文件不能留下');
+    },
+  );
+
+  await check('separate audio also works for a joined multi-piece episode and keeps the length of the pieces', async () => {
+    const fake = audioFake('audio-sep-joined', `echo "$*" | grep -q -- '-map \\[a\\] -shortest'`);
+    const out = path.join(tmp, 'audio-sep-joined.mp4');
+    const logs = [];
+    await quchong.runJob({
+      ffmpegPath: fake.file,
+      ffprobePath: 'ffprobe',
+      src: source,
+      dst: out,
+      segments: [
+        { src: source, start: 0.2, duration: 0.8 },
+        { src: source, start: 1.0, duration: 0.9 },
+      ],
+      speed: 1,
+      opts: { ...quchong.DEFAULTS, encoder: 'videotoolbox' },
+      onLog: (line) => logs.push(String(line)),
+    });
+    assert.equal(audioStreams(out), 'aac');
+    const seconds = Number(
+      execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out]).toString(),
+    );
+    assert.ok(seconds > 1.4 && seconds < 2.2, `时长应约等于两段之和，实际 ${seconds}`);
+    assert.deepEqual(leftovers(), []);
+  });
+
+  await check('if even the separate audio encode fails, the message names every step and nothing is left behind', async () => {
+    const fake = audioFake('audio-sep-dead', `echo "$*" | grep -q -- '-c:a aac'`);
+    const { promise } = await run(fake.file, path.join(tmp, 'audio-sep-dead.mp4'));
+    await assert.rejects(promise, (error) => {
+      assert.match(error.message.split('\n')[0], /视频音频分开处理后仍失败.*与显卡\/编码器无关/);
+      return true;
+    });
+    assert.equal(fs.existsSync(path.join(tmp, 'audio-sep-dead.mp4')), false);
+    assert.deepEqual(leftovers(), []);
+  });
+
+  await check('pieces cut from different files with different picture shapes still join (SAR is set after scaling)', async () => {
+    const odd = path.join(tmp, 'odd-sar.mp4');
+    execFileSync('ffmpeg', [
+      '-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24:duration=2',
+      '-f', 'lavfi', '-i', 'sine=duration=2',
+      '-vf', 'scale=320x180,setsar=27/64',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', odd,
+    ]);
+    const out = path.join(tmp, 'odd-joined.mp4');
+    await quchong.runJob({
+      ffmpegPath: 'ffmpeg',
+      ffprobePath: 'ffprobe',
+      src: source,
+      dst: out,
+      segments: [
+        { src: source, start: 0, duration: 0.8 },
+        { src: odd, start: 0.5, duration: 0.8 },
+      ],
+      speed: 1,
+      opts: { ...quchong.DEFAULTS, encoder: 'cpu' },
+    });
+    assert.ok(fs.statSync(out).size > 0);
   });
 
   await check(

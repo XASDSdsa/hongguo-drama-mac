@@ -145,6 +145,25 @@ function encoderArgs(name, lean, width, height) {
   return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', lean ? '23' : '20'];
 }
 
+/** 原声的处理链：整条滤镜图里和“分开处理音频”那一步用的是同一份，保证两条路出来的声音一样。 */
+function audioChain({ safe, speed, pitch, eq, volume, audioDelay, padTo }) {
+  const af = safe
+    ? ['asetpts=PTS-STARTPTS', 'aresample=44100', `atempo=${speed.toFixed(6)}`]
+    : [
+        'asetpts=PTS-STARTPTS',
+        'aresample=44100',
+        `asetrate=44100*${pitch.toFixed(6)}`,
+        'aresample=44100',
+        `atempo=${(speed / pitch).toFixed(6)}`,
+      ];
+  if (eq && !safe) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
+  if (audioDelay > 0) af.push(`adelay=delays=${(audioDelay * 1000).toFixed(3)}:all=1`);
+  af.push(`volume=${volume}`);
+  // 补静音只补到成片结束稍后一点，不用无限长的 apad：配合 -shortest 时，较老的 FFmpeg 会在收尾时报错。
+  if (!safe && padTo) af.push(`apad=whole_dur=${padTo.toFixed(3)}`);
+  return af;
+}
+
 function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, segments, audioMode = 'full' }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
@@ -154,8 +173,11 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   const height = even(media.video_height);
   const speed = r.SPEED;
   const intro = opts.black_intro ? 0.3 : 0;
-  const hasAudio = media.has_audio;
-  const origin = hasAudio ? Math.min(media.video_start, media.audio_start) : media.video_start;
+  // external：音频交给单独的几步处理（见 renderAudioSeparately），这条命令只出视频，不碰音轨也不混 BGM。
+  const external = audioMode === 'external';
+  const sourceHasAudio = media.has_audio;
+  const hasAudio = sourceHasAudio && !external;
+  const origin = sourceHasAudio ? Math.min(media.video_start, media.audio_start) : media.video_start;
   const videoDelay = Math.max(0, (media.video_start - origin) / speed + intro);
   const audioDelay = Math.max(0, (media.audio_start - origin) / speed + intro);
   const sourceDuration = media.video_duration > 0 ? media.video_duration : media.duration;
@@ -172,7 +194,8 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
       height0 = media.video_height;
     const labels = [];
     pieces.forEach((_, index) => {
-      filters.push(`[${index}:V:0]setsar=1,scale=${width0}:${height0}[sv${index}]`);
+      // 先缩放再定 setsar：缩放会按新旧尺寸改写像素宽高比，顺序反了各段的 SAR 对不上，concat 会直接报 Invalid argument。
+      filters.push(`[${index}:V:0]scale=${width0}:${height0},setsar=1[sv${index}]`);
       labels.push(`[sv${index}]`);
       if (hasAudio) {
         filters.push(
@@ -214,27 +237,22 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
       ])
     : ['-i', src];
   const bgmIndex = pieces ? pieces.length : 1;
-  const audioOutput = hasAudio || Boolean(bgm);
+  const audioOutput = hasAudio || (Boolean(bgm) && !external);
   if (hasAudio) {
     // safe：音频编码反复失败时的最简音频链——只变速，不改音高、不均衡、不补静音，换取这一集能出成品。
     const safe = audioMode === 'safe';
-    const af = safe
-      ? ['asetpts=PTS-STARTPTS', 'aresample=44100', `atempo=${speed.toFixed(6)}`]
-      : [
-          'asetpts=PTS-STARTPTS',
-          'aresample=44100',
-          `asetrate=44100*${r.PITCH.toFixed(6)}`,
-          'aresample=44100',
-          `atempo=${(speed / r.PITCH).toFixed(6)}`,
-        ];
-    if (opts.eq_enable && !safe) af.push('equalizer=f=1200:t=q:w=1:g=1.5');
-    if (audioDelay > 0) af.push(`adelay=delays=${(audioDelay * 1000).toFixed(3)}:all=1`);
-    // 补静音只补到成片结束稍后一点，不用无限长的 apad：配合 -shortest 时，较老的 FFmpeg 会在收尾时报错。
-    af.push(`volume=${opts.orig_volume}`);
-    if (!safe) af.push(`apad=whole_dur=${(outputDuration + 1).toFixed(3)}`);
+    const af = audioChain({
+      safe,
+      speed,
+      pitch: r.PITCH,
+      eq: opts.eq_enable,
+      volume: opts.orig_volume,
+      audioDelay,
+      padTo: outputDuration + 1,
+    });
     filters.push(`${sourceAudio}${af.join(',')}[oa]`);
   }
-  if (bgm) {
+  if (bgm && !external) {
     inputs.push('-stream_loop', '-1', '-i', bgm);
     filters.push(`[${bgmIndex}:a:0]asetpts=PTS-STARTPTS,volume=${opts.bgm_volume}[ba]`);
   }
@@ -261,6 +279,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
     '[v]',
   ];
   if (audioOutput) args.push('-map', '[a]', '-shortest');
+  else args.push('-an');
   args.push(
     '-fps_mode',
     'passthrough',
@@ -272,7 +291,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, se
   args.push('-map_metadata', '-1', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', dst);
   // Audio/container duration can exceed the video. -shortest finishes at the
   // transformed video end, so the progress denominator must use that stream.
-  return { args, rolled: r, duration: outputDuration, filters: filters.join(';') };
+  return { args, rolled: r, duration: outputDuration, filters: filters.join(';'), audioDelay, speed };
 }
 
 function execJson(ffprobePath, args, signal) {
@@ -454,6 +473,160 @@ async function sameFileOrPath(src, dst) {
   }
 }
 
+/**
+ * 保底：同一条命令里音频编码反复失败时，视频和音频分开做。
+ * 视频照常出（不带声音）；每段原声单独解成标准 PCM 再接起来，最后才编码成 AAC，和视频直接封装在一起。
+ * 这样 AAC 编码器吃到的是干净、规整的音频，不受原视频里各种怪时间戳、怪声道的影响。
+ */
+async function renderSeparately({
+  ffmpegPath,
+  build,
+  pieces,
+  src,
+  bgm,
+  options,
+  rolled,
+  speed,
+  output,
+  signal,
+  onProgress,
+  onLog,
+  onStage,
+}) {
+  const work = path.join(path.dirname(output), `.hongguo-quchong-sep-${randomUUID()}`);
+  await fsp.mkdir(work, { recursive: true });
+  const quiet = (args) =>
+    runProcess(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', ...args], 0, null, signal);
+  try {
+    const videoFile = path.join(work, 'video.mp4');
+    const command = build('external', videoFile);
+    onLog?.('[降级] 视频和音频改为分开处理：先出画面，再把原声单独转成标准格式后编码');
+    await runProcess(
+      ffmpegPath,
+      command.args,
+      command.duration,
+      (value) => onProgress?.(value * 0.9),
+      signal,
+      onStage,
+      onLog,
+    );
+    onStage?.('finalizing');
+    const parts = pieces
+      ? pieces.map((piece) => ({ src: piece.src, start: Number(piece.start), duration: Number(piece.duration) }))
+      : [{ src, start: 0, duration: 0 }];
+    const wavs = [];
+    let silent = 0;
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = parts[i];
+      const wav = path.join(work, `p${i}.wav`);
+      const cut = part.duration > 0 ? ['-t', part.duration.toFixed(3)] : [];
+      try {
+        await quiet([
+          ...(part.duration > 0 ? ['-ss', part.start.toFixed(3)] : []),
+          ...cut,
+          '-i',
+          part.src,
+          '-map',
+          '0:a:0',
+          '-vn',
+          '-sn',
+          '-ac',
+          '2',
+          '-ar',
+          '44100',
+          // 这一段原声比画面短时补静音，保证每段都和画面一样长，接起来后音画不会错位。
+          ...(part.duration > 0 ? ['-af', `apad=whole_dur=${part.duration.toFixed(3)}`, ...cut] : []),
+          '-c:a',
+          'pcm_s16le',
+          wav,
+        ]);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        if (!(part.duration > 0)) throw error;
+        silent += 1;
+        onLog?.(`[提示] 第 ${i + 1} 段的原声读不出来（${keyDiagnostics(error.message)}），这一段补静音`);
+        await quiet(['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', ...cut, '-c:a', 'pcm_s16le', wav]);
+      }
+      wavs.push(wav);
+    }
+    if (silent === parts.length) throw new Error('所有片段的原声都读不出来');
+    let full = wavs[0];
+    if (wavs.length > 1) {
+      full = path.join(work, 'full.wav');
+      const list = path.join(work, 'list.txt');
+      await fsp.writeFile(list, wavs.map((file) => `file '${path.basename(file)}'`).join('\n'));
+      await quiet(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', full]);
+    }
+    const audioFile = path.join(work, 'audio.m4a');
+    const encode = async (safe) => {
+      const filters = [
+        `[0:a:0]${audioChain({
+          safe,
+          speed,
+          pitch: rolled.PITCH,
+          eq: options.eq_enable,
+          volume: options.orig_volume,
+          audioDelay: command.audioDelay,
+          padTo: 0,
+        }).join(',')}[oa]`,
+      ];
+      const inputs = ['-i', full];
+      let source = '[oa]';
+      if (bgm) {
+        inputs.push('-stream_loop', '-1', '-i', bgm);
+        filters.push(`[1:a:0]asetpts=PTS-STARTPTS,volume=${options.bgm_volume}[ba]`);
+        source = '[oa][ba]amix=inputs=2:duration=first:dropout_transition=0,';
+      }
+      filters.push(`${source}aformat=channel_layouts=stereo[a]`);
+      await quiet([
+        ...inputs,
+        '-filter_complex',
+        filters.join(';'),
+        '-map',
+        '[a]',
+        '-t',
+        command.duration.toFixed(3),
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        '-ar',
+        '44100',
+        audioFile,
+      ]);
+    };
+    try {
+      await encode(false);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      onLog?.(`[降级] 分开编码音频仍失败（${keyDiagnostics(error.message)}），改用只变速的最简音频处理`);
+      await encode(true);
+    }
+    await quiet([
+      '-i',
+      videoFile,
+      '-i',
+      audioFile,
+      '-map',
+      '0:v:0',
+      '-map',
+      '1:a:0',
+      '-c',
+      'copy',
+      '-shortest',
+      '-map_metadata',
+      '-1',
+      '-movflags',
+      '+faststart',
+      output,
+    ]);
+    if (silent) onLog?.(`[提示] 共有 ${silent} 段原声读不出来，已补静音，成品里这几段没有声音`);
+    return command;
+  } finally {
+    await fsp.rm(work, { recursive: true, force: true });
+  }
+}
+
 async function runJob({
   ffmpegPath,
   ffprobePath,
@@ -523,10 +696,10 @@ async function runJob({
     if (speed != null) rolled.SPEED = speed;
     if (signal?.aborted) throw new Error('已取消');
     const encoder = await resolveEncoder(options.encoder, process.platform);
-    const build = (audioMode) =>
+    const build = (audioMode, output = tmp) =>
       buildCommand({
         src: inputs[0],
-        dst: tmp,
+        dst: output,
         bgm,
         opts: options,
         rolled,
@@ -576,6 +749,34 @@ async function runJob({
             );
             onProgress?.(0);
             continue;
+          }
+          // 最后一招：视频和音频分开做。没有原声的素材不会走到这里（失败只可能出在 BGM/编码器上）。
+          if (audioStep === 2 && media.has_audio) {
+            audioStep = 3;
+            onProgress?.(0);
+            try {
+              await renderSeparately({
+                ffmpegPath,
+                build,
+                pieces,
+                src: inputs[0],
+                bgm,
+                options,
+                rolled,
+                speed: rolled.SPEED,
+                output: tmp,
+                signal,
+                onProgress,
+                onLog,
+                onStage,
+              });
+              break;
+            } catch (separateError) {
+              if (signal?.aborted) throw new Error('已取消');
+              throw new Error(
+                `音频编码失败（已换参数、简化音频、视频音频分开处理后仍失败），与显卡/编码器无关。原因：${keyDiagnostics(error.message)}；分开处理时：${keyDiagnostics(separateError.message)}\n[滤镜] ${command.filters}\n${error.message}`,
+              );
+            }
           }
           throw new Error(
             `音频编码失败（已换参数、简化音频后仍失败），与显卡/编码器无关。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
