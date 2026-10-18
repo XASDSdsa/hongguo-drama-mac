@@ -527,3 +527,20 @@ button.lib-ep.is-missing:hover {
   border-radius: 10px;
   background: #080d16;
 }
+
+/* 已经去重过时的强提醒 */
+.lib-confirm-warn {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--danger);
+  background: rgba(186, 52, 56, 0.08);
+  border: 1px solid rgba(186, 52, 56, 0.35);
+  border-radius: 8px;
+}
+.btn.btn-danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}

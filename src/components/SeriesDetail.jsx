@@ -188,6 +188,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [notice, setNotice] = useState('');
   const [decision, setDecision] = useState(null);
   const [preview, setPreview] = useState(false); // 开始处理前的预览确认
+  const [outputCount, setOutputCount] = useState(0); // 「去重」里已有的成品集数（再次去重会全部换掉）
   const [estimate, setEstimate] = useState({ loading: false, data: null, error: '' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(
@@ -257,7 +258,13 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     if (!result?.success) return;
     setDetail((previous) =>
       previous
-        ? { ...previous, episodes: result.episodes, missing: result.missing, coverUrl: result.coverUrl }
+        ? {
+            ...previous,
+            episodes: result.episodes,
+            missing: result.missing,
+            coverUrl: result.coverUrl,
+            outputCount: result.outputCount,
+          }
         : previous,
     );
   }, [folder.path]);
@@ -396,6 +403,14 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     reload();
   };
 
+  // 点「开始处理」：要去重时先重新读一次「去重」里已有多少成品，已经去重过就在确认窗里强提醒。
+  const requestStart = async () => {
+    if (!dedupOn) return submit(undefined);
+    const fresh = await window.electronAPI.libraryEpisodes(detail.dir);
+    setOutputCount(fresh?.success ? fresh.outputCount || 0 : detail?.outputCount || 0);
+    return setPreview(true);
+  };
+
   const submit = async (gapPolicy) => {
     setSubmitting(true);
     setNotice('');
@@ -441,6 +456,12 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
         : activity?.draft?.status === 'running'
           ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
           : '';
+  // 去重或草稿跑完后，刷新一次「去重」里的成品数。
+  const activitySignal = `${activeBatches.length}-${activity?.draft?.status || ''}`;
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activitySignal]);
   const draftNumbers = [...new Set(draftNums.map((n) => Math.floor(Number(n))).filter((n) => n >= 1 && n < 10000))];
   const draftScopeValue = { numbers: draftNumbers };
   const nothingToDo = dedupOn ? !selectedCount : !draftOn;
@@ -662,6 +683,11 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                   </button>
                 )}
               </div>
+              {dedupOn && (detail?.outputCount || 0) > 0 && (
+                <p className="proc-name is-missing">
+                  已经去重过：「去重」里有 {detail.outputCount} 集成品。再次去重会把它们全部换掉；只想做剪映草稿或分镜工程图，请取消勾选「视频去重」。
+                </p>
+              )}
               {dedupOn && (
                 <p className={`proc-name ${releaseTitle ? '' : 'is-missing'}`}>
                   {releaseTitle
@@ -775,7 +801,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
               </div>
               <button
                 className="btn btn-primary proc-start"
-                onClick={() => (dedupOn ? setPreview(true) : submit(undefined))}
+                onClick={requestStart}
                 disabled={submitting || seriesBusy || nothingToDo || needTitle || draftBlocked || (dedupOn && !opts)}
               >
                 {startLabel}
@@ -799,6 +825,13 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             onClick={(e) => e.stopPropagation()}
           >
             <h3>开始处理前，先看一下</h3>
+            {outputCount > 0 && (
+              <p className="lib-confirm-warn">
+                这部剧已经去重过：「去重」里现在有 <b>{outputCount} 集</b>成品。继续会把它们
+                <b>全部挪进废纸篓</b>，再整部重新生成，要花很长时间。
+                只想做剪映草稿或分镜工程图的话，不用重新去重。
+              </p>
+            )}
             <ul className="lib-confirm-list lib-preview-list">
               <li>
                 处理范围：
@@ -829,8 +862,22 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
             </ul>
             <p>这只是按时长的估算，真正的切法要先分析镜头切换和说话停顿才定，最终集数可能有几集出入。</p>
             <div className="lib-confirm-actions">
-              <button className="btn btn-primary" onClick={() => submit(undefined)}>
-                开始处理
+              {outputCount > 0 && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setDedupOn(false);
+                    setPreview(false);
+                  }}
+                >
+                  不重新去重，只做后面的
+                </button>
+              )}
+              <button
+                className={`btn ${outputCount > 0 ? 'btn-danger' : 'btn-primary'}`}
+                onClick={() => submit(undefined)}
+              >
+                {outputCount > 0 ? '仍然重新去重（旧成品进废纸篓）' : '开始处理'}
               </button>
               <button className="btn" onClick={() => setPreview(false)}>
                 再调整一下

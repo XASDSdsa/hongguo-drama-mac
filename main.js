@@ -3399,6 +3399,8 @@ function libraryEpisodeDetail(dir) {
     coverUrl: cover ? localAssetUrl(cover) : entry?.cover || '',
     synopsis: seriesInfo.readSynopsis(folder) || entry?.synopsis || '',
     outputDir: path.join(folder, '去重'),
+    // 「去重」里已有多少集成品：再次去重会把它们全部换掉，界面要据此提醒。
+    outputCount: libraryDedupOutputs(folder).length,
     episodes,
     missing: missing.map((item) => ({
       ...item,
