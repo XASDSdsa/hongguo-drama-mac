@@ -3062,8 +3062,12 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
   const retired = await retireLibraryOutputs(dir);
   if (retired) libLog(dir, 'info', `「去重」里的旧成品 ${retired} 个已挪进废纸篓，这一版重新生成`);
   await fsp.mkdir(outputDir, { recursive: true });
+  // 等补下载的批次可能在下载期间被改了剧名：以现在选定的剧名为准，请求里带来的只是兜底。
   const seriesName =
-    sanitizeFolderName(title) || libraryReleaseTitle(dir) || sanitizeFolderName(path.basename(dir)) || '短剧';
+    sanitizeFolderName(libraryReleaseTitle(dir)) ||
+    sanitizeFolderName(title) ||
+    sanitizeFolderName(path.basename(dir)) ||
+    '短剧';
   const names = plan.pieces.map((piece) => `${seriesName}_第${String(piece.number).padStart(3, '0')}集`);
   const destinations = allocateQuchongDestinations(
     plan.pieces.map((piece) => piece.segments[0].file),
@@ -4004,7 +4008,11 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
     libraryDraftEmit(running);
     return { success: true, queued: added.length, job: libraryDraftSnapshot(running) };
   }
-  const lanes = Math.max(1, Math.min(draftLanesAllowed(), files.length));
+  // 别的剧的草稿已经占着几路，这一部只拿剩下的，两部剧加起来不超过电脑能承受的并行数。
+  const othersLanes = [...libraryDraftJobs.values()]
+    .filter((item) => item.status === 'running' && item.dir !== key)
+    .reduce((sum, item) => sum + (item.lanes || 1), 0);
+  const lanes = Math.max(1, Math.min(draftLanesAllowed() - othersLanes, files.length));
   const job = {
     id: randomUUID(),
     dir: key,
@@ -4231,6 +4239,10 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     // 同一部剧同一时间只跑一批，免得两批互相覆盖、出现重复的集。
     const busy = libraryBusyReason(dir);
     if (busy) return { success: false, error: busy };
+    // 草稿正在读「去重」里的成品：这时重新去重会把这些成品挪走，要等草稿做完或先停止。
+    if (payload.dedup !== false && libraryDraftJobs.get(dir)?.status === 'running') {
+      return { success: false, error: '剪映草稿正在生成，等它做完，或先点「停止」' };
+    }
     // 没勾选「去重」、只勾了剪映草稿：直接拿已有的去重成品生成草稿。
     if (payload.dedup === false) {
       const draft = normalizeSideTasks(payload.sideTasks)?.jianyingDraft;

@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './PublishPanel.css';
 import { RefreshCw } from './icons';
 
-const TASK_TEXT = { titles: '改写剧名', synopsis: '改写简介', poster: '生成海报' };
-
 /**
  * 一部剧的“AI 发布素材”：剧名、简介、海报三件事各自独立，各有各的按钮。
  * 海报要先选定剧名（点一个候选，或直接填）。结果直接存进剧文件夹。

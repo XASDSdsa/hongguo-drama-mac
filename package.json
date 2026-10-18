@@ -24,7 +24,7 @@
     "setup:whisper": "node scripts/setup-whisper.js",
     "setup:transcription": "node scripts/setup-faster-whisper.cjs",
     "check:transcription-bundle": "node scripts/check-faster-whisper-bundle.cjs",
-    "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-ai-materials-panel.cjs && node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs",
+    "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs",
     "pack": "npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",

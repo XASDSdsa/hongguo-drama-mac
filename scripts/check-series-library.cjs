@@ -315,6 +315,17 @@ async function check(name, fn) {
     );
     assert.match(twice.error, /正在处理/);
     vm.runInContext('for (const b of quchongBatches.values()) b.finished = true', context);
+    // 草稿正在读「去重」里的成品：这时不能重新去重（会把成品挪走）
+    vm.runInContext(
+      `libraryDraftJobs.set(${JSON.stringify(path.resolve(series.path))}, { status: 'running', queue: [], active: new Map(), lanes: 1 })`,
+      context,
+    );
+    const whileDrafting = await handlers['library-dedup'](
+      {},
+      { dir: series.path, mode: 'resplit', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+    );
+    assert.match(whileDrafting.error, /剪映草稿正在生成/);
+    vm.runInContext('libraryDraftJobs.clear()', context);
     // 支线任务：没勾去重也没勾草稿 → 拒绝；只做草稿但还没有去重成品 → 说清楚
     const nothing = await handlers['library-dedup']({}, { dir: series.path, dedup: false, sideTasks: {} });
     assert.match(nothing.error, /至少勾选/);
