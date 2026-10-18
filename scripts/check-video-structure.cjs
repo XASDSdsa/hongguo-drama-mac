@@ -478,6 +478,13 @@ async function scheduler(temp) {
   let result = await p.wait('fixture');
   assert(MODULES.every((s) => calls[s.id] === 1));
   assert(result.modules.export.reused);
+  settings = { ...settings, structure_threads: 3 };
+  await p.start(payload);
+  result = await p.wait('fixture');
+  assert(
+    MODULES.every((s) => calls[s.id] === 1) && result.modules.export.reused,
+    'thread count is not part of the cache key',
+  );
   settings = { ...settings, structure_threshold: 0.6 };
   await p.start(payload);
   await p.wait('fixture');
@@ -495,6 +502,32 @@ async function scheduler(temp) {
   await p.wait('fixture');
   assert.equal(calls.transcript, 2);
   assert.equal(calls.shots, 2);
+  // Several episodes at once only when the caller allows it; threads change speed, never the cache key.
+  for (const limit of [1, 2]) {
+    let live = 0,
+      peak = 0;
+    const slowHandlers = {
+      ...handlers,
+      media: async (ctx) => {
+        live += 1;
+        peak = Math.max(peak, live);
+        await new Promise((r) => setTimeout(r, 150));
+        live -= 1;
+        return handlers.media(ctx);
+      },
+    };
+    const many = createVideoStructurePipeline({
+      ...opt,
+      handlers: slowHandlers,
+      getConcurrency: () => limit,
+      getProjectRecord: () => undefined,
+      saveProjectRecord: () => {},
+    });
+    const ids = ['c1', 'c2', 'c3'].map((id) => `${id}-limit${limit}`);
+    for (const id of ids) await many.start({ ...payload, projectId: id, threads: 3 });
+    for (const id of ids) assert.equal((await many.wait(id)).status, 'completed');
+    assert.equal(peak, limit, `at most ${limit} episodes at the same time`);
+  }
   fail = 'clips';
   await p.start({ ...payload, module: 'clips', force: true });
   result = await p.wait('fixture');

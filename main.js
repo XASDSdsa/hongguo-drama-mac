@@ -10,6 +10,7 @@
  */
 const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu } = require('electron');
 const path = require('path');
+const os = require('node:os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const axios = require('axios');
@@ -1091,6 +1092,7 @@ function getReconstructionPipeline() {
       }),
       getFfmpegPath: () => resolveFfmpeg('ffmpeg'),
       getFfprobePath: () => resolveFfmpeg('ffprobe'),
+      getConcurrency: libraryDraftSlots,
       getProjectRecord: (projectId) => store.getStructureProjects()[String(projectId)] || null,
       saveProjectRecord: (projectId, record) => store.saveStructureProject(projectId, record),
       createDraft: (ctx) => {
@@ -3834,6 +3836,19 @@ function normalizeDraftMode(value) {
   return value === 'multi' ? 'multi' : 'simple';
 }
 
+function draftCurrentText(job) {
+  return [...job.active.values()].map((item) => item.label).join('、');
+}
+/** 正在做的各集进度之和（每集 0–100），界面用「已完成集数 + 这个和 / 100」算总进度条。 */
+function draftProgressPercent(job) {
+  return Math.floor([...job.active.values()].reduce((sum, item) => sum + item.progress, 0));
+}
+function draftMessage(job) {
+  const items = [...job.active.values()];
+  if (items.length === 1) return items[0].message;
+  return items.length ? `同时做 ${items.length} 集` : '';
+}
+
 function libraryDraftSnapshot(job) {
   if (!job) return null;
   return {
@@ -3844,11 +3859,12 @@ function libraryDraftSnapshot(job) {
     total: job.total,
     done: job.done,
     failed: job.failed,
-    current: job.current,
-    progress: job.progress,
-    message: job.message,
-    detail: job.detail || '',
-    stageStartedAt: job.stageStartedAt || null,
+    current: draftCurrentText(job),
+    progress: draftProgressPercent(job),
+    message: draftMessage(job),
+    detail: job.active.size === 1 ? [...job.active.values()][0].detail : '',
+    stageStartedAt: job.active.size === 1 ? [...job.active.values()][0].stageStartedAt : null,
+    lanes: job.lanes || 1,
     startedAt: job.startedAt,
     endTime: job.endTime,
   };
@@ -3869,6 +3885,36 @@ function libraryDedupOutputs(dir) {
     .sort((a, b) => path.basename(a).localeCompare(path.basename(b), 'zh-CN', { numeric: true }));
 }
 
+// ===== 剪映草稿同时做几集 =====
+// 不是越多越好：每集的分析（检测分镜、人声分离）都吃 CPU 和内存，同时开太多反而全卡住。
+const DRAFT_MAX_LANES = 4;
+const DRAFT_LANE_MEMORY = 2.5 * 1024 ** 3; // 一集分析大约要用的内存
+const DRAFT_LANE_MIN_THREADS = 2;
+
+function draftThreadBudget() {
+  const configured = Number(getCurrentSettings().structure_threads || 0);
+  const cores = os.availableParallelism?.() || os.cpus().length || 1;
+  return configured > 0 ? configured : Math.max(2, Math.min(8, cores - 2));
+}
+
+/** 现在这台电脑适合同时做几集：看线程预算、内存，有去重在跑或系统已经很忙就退回一集一集做。 */
+function draftLanesAllowed() {
+  const byThreads = Math.floor(draftThreadBudget() / DRAFT_LANE_MIN_THREADS);
+  const byMemory = Math.floor((os.totalmem() * 0.5) / DRAFT_LANE_MEMORY);
+  let lanes = Math.min(DRAFT_MAX_LANES, byThreads, byMemory);
+  const cores = os.availableParallelism?.() || os.cpus().length || 1;
+  const dedupRunning = [...quchongBatches.values()].some((batch) => !batch.finished);
+  if (dedupRunning || os.loadavg()[0] > cores * 0.85) lanes = Math.min(lanes, 1);
+  return Math.max(1, lanes);
+}
+
+/** 流水线同一时间最多放行几集：所有正在做草稿的剧各自的并行数之和，没有就是 1。 */
+function libraryDraftSlots() {
+  let slots = 0;
+  for (const job of libraryDraftJobs.values()) if (job.status === 'running') slots += job.lanes || 1;
+  return Math.max(1, slots);
+}
+
 /** 开始前先确认运行环境够用，免得拆解跑了很久才发现缺东西。 */
 async function libraryDraftReadiness(mode) {
   if (!resolveJianyingRuntime()?.executable) return '缺少内置剪映运行时，请使用包含剪映运行时的完整安装包';
@@ -3884,17 +3930,17 @@ async function libraryDraftReadiness(mode) {
   return '';
 }
 
-async function generateLibraryDraft(job, file) {
+async function generateLibraryDraft(job, file, item) {
   const pipeline = getReconstructionPipeline();
   const label = path.basename(file, path.extname(file));
   const workRoot =
     String(getCurrentSettings().structure_output_dir || '').trim() ||
     path.join(app.getPath('userData'), 'structure-work');
   const projectId = `${label}-${createHash('sha256').update(file).digest('hex').slice(0, 8)}`;
-  job.projectId = projectId;
-  libraryDraftPlans.set(projectId, { mode: job.mode, fallbackRoot: path.join(job.dir, '剪映草稿') });
+  item.projectId = projectId;
+  libraryDraftPlans.set(projectId, { mode: item.mode, fallbackRoot: path.join(job.dir, '剪映草稿') });
   try {
-    await pipeline.start({ inputPath: file, projectId, outputRoot: workRoot });
+    await pipeline.start({ inputPath: file, projectId, outputRoot: workRoot, threads: job.threadsEach });
     let structure = await pipeline.wait(projectId);
     if (job.cancelled || structure?.status === 'stopped') throw Object.assign(new Error('已停止'), { stopped: true });
     const incomplete = DRAFT_MODULES.filter((id) => structure?.modules?.[id]?.status !== 'succeeded');
@@ -3911,8 +3957,8 @@ async function generateLibraryDraft(job, file) {
     };
     const current = manifestOf(structure.modules.jianying.summary?.draft_path || '');
     const isSimple = String(current?.schema || '').includes('simple');
-    if (!current || isSimple !== (job.mode === 'simple')) {
-      await pipeline.start({ inputPath: file, projectId, module: 'jianying', force: true });
+    if (!current || isSimple !== (item.mode === 'simple')) {
+      await pipeline.start({ inputPath: file, projectId, module: 'jianying', force: true, threads: job.threadsEach });
       structure = await pipeline.wait(projectId);
       if (job.cancelled || structure?.status === 'stopped') throw Object.assign(new Error('已停止'), { stopped: true });
       if (structure?.modules?.jianying?.status !== 'succeeded') {
@@ -3946,7 +3992,11 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
   // 已经在生成：这几集排到后面接着做，不丢。
   const running = libraryDraftJobs.get(key);
   if (running?.status === 'running') {
-    const queued = new Set([...running.queue.map((item) => item.file), running.currentFile].filter(Boolean));
+    const queued = new Set(
+      [...running.queue.map((item) => item.file), ...[...running.active.values()].map((item) => item.file)].filter(
+        Boolean,
+      ),
+    );
     const added = files.filter((file) => !queued.has(file));
     for (const file of added) running.queue.push({ file, mode: kind });
     running.total += added.length;
@@ -3954,56 +4004,76 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
     libraryDraftEmit(running);
     return { success: true, queued: added.length, job: libraryDraftSnapshot(running) };
   }
+  const lanes = Math.max(1, Math.min(draftLanesAllowed(), files.length));
   const job = {
     id: randomUUID(),
     dir: key,
     mode: kind,
     queue: files.map((file) => ({ file, mode: kind })),
-    currentFile: null,
+    active: new Map(), // 正在做的集：projectId -> { file, label, mode, progress, message, detail, stageStartedAt, lastStage }
     status: 'running',
     total: files.length,
     done: 0,
     failed: 0,
-    current: null,
-    progress: 0,
-    message: '',
+    lanes,
+    threadsEach: Math.max(DRAFT_LANE_MIN_THREADS, Math.floor(draftThreadBudget() / lanes)),
     startedAt: Date.now(),
     endTime: null,
     cancelled: false,
-    projectId: null,
-    lastStage: '',
   };
   libraryDraftJobs.set(key, job);
-  libLog(key, 'info', `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}）`, 'side');
+  libLog(
+    key,
+    'info',
+    `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}）${lanes > 1 ? `，同时做 ${lanes} 集、每集 ${job.threadsEach} 线程` : ''}`,
+    'side',
+  );
   libraryDraftEmit(job);
-  (async () => {
-    while (job.queue.length) {
-      if (job.cancelled) break;
-      const { file, mode: itemMode } = job.queue.shift();
-      job.mode = itemMode;
-      job.currentFile = file;
-      const label = path.basename(file, path.extname(file));
-      job.current = label;
-      job.progress = 0;
-      job.lastStage = '';
-      job.detail = '';
-      job.stageStartedAt = Date.now();
+
+  // 一条「车道」一次做一集。第一条车道一直做到队列空；多出来的车道每次接新一集前都重新看一眼电脑忙不忙，
+  // 忙了（开了去重、系统负载高）就自己退出，剩下的集由别的车道接着做，不会把电脑拖卡。
+  const runLane = async (laneIndex) => {
+    while (job.queue.length && !job.cancelled) {
+      if (laneIndex > 0 && laneIndex >= draftLanesAllowed()) {
+        libLog(key, 'info', '剪映草稿：电脑比较忙，少开一路，剩下的接着一集一集做', 'side');
+        return;
+      }
+      const item = job.queue.shift();
+      const label = path.basename(item.file, path.extname(item.file));
+      const state = {
+        file: item.file,
+        label,
+        mode: item.mode,
+        progress: 0,
+        message: '',
+        detail: '',
+        stageStartedAt: Date.now(),
+        lastStage: '',
+        projectId: null,
+      };
+      job.active.set(label, state);
       libLog(key, 'info', `剪映草稿：${label} 开始`, 'side');
       libraryDraftEmit(job);
       try {
-        const draftPath = await generateLibraryDraft(job, file);
+        const draftPath = await generateLibraryDraft(job, item.file, state);
         job.done += 1;
         libLog(key, 'ok', `剪映草稿：${label} 已生成 → ${draftPath}`, 'side');
       } catch (error) {
-        if (job.cancelled || error?.stopped) break;
+        if (job.cancelled || error?.stopped) return;
         job.failed += 1;
         libLog(key, 'error', `剪映草稿：${label} 失败：${error?.message || error}`, 'side');
+      } finally {
+        job.active.delete(label);
       }
       libraryDraftEmit(job);
     }
+  };
+  (async () => {
+    do {
+      await Promise.all(Array.from({ length: job.lanes }, (_, index) => runLane(index)));
+    } while (job.queue.length && !job.cancelled); // 车道都退出之后又有新的集排进来：接着做
     job.status = job.cancelled ? 'stopped' : job.failed ? 'failed' : 'completed';
-    job.current = null;
-    job.currentFile = null;
+    job.active.clear();
     job.queue = [];
     job.endTime = Date.now();
     libLog(
@@ -4021,26 +4091,34 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
 
 /** 流水线每推进一步，就把这一集的进度和当前步骤记到对应的剧里。 */
 function libraryDraftProgress(payload) {
-  const job = [...libraryDraftJobs.values()].find(
-    (item) => item.status === 'running' && item.projectId === payload?.projectId,
-  );
+  let job = null;
+  let state = null;
+  for (const item of libraryDraftJobs.values()) {
+    if (item.status !== 'running') continue;
+    for (const entry of item.active.values()) {
+      if (entry.projectId === payload?.projectId) {
+        job = item;
+        state = entry;
+      }
+    }
+  }
   if (!job) return;
   const stages = Object.values(payload?.modules || {});
   const finished = stages.filter((stage) => stage.status === 'succeeded').length;
   const currentProgress = payload?.modules?.[payload?.stage]?.progress;
-  job.progress = Math.min(
+  state.progress = Math.min(
     99,
     Math.floor(
       ((finished + (Number.isFinite(currentProgress) ? currentProgress / 100 : 0)) / DRAFT_MODULES.length) * 100,
     ),
   );
   const stage = payload?.stage;
-  job.message = DRAFT_STAGE_TEXT[stage] || '';
-  job.detail = String(payload?.modules?.[stage]?.message || '').slice(0, 80);
-  if (stage && stage !== job.lastStage && DRAFT_STAGE_TEXT[stage]) {
-    job.lastStage = stage;
-    job.stageStartedAt = Date.now();
-    libLog(job.dir, 'info', `剪映草稿：${job.current}：${DRAFT_STAGE_TEXT[stage]}`, 'side');
+  state.message = DRAFT_STAGE_TEXT[stage] || '';
+  state.detail = String(payload?.modules?.[stage]?.message || '').slice(0, 80);
+  if (stage && stage !== state.lastStage && DRAFT_STAGE_TEXT[stage]) {
+    state.lastStage = stage;
+    state.stageStartedAt = Date.now();
+    libLog(job.dir, 'info', `剪映草稿：${state.label}：${DRAFT_STAGE_TEXT[stage]}`, 'side');
   }
   libraryDraftEmit(job);
 }
@@ -4062,7 +4140,7 @@ ipcMain.handle('library-draft-cancel', (_event, dir) => {
     const job = libraryDraftJobs.get(path.resolve(String(dir || '')));
     if (!job || job.status !== 'running') return { success: false, error: '没有在生成的剪映草稿' };
     job.cancelled = true;
-    if (job.projectId) getReconstructionPipeline().cancel(job.projectId);
+    for (const item of job.active.values()) if (item.projectId) getReconstructionPipeline().cancel(item.projectId);
     return { success: true };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };

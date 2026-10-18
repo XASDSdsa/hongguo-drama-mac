@@ -89,6 +89,7 @@ function createVideoStructurePipeline({
   saveProjectRecord,
   sendProgress,
   createDraft,
+  getConcurrency = () => 1,
   handlers = HANDLERS,
 }) {
   const modules = createDraft
@@ -97,7 +98,17 @@ function createVideoStructurePipeline({
   const moduleHandlers = { ...handlers, ...(createDraft ? { jianying: createDraft } : {}) };
   const jobs = new Map();
   const starting = new Set();
-  let queue = Promise.resolve();
+  // How many episodes may run at the same time (default one). Waiting jobs start in the order they were added.
+  let running = 0;
+  const waiters = [];
+  const acquire = async () => {
+    while (running >= Math.max(1, Math.floor(Number(getConcurrency()) || 1))) await new Promise((r) => waiters.push(r));
+    running += 1;
+  };
+  const release = () => {
+    running -= 1;
+    waiters.shift()?.();
+  };
   function snapshot(job) {
     return {
       success: true,
@@ -181,13 +192,15 @@ function createVideoStructurePipeline({
     const implementation = {};
     for (const file of implementationFilesFor(spec.id))
       implementation[path.basename(file)] = await sha256(file, job.controller.signal);
+    const { threads: _threads, ...fingerprinted } = params;
     const identity = {
       module: spec.id,
       version: VERSION,
       implementation,
       source: job.sourceHash,
       source_path: job.input,
-      params,
+      // The thread count only changes how fast a step runs, never what it produces.
+      params: fingerprinted,
       model,
       deps,
       tools: ['media', 'audio', 'shots', 'clips', 'separation', 'transcript'].includes(spec.id) ? job.toolHashes : null,
@@ -470,6 +483,7 @@ function createVideoStructurePipeline({
       state.active_module = null;
       state.error = null;
       const settings = { ...(getSettings?.() || {}) };
+      if (Number.isInteger(payload.threads) && payload.threads >= 1) settings.structure_threads = payload.threads;
       const job = {
         projectId,
         input,
@@ -490,9 +504,15 @@ function createVideoStructurePipeline({
         jobs.delete(projectId);
         throw e;
       }
-      // One episode at a time in this first version; native tools use configured threads.
-      job.done = queue.then(() => execute(job, payload.module, payload.force === true));
-      queue = job.done.catch((error) => {
+      job.done = (async () => {
+        await acquire();
+        try {
+          await execute(job, payload.module, payload.force === true);
+        } finally {
+          release();
+        }
+      })();
+      job.done.catch((error) => {
         job.state.status = 'failed';
         job.state.error = error.message;
         emit(job);
@@ -517,7 +537,7 @@ function createVideoStructurePipeline({
   }
   async function cancelAll() {
     for (const id of jobs.keys()) cancel(id);
-    await queue;
+    await Promise.allSettled([...jobs.values()].map((job) => job.done));
   }
   function hasActive() {
     return [...jobs.values()].some((job) => ['queued', 'running', 'stopping'].includes(job.state.status));
