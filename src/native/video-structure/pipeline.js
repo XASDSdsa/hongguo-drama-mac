@@ -549,6 +549,7 @@ function createVideoStructurePipeline({
     wait,
     cancelAll,
     hasActive,
+    isActive: (id) => ['queued', 'running', 'stopping'].includes(jobs.get(String(id))?.state.status),
     availability: () => runtimeTools.availability(getSettings?.() || {}),
   };
 }

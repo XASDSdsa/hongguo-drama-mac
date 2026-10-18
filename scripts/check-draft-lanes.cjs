@@ -7,7 +7,7 @@ const assert = require('node:assert/strict'),
 const { EventEmitter } = require('node:events'),
   { createRequire } = require('node:module');
 
-function makeMain(root, userData, registry) {
+function makeMain(root, userData, registry, storeExtra = {}) {
   fs.mkdirSync(userData, { recursive: true });
   const file = path.resolve(__dirname, '../main.js'),
     req = createRequire(file),
@@ -31,7 +31,7 @@ function makeMain(root, userData, registry) {
       n === 'electron'
         ? electron
         : n === './src/store'
-          ? { getSettings: () => ({ root }), saveTasks() {}, saveSeries() {}, saveSettings() {} }
+          ? { getSettings: () => ({ root }), saveTasks() {}, saveSeries() {}, saveSettings() {}, ...storeExtra }
           : req(n),
     __dirname: path.dirname(file),
     process,
@@ -68,12 +68,27 @@ function makeMain(root, userData, registry) {
     return file;
   });
 
-  async function run({ lanes, allowedAfter, expectPeak }) {
-    const { context } = makeMain(path.join(tmp, 'root'), path.join(tmp, 'ud'), []);
+  async function run({ lanes, allowedAfter, expectPeak, cleanup = true, failOn = null }) {
+    const records = {};
+    const { context } = makeMain(path.join(tmp, 'root'), path.join(tmp, 'ud'), [], {
+      getStructureProjects: () => records,
+      removeStructureProject: (id) => delete records[id],
+    });
+    const workDirs = files.map((file) => {
+      const id = context.libraryDraftProjectId(file);
+      const projectDir = path.join(tmp, 'work-' + lanes + '-' + String(cleanup) + '-' + id);
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, 'project.json'),
+        JSON.stringify({ kind: 'video_structure', project_id: id }),
+      );
+      records[id] = { manifestPath: path.join(projectDir, 'project.json') };
+      return projectDir;
+    });
     let live = 0,
       peak = 0;
     const threads = [];
-    context.getCurrentSettings = () => ({ structure_threads: 8 });
+    context.getCurrentSettings = () => ({ structure_threads: 8, structure_cleanup: cleanup });
     context.libraryDraftReadiness = async () => '';
     let allowed = lanes;
     context.draftLanesAllowed = () => allowed;
@@ -96,6 +111,7 @@ function makeMain(root, userData, registry) {
         return { status: 'completed', modules: done };
       },
       cancel() {},
+      isActive: () => false,
     });
     const started = await context.startLibraryDrafts({
       dir,
@@ -113,7 +129,7 @@ function makeMain(root, userData, registry) {
     const job = vm.runInContext('libraryDraftJobs', context).get(path.resolve(dir));
     assert.equal(job.status, 'completed', JSON.stringify([job.status, job.done, job.failed]));
     assert.equal(job.done, 4);
-    return { peak, threads, job };
+    return { peak, threads, job, workDirs };
   }
 
   const one = await run({ lanes: 1 });
@@ -127,6 +143,67 @@ function makeMain(root, userData, registry) {
     'the 8-thread budget is shared: 2 each for 3 lanes',
   );
   console.log('PASS three lanes share the thread budget');
+
+  // ---- 清理分析中间文件：只删确认是拆解项目的文件夹，成品和草稿不动 ----
+  {
+    const records = {};
+    const { context } = makeMain(path.join(tmp, 'root'), path.join(tmp, 'ud2'), [], {
+      getStructureProjects: () => records,
+      removeStructureProject: (id) => delete records[id],
+    });
+    context.getReconstructionPipeline = () => ({ isActive: (id) => id === context.__active });
+    const work = path.join(tmp, 'work');
+    const make = (file, manifest) => {
+      const id = context.libraryDraftProjectId(file);
+      const projectDir = path.join(work, id);
+      fs.mkdirSync(path.join(projectDir, 'clips'), { recursive: true });
+      fs.writeFileSync(path.join(projectDir, 'clips', 'a.mp4'), Buffer.alloc(4096, 2));
+      if (manifest !== null)
+        fs.writeFileSync(
+          path.join(projectDir, 'project.json'),
+          JSON.stringify(manifest || { kind: 'video_structure', project_id: id }),
+        );
+      records[id] = { manifestPath: path.join(projectDir, 'project.json') };
+      return { id, projectDir };
+    };
+    const ok = make(files[0]);
+    const foreign = make(files[1], { kind: 'something_else', project_id: 'x' });
+    const wrongId = make(files[2], { kind: 'video_structure', project_id: 'other' });
+    const active = make(files[3]);
+    context.__active = active.id;
+    const gone = path.join(tmp, 'gone', '新剧_第009集.mp4');
+    const goneId = context.libraryDraftProjectId(gone);
+    records[goneId] = { manifestPath: path.join(tmp, 'gone-dir', 'project.json') };
+    const draft = path.join(dir, '剪映草稿', 'x', 'draft_content.json');
+    fs.mkdirSync(path.dirname(draft), { recursive: true });
+    fs.writeFileSync(draft, '{}');
+
+    const result = await context.cleanupStructureProjects([...files, gone]);
+    assert.equal(result.count, 1, 'only the confirmed, idle project is removed');
+    assert.ok(result.freed >= 4096);
+    assert.equal(fs.existsSync(ok.projectDir), false, 'finished project work is removed');
+    assert.equal(records[ok.id], undefined);
+    assert.equal(fs.existsSync(foreign.projectDir), true, 'a folder that is not a structure project is kept');
+    assert.equal(fs.existsSync(wrongId.projectDir), true, 'a mismatched project id is kept');
+    assert.equal(fs.existsSync(active.projectDir), true, 'a running project is kept');
+    assert.equal(records[goneId], undefined, 'a record whose folder is already gone is dropped');
+    for (const file of files) assert.equal(fs.existsSync(file), true, 'finished videos are never touched');
+    assert.equal(fs.existsSync(draft), true, 'drafts are never touched');
+    console.log('PASS cleanup removes only idle structure work');
+  }
+
+  const kept = await run({ lanes: 1, cleanup: false });
+  assert.ok(
+    kept.workDirs.every((d) => fs.existsSync(d)),
+    'cleanup off keeps the work folders',
+  );
+  const cleaned = await run({ lanes: 1, cleanup: true });
+  assert.ok(
+    cleaned.workDirs.every((d) => !fs.existsSync(d)),
+    'cleanup on removes each finished episode work folder',
+  );
+  for (const file of files) assert.equal(fs.existsSync(file), true);
+  console.log('PASS cleanup follows the setting after each finished draft');
 
   const busy = await run({ lanes: 3, allowedAfter: 1 });
   assert.equal(busy.job.done, 4, 'every episode is still made when the extra lanes step aside');

@@ -155,6 +155,11 @@ function saveStructureProject(projectId, record) {
   flush();
 }
 
+function removeStructureProject(projectId) {
+  delete getStructureProjects()[String(projectId)];
+  flush();
+}
+
 module.exports = {
   setErrorHandler: (handler) => {
     errorHandler = handler;
@@ -175,4 +180,5 @@ module.exports = {
   saveMergeTasks,
   getStructureProjects,
   saveStructureProject,
+  removeStructureProject,
 };

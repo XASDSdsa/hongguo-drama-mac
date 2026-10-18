@@ -11,6 +11,8 @@ import { clampPage, slicePage } from './pagination';
 
 const STORAGE_KEY = 'library-params';
 const VIEW_KEY = 'library-view';
+/** 草稿默认做新剧的前 4 集：从「新集编号」起连续 4 个。 */
+const defaultDraftNums = (start) => [0, 1, 2, 3].map((n) => String((Math.floor(Number(start)) || 1) + n));
 const DEFAULT_SPLIT = { min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2, start_number: 1 };
 const DEFAULT_SPEED = { speed_min: 1.03, speed_max: 1.21 };
 const EPISODE_PAGE_SIZES = [30, 60, 100, 200];
@@ -80,7 +82,9 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
   // 草稿最多做 4 集，每格自由填成品集号（默认 1–4）。
   const [draftNums, setDraftNums] = useState(
-    Array.isArray(saved.draftNums) && saved.draftNums.length === 4 ? saved.draftNums.map(String) : ['1', '2', '3', '4'],
+    Array.isArray(saved.draftNums) && saved.draftNums.length === 4
+      ? saved.draftNums.map(String)
+      : defaultDraftNums(saved.split?.start_number),
   );
   const [showParams, setShowParams] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -564,9 +568,13 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                     opts={opts}
                     onChange={(k, v) => setOpts({ ...opts, [k]: v })}
                     split={split}
-                    onSplitChange={(k, v) =>
-                      setSplit({ ...split, [k]: k === 'start_number' ? Math.max(1, Math.floor(v) || 1) : v })
-                    }
+                    onSplitChange={(k, v) => {
+                      const next = k === 'start_number' ? Math.max(1, Math.floor(v) || 1) : v;
+                      // 草稿集号还是默认的连续 4 集时，跟着新集编号走；自己改过的不动。
+                      if (k === 'start_number' && draftNums.join() === defaultDraftNums(split.start_number).join())
+                        setDraftNums(defaultDraftNums(next));
+                      setSplit({ ...split, [k]: next });
+                    }}
                     onReset={resetParams}
                     disabled={submitting}
                   />

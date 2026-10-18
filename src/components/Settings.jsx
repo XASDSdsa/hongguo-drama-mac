@@ -172,6 +172,7 @@ function SettingsPage({ active = true }) {
         'faster_whisper_concurrency',
         'ai_concurrency',
         'structure_threads',
+        'structure_cleanup',
         'structure_device',
         'structure_sherpa_provider',
         'structure_clip_audio',
@@ -431,7 +432,8 @@ function SettingsPage({ active = true }) {
         <div className="settings-group">
           <label className="settings-label">视频结构化拆解（本地）</label>
           <p className="settings-hint">
-            TransNet V2 分镜、FFmpeg 切片、sherpa-onnx 分离和 Paraformer 识别。第一版一次处理一集，重模型顺序运行。
+            TransNet V2 分镜、FFmpeg 切片、sherpa-onnx 分离和 Paraformer
+            识别。管理剧集里的剪映草稿会按电脑的线程、内存和负载同时做几集（最多 4 集），电脑忙时自动少开。
           </p>
           <div className="settings-grid mt8">
             <label className="settings-field">
@@ -444,6 +446,17 @@ function SettingsPage({ active = true }) {
                 value={settings.structure_threads ?? 0}
                 onChange={(e) => update('structure_threads', Number(e.target.value))}
               />
+            </label>
+            <label className="settings-field">
+              <span>草稿生成后清理分析中间文件</span>
+              <select
+                className="input-field"
+                value={settings.structure_cleanup === false ? 'off' : 'on'}
+                onChange={(e) => update('structure_cleanup', e.target.value === 'on')}
+              >
+                <option value="on">清理（省磁盘；之后重做草稿要重新分析）</option>
+                <option value="off">保留（重做草稿更快，占磁盘）</option>
+              </select>
             </label>
             <label className="settings-field">
               <span>已确认分镜算法</span>

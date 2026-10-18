@@ -200,6 +200,8 @@ function getDefaultSettings() {
     // 本地视频结构化拆解。
     // 0 = 自动（按本机核心数选择）。
     structure_threads: 0,
+    // 剪映草稿生成成功后，清掉这一集在软件数据目录里的分析中间文件（成品和草稿不受影响）。
+    structure_cleanup: true,
     structure_threshold: 0.5,
     structure_device: 'cpu',
     structure_sherpa_provider: 'cpu',
@@ -3745,6 +3747,8 @@ async function retireLibraryOutputs(dir) {
       moved += 1;
     }
   }
+  // 这些成品已经被新一版替换，它们的分析中间文件不会再被用到。
+  await cleanupAndLog(dir, files, '旧成品已替换');
   return moved;
 }
 
@@ -3770,6 +3774,8 @@ function renameLibraryOutputs(dir) {
     if (fs.existsSync(target)) continue;
     fs.renameSync(path.join(output, row.name), target);
     renamed += 1;
+    // 改名后路径变了，旧路径对应的分析文件不会再被用到。
+    cleanupAndLog(dir, [path.join(output, row.name)], '成品已改名').catch(() => {});
   }
   if (renamed) libLog(dir, 'ok', `成品已按新剧名「${title}」改名：${renamed} 个文件`, 'side');
 }
@@ -3934,13 +3940,79 @@ async function libraryDraftReadiness(mode) {
   return '';
 }
 
+function libraryDraftProjectId(file) {
+  const label = path.basename(file, path.extname(file));
+  return `${label}-${createHash('sha256').update(file).digest('hex').slice(0, 8)}`;
+}
+
+async function directorySize(dir) {
+  let total = 0;
+  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += await directorySize(full);
+    else total += (await fsp.stat(full).catch(() => null))?.size || 0;
+  }
+  return total;
+}
+
+/**
+ * 清理这几集在软件数据目录里的分析中间文件（分镜片段、人声/背景声、识别结果…）。
+ * 只删「确实是结构化拆解项目」的文件夹：里面的 project.json 必须是 video_structure 且项目 ID 对得上；
+ * 成品（「去重」文件夹）和剪映草稿都不在这里，不会动。正在跑的项目不碰。
+ */
+async function cleanupStructureProjects(files) {
+  let count = 0;
+  let freed = 0;
+  for (const file of files) {
+    try {
+      const projectId = libraryDraftProjectId(file);
+      const record = store.getStructureProjects()[projectId];
+      if (!record?.manifestPath) continue;
+      if (getReconstructionPipeline().isActive(projectId)) continue;
+      const dir = path.dirname(path.resolve(record.manifestPath));
+      let manifest = null;
+      try {
+        manifest = JSON.parse(await fsp.readFile(path.join(dir, 'project.json'), 'utf8'));
+      } catch (_) {
+        manifest = null;
+      }
+      if (!manifest) {
+        // 文件夹已经没了：只清掉记录。
+        if (!fs.existsSync(dir)) store.removeStructureProject(projectId);
+        continue;
+      }
+      if (manifest.kind !== 'video_structure' || manifest.project_id !== projectId) continue;
+      const size = await directorySize(dir);
+      await fsp.rm(dir, { recursive: true, force: true });
+      store.removeStructureProject(projectId);
+      count += 1;
+      freed += size;
+    } catch (_) {
+      // 清理只是省空间，失败了不影响别的。
+    }
+  }
+  return { count, freed };
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+async function cleanupAndLog(dir, files, reason) {
+  const { count, freed } = await cleanupStructureProjects(files);
+  if (count)
+    libLog(dir, 'info', `剪映草稿：${reason}，已清理 ${count} 集的分析中间文件，释放 ${formatBytes(freed)}`, 'side');
+}
+
 async function generateLibraryDraft(job, file, item) {
   const pipeline = getReconstructionPipeline();
   const label = path.basename(file, path.extname(file));
   const workRoot =
     String(getCurrentSettings().structure_output_dir || '').trim() ||
     path.join(app.getPath('userData'), 'structure-work');
-  const projectId = `${label}-${createHash('sha256').update(file).digest('hex').slice(0, 8)}`;
+  const projectId = libraryDraftProjectId(file);
   item.projectId = projectId;
   libraryDraftPlans.set(projectId, { mode: item.mode, fallbackRoot: path.join(job.dir, '剪映草稿') });
   try {
@@ -4066,6 +4138,8 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope }) {
         const draftPath = await generateLibraryDraft(job, item.file, state);
         job.done += 1;
         libLog(key, 'ok', `剪映草稿：${label} 已生成 → ${draftPath}`, 'side');
+        if (getCurrentSettings().structure_cleanup !== false)
+          await cleanupAndLog(key, [item.file], `${label} 草稿已生成`);
       } catch (error) {
         if (job.cancelled || error?.stopped) return;
         job.failed += 1;
