@@ -793,9 +793,9 @@ function mount(file, api, props = {}) {
           requested.push(p);
           return { success: true, url: `hongguo-stream://${p.vidIndex}` };
         },
-        downloadSingleEpisode: async (sid, n) => {
-          downloaded.push(n);
-          return { success: true, count: 1 };
+        downloadSeriesEpisodes: async (sid, indices) => {
+          downloaded.push(...indices);
+          return { success: true, count: indices.length };
         },
       },
       { target: { seriesId: 'X', vidIndex: 1, ts: 1 } },
@@ -826,7 +826,8 @@ function mount(file, api, props = {}) {
     ui.render();
     const player = ui.find((n) => n.props['data-page'] === 'player');
     assert.ok(player?.props.hidden, 'visited player must be retained');
-    assert.equal(player.children[0]?.props.active, false, 'hidden player must receive inactive state');
+    // 每页外面包着 ErrorBoundary：页面元素是它的第一个子元素。
+    assert.equal(player.children[0]?.children?.[0]?.props.active, false, 'hidden player must receive inactive state');
     assert.equal(ui.nodes().filter((n) => n.props['data-page'] === 'browse').length, 1);
     ui.unmount();
   });
@@ -842,7 +843,7 @@ function mount(file, api, props = {}) {
     await ui.flush();
     navigate({ page: 'player', payload: { seriesId: 'A', vidIndex: 2 } });
     ui.render();
-    const player = () => ui.find((n) => n.props['data-page'] === 'player').children[0];
+    const player = () => ui.find((n) => n.props['data-page'] === 'player').children[0].children[0];
     const target = player().props.target;
     assert.equal(target.seriesId, 'A');
     assert.equal(target.vidIndex, 2);

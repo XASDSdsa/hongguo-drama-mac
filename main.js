@@ -2598,7 +2598,8 @@ function quchongTaskPayload(task) {
     // 这一集由哪些原集拼成（重新拆分时可能是几集）。
     episodes: task.episodes || [],
     progress: task.progress || 0,
-    error: task.error || '',
+    // 失败原因里可能带几千字的 FFmpeg 输出：快照里只留开头（完整内容在这一集的日志里），数据文件不会越存越大。
+    error: String(task.error || '').slice(0, 1200),
     startedAt: task.startedAt || null,
     endTime: task.endTime || null,
     updatedAt: task.updatedAt || null,
@@ -3169,7 +3170,8 @@ async function dedupSpaceProblem(outputDir, inputs) {
       total += (await fsp.stat(file)).size;
     } catch (_) {}
   }
-  const need = total * 2 + 1024 ** 3;
+  // 每路处理中还有一个高画质中间文件（1080p 一集几百 MB），按同时处理的集数再多留一些。
+  const need = total * 2 + 1024 ** 3 + getCurrentSettings().quchong_jobs * 600 * 1024 ** 2;
   let free;
   try {
     let probe = path.resolve(outputDir);

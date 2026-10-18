@@ -208,7 +208,12 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
           <div className="dedup-grid">
             <label>
               画质
-              <select value={opts.quality} onChange={(e) => onChange('quality', e.target.value)} disabled={disabled}>
+              <select
+                className="input-field"
+                value={opts.quality}
+                onChange={(e) => onChange('quality', e.target.value)}
+                disabled={disabled}
+              >
                 <option value="standard">标准</option>
                 <option value="lean">精简</option>
               </select>
