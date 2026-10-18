@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
-import { Check, ChevronRight, RefreshCw } from './icons';
+import { Check, ChevronRight, Folder, RefreshCw } from './icons';
 import DedupParams from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
@@ -496,23 +496,33 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                 const episode = card.episode;
                 const on = selected.has(episode.path);
                 return (
-                  <button
-                    type="button"
-                    key={episode.path}
-                    className={`lib-ep ${on ? 'is-selected' : ''}`}
-                    aria-pressed={on}
-                    onClick={() => clickEpisode(episode, episodes.indexOf(episode))}
-                    title={`${episode.name}（${formatSize(episode.size)}）`}
-                  >
-                    <span className="lib-ep-no">
-                      {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
-                    </span>
-                    {on && (
-                      <span className="lib-ep-check">
-                        <Check size={11} />
+                  <div key={episode.path} className="lib-ep-cell">
+                    <button
+                      type="button"
+                      className={`lib-ep ${on ? 'is-selected' : ''}`}
+                      aria-pressed={on}
+                      onClick={() => clickEpisode(episode, episodes.indexOf(episode))}
+                      title={`${episode.name}（${formatSize(episode.size)}）`}
+                    >
+                      <span className="lib-ep-no">
+                        {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
                       </span>
-                    )}
-                  </button>
+                      {on && (
+                        <span className="lib-ep-check">
+                          <Check size={11} />
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="lib-ep-reveal"
+                      aria-label={`定位${episode.name}`}
+                      title="在文件管理器里定位这个视频"
+                      onClick={() => window.electronAPI.showInFolder(episode.path)}
+                    >
+                      <Folder size={13} />
+                    </button>
+                  </div>
                 );
               })}
             </div>
