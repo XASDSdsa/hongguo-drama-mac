@@ -129,6 +129,12 @@ try {
   assert.ok(byName['音频'].segments[0].target_timerange.duration >= 5900000);
   const texts = byName['文案'].segments;
   assert.equal(texts.length, 3);
+  // 和多分轨的字幕轨一致：隐藏（静音）并缩放 1%。
+  assert.equal(byName['文案'].attribute, 1, 'the 文案 track is hidden/muted like the multi-track subtitle track');
+  for (const segment of texts) {
+    assert.equal(segment.clip.scale.x, 0.01);
+    assert.equal(segment.clip.scale.y, 0.01);
+  }
   const [t1, t2, t3] = texts.map((segment) => segment.target_timerange);
   assert.ok(
     t1.start + t1.duration <= t2.start && t2.start + t2.duration <= t3.start,

@@ -171,7 +171,8 @@ def main() -> int:
         shutil.rmtree(draft_dir)
 
     script = folder.create_draft(args.name, width, height, fps=fps, maintrack_adsorb=False)
-    tracks = [draft.TrackSpec(draft.TrackType.video, TRACK_VIDEO), draft.TrackSpec(draft.TrackType.text, TRACK_TEXT)]
+    # 文案轨与多分轨的字幕轨一致：保留在时间线上方便编辑，但初始隐藏（静音）并缩放 1%。
+    tracks = [draft.TrackSpec(draft.TrackType.video, TRACK_VIDEO), draft.TrackSpec(draft.TrackType.text, TRACK_TEXT, mute=True)]
     if has_audio:
         tracks.append(draft.TrackSpec(draft.TrackType.audio, TRACK_AUDIO))
     script.append_tracks(tracks)
@@ -206,8 +207,8 @@ def main() -> int:
             draft.TextSegment(
                 row["text"],
                 draft.trange(row["start_us"], duration=row["duration_us"]),
-                style=draft.TextStyle(size=7.0, color=(1.0, 1.0, 1.0), align=1, auto_wrapping=True, max_line_width=0.82),
-                clip_settings=draft.ClipSettings(transform_y=-0.78),
+                style=draft.TextStyle(size=5, align=1, auto_wrapping=True),
+                clip_settings=draft.ClipSettings(scale_x=0.01, scale_y=0.01, transform_y=-0.8),
             ),
             track=TRACK_TEXT,
         )
