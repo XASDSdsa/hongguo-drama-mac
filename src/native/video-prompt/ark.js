@@ -69,7 +69,7 @@ function createArkClient({
     return response.json();
   }
 
-  async function uploadVideo(filePath, { fps = 5, signal } = {}) {
+  async function uploadVideo(filePath, { fps = 2, signal } = {}) {
     const stat = await fsp.stat(filePath);
     if (stat.size > MAX_UPLOAD_BYTES) {
       throw new Error(`视频片段 ${Math.round(stat.size / 1048576)} MB，超过方舟 512 MB 的上传上限`);

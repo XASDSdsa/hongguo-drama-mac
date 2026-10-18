@@ -125,7 +125,7 @@ async function main() {
       calls.uploadForm = init.body;
       calls.uploadedSizes.push(init.body.get('file').size);
       assert.equal(init.body.get('purpose'), 'user_data');
-      assert.equal(init.body.get('preprocess_configs[video][fps]'), '5');
+      assert.equal(init.body.get('preprocess_configs[video][fps]'), '2');
       return json({ id: `file-${calls.upload}` });
     }
     if (/\/files\/file-\d+$/.test(url) && init.method === 'GET') {

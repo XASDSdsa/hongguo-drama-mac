@@ -132,7 +132,7 @@ async function deriveEpisodePrompts({
   sourceKey,
   title = '',
   maxSeconds = DEFAULT_MAX_SEGMENT_SECONDS,
-  fps = 5,
+  fps = 2,
   log = () => {},
   onProgress = () => {},
   signal,
