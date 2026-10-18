@@ -34,7 +34,6 @@ const DEFAULTS = Object.freeze({
   saturation: 1.25,
   hue_range: 12,
   vignette: true,
-  black_intro: true,
   pitch_min: 1.04,
   pitch_max: 1.07,
   orig_volume: 0.5,
@@ -80,7 +79,7 @@ function validateOptions(input = {}) {
   }
   if (!['auto', 'cpu', 'videotoolbox', 'nvenc', 'amf', 'qsv'].includes(opts.encoder)) throw new Error('编码器无效');
   if (!['standard', 'lean'].includes(opts.quality)) throw new Error('画质选项无效');
-  for (const key of ['vignette', 'black_intro', 'eq_enable']) {
+  for (const key of ['vignette', 'eq_enable']) {
     if (typeof opts[key] !== 'boolean') throw new Error(`参数无效：${key}`);
   }
   return opts;
@@ -172,14 +171,13 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   const width = even(media.video_width);
   const height = even(media.video_height);
   const speed = r.SPEED;
-  const intro = opts.black_intro ? 0.3 : 0;
   // external：音频交给单独的几步处理（见 renderAudioSeparately），这条命令只出视频，不碰音轨也不混 BGM。
   const external = audioMode === 'external';
   const sourceHasAudio = media.has_audio;
   const hasAudio = sourceHasAudio && !external;
   const origin = sourceHasAudio ? Math.min(media.video_start, media.audio_start) : media.video_start;
-  const videoDelay = Math.max(0, (media.video_start - origin) / speed + intro);
-  const audioDelay = Math.max(0, (media.audio_start - origin) / speed + intro);
+  const videoDelay = Math.max(0, (media.video_start - origin) / speed);
+  const audioDelay = Math.max(0, (media.audio_start - origin) / speed);
   const sourceDuration = media.video_duration > 0 ? media.video_duration : media.duration;
   const outputDuration = sourceDuration / speed + videoDelay;
   const vf = [
@@ -202,7 +200,6 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   // dither=0：关掉暗角自带的逐像素抖动，肉眼看不出，但每帧省不少计算。
   if (opts.vignette) vf.push('vignette=PI/5:dither=0');
   if (videoDelay > 0) vf.push(`tpad=start_duration=${videoDelay.toFixed(6)}:color=black`);
-  if (opts.black_intro) vf.push(`fade=t=in:st=${videoDelay.toFixed(6)}:d=0.3`);
 
   filters.push(`${videoInput}${vf.join(',')}[v]`);
   const inputs = ['-i', src];

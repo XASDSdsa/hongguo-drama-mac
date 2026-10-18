@@ -20,7 +20,6 @@ export const NUMBER_PARAMS = [
 ];
 
 const FLAGS = [
-  ['black_intro', '黑场开头'],
   ['vignette', '暗角'],
   ['eq_enable', '均衡器'],
 ];

@@ -28,7 +28,7 @@ const mk = (name, duration, extra = {}) => ({
   ...extra,
 });
 const plan = (sources, split = {}, overrides = {}) =>
-  resplit.planPieces({ sources, split, speedMin: 1.03, speedMax: 1.21, intro: 0.3, random: () => 0.5, ...overrides });
+  resplit.planPieces({ sources, split, speedMin: 1.03, speedMax: 1.21, random: () => 0.5, ...overrides });
 
 (async () => {
   await check('split parameters are validated', () => {
@@ -76,9 +76,9 @@ const plan = (sources, split = {}, overrides = {}) =>
       assert.ok(piece.finalDuration >= 30 && piece.finalDuration <= 65, `final ${piece.finalDuration}`);
       for (const segment of piece.segments)
         assert.ok(segment.speed >= 1.03 && segment.speed <= 1.21, `speed ${segment.speed}`);
-      // 成品时长就是切出来的长度加片头黑场：每段原片秒数 ÷ 自己的倍数，加起来再加 0.3。
+      // 成品时长就是切出来的长度：每段原片秒数 ÷ 自己的倍数，加起来。
       const made = piece.segments.reduce((sum, segment) => sum + segment.duration / segment.speed, 0);
-      assert.ok(Math.abs(made + 0.3 - piece.finalDuration) < 0.05, `${made} vs ${piece.finalDuration}`);
+      assert.ok(Math.abs(made - piece.finalDuration) < 0.05, `${made} vs ${piece.finalDuration}`);
     }
     const kept = pieces.reduce((sum, piece) => sum + piece.length, 0);
     assert.ok(Math.abs(kept - (10 * (92 - 1.1 - 1.2)) / 1.12) < 0.05, 'whole timeline is used exactly once');
@@ -158,7 +158,7 @@ const plan = (sources, split = {}, overrides = {}) =>
   });
 
   await check('a small leftover at the end is merged into the last episode instead of being forced into range', () => {
-    const slack = (30 - 0.3) * resplit.TAIL_ABSORB_RATIO;
+    const slack = 30 * resplit.TAIL_ABSORB_RATIO;
     let absorbed = 0;
     for (let total = 40; total <= 700; total += 7) {
       // 随机数固定取中间，倍数 1.12：要让变速后的总长正好是 total，原片要 total × 1.12 秒。
@@ -180,7 +180,7 @@ const plan = (sources, split = {}, overrides = {}) =>
 
   await check('estimate: how many episodes the selected content makes before any analysis', () => {
     const sources = Array.from({ length: 80 }, (_, i) => ({ file: `/x/${i}.mp4`, duration: 92 }));
-    const estimate = resplit.estimatePlan({ sources, split: {}, speedMin: 1.03, speedMax: 1.21, intro: 0.3 });
+    const estimate = resplit.estimatePlan({ sources, split: {}, speedMin: 1.03, speedMax: 1.21 });
     assert.equal(estimate.usedSources, 80);
     assert.ok(Math.abs(estimate.totalSeconds - 80 * (92 - 1.1 - 1.2)) < 0.2);
     assert.ok(estimate.minCount <= estimate.count && estimate.count <= estimate.maxCount);
@@ -201,7 +201,6 @@ const plan = (sources, split = {}, overrides = {}) =>
       split: {},
       speedMin: 1.03,
       speedMax: 1.21,
-      intro: 0.3,
     });
     assert.ok(fewer.count < estimate.count);
     assert.equal(
@@ -285,7 +284,7 @@ const plan = (sources, split = {}, overrides = {}) =>
 
     await check('real ffmpeg: each segment keeps its own speed, then the whole piece is re-encoded once', async () => {
       const dst = path.join(tmp, 'out', 'piece.mp4');
-      const options = { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false };
+      const options = { ...quchong.DEFAULTS, encoder: 'cpu' };
       const logs = [];
       // 第一集 8–12 秒（4 秒，1.25 倍 => 3.2 秒）+ 第二集 0–6 秒（6 秒，1.5 倍 => 4 秒）= 7.2 秒。
       await quchong.runJob({
@@ -344,7 +343,7 @@ const plan = (sources, split = {}, overrides = {}) =>
             { src: a, start: 1, duration: 3, speed: 1.2 },
             { src: b, start: 2, duration: 3, speed: 1.1 },
           ],
-          opts: { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false },
+          opts: { ...quchong.DEFAULTS, encoder: 'cpu' },
         });
         const calls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n');
         assert.ok(calls.length >= 2);
@@ -366,7 +365,7 @@ const plan = (sources, split = {}, overrides = {}) =>
         src: a,
         dst,
         segments: [{ src: a, start: 2, duration: 5 }],
-        opts: { ...quchong.DEFAULTS, encoder: 'cpu', black_intro: false },
+        opts: { ...quchong.DEFAULTS, encoder: 'cpu' },
       });
       const duration = durationOf(dst);
       assert.ok(Math.abs(duration - 5) < 0.4, `duration ${duration}`);

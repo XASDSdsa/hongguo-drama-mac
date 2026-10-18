@@ -3096,7 +3096,6 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
     split: splitOptions,
     speedMin: options.speed_min,
     speedMax: options.speed_max,
-    intro: options.black_intro ? 0.3 : 0,
   });
   if (!plan.pieces.length) return { success: false, error: plan.warnings.join('；') || '没有可处理的内容' };
 
@@ -4522,7 +4521,6 @@ ipcMain.handle('library-estimate', async (_event, payload = {}) => {
       split,
       speedMin: options.speed_min,
       speedMax: options.speed_max,
-      intro: options.black_intro ? 0.3 : 0,
     });
     const first = episodes[0].index;
     const last = episodes[episodes.length - 1].index;

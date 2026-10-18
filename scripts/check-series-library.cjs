@@ -464,7 +464,7 @@ async function check(name, fn) {
           dir: real,
           files: [path.join(real, '真剧_第002集.mp4'), path.join(real, '真剧_第001集.mp4')],
           split: { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5, start_number: 3 },
-          opts: { speed_min: 1.03, speed_max: 1.2, black_intro: false },
+          opts: { speed_min: 1.03, speed_max: 1.2 },
         },
       );
       assert.equal(split.success, true, split.error);
@@ -477,7 +477,7 @@ async function check(name, fn) {
           dir: real,
           files: [path.join(real, '真剧_第001集.mp4'), path.join(real, '真剧_第002集.mp4')],
           split: { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5, start_number: 3 },
-          opts: { speed_min: 1.03, speed_max: 1.2, black_intro: false },
+          opts: { speed_min: 1.03, speed_max: 1.2 },
         },
       );
       assert.equal(estimate.success, true, estimate.error);
@@ -612,7 +612,7 @@ async function check(name, fn) {
       ];
       const { context, handlers, events } = makeMain(root, path.join(tmp, 'ud-gap'), registry);
       const split = { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5 };
-      const opts = { speed_min: 1.03, speed_max: 1.2, black_intro: false };
+      const opts = { speed_min: 1.03, speed_max: 1.2 };
       const pick = (...numbers) => numbers.map((n) => path.join(dir, `缺集剧_第00${n}集.mp4`));
 
       const detail = await handlers['library-episodes']({}, dir);
@@ -720,7 +720,7 @@ async function check(name, fn) {
             dir,
             mode: 'episode',
             files: [1, 2].map((n) => path.join(dir, `跑批剧_第00${n}集.mp4`)),
-            opts: { speed_min: 1.03, speed_max: 1.2, black_intro: false, jobs: 2 },
+            opts: { speed_min: 1.03, speed_max: 1.2, jobs: 2 },
           },
         );
         assert.equal(started.success, true, started.error);
@@ -770,7 +770,7 @@ async function check(name, fn) {
       context.libraryFolders().add(dir);
       const files = [1, 3].map((n) => path.join(dir, `外来缺集_第00${n}集.mp4`));
       const split = { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5 };
-      const opts = { speed_min: 1.03, speed_max: 1.2, black_intro: false };
+      const opts = { speed_min: 1.03, speed_max: 1.2 };
       const asked = await handlers['library-dedup']({}, { dir, files, split, opts });
       assert.equal(asked.needsDecision, true);
       assert.equal(asked.kind, 'unknown');

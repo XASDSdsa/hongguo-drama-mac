@@ -320,7 +320,6 @@ async function main() {
       noise_max: 0,
       hue_range: 0,
       vignette: false,
-      black_intro: false,
       eq_enable: false,
     };
     const stages = [],
@@ -414,7 +413,7 @@ async function main() {
     const delayedResult = await quchong.probeMedia(ffprobe, delayedOutput);
     assert.ok(Math.abs(delayedResult.video_duration - delayedCommand.duration) < 0.1, '音画偏移样本输出时长错误');
     // Exercise exactly the production 1080p defaults, including noise, RGB
-    // shift, rotation, vignette, pitch/EQ and black intro, on concurrent jobs.
+    // shift, rotation, vignette, pitch/EQ, on concurrent jobs.
     // The hardware is pinned to CPU so the same test runs on every CI host.
     const defaultOpts = { ...quchong.DEFAULTS, encoder: 'cpu' };
     let active = 0,

@@ -197,10 +197,10 @@ function cutCandidates({ pauses = [], scenes = [] }, lo, hi) {
  * 在连续时间线上选一组切点，使每一集的成品时长落在 [min_len, max_len]。
  * sources: [{ file, duration, candidates?: [{t, score}], gapBefore?: boolean }]，按播放顺序。
  * 每个原集先各自在 [speedMin, speedMax] 里随机取一个倍数，再按变速后的时间线切：
- * 切出来多长，成品就多长（再加片头黑场 intro），不需要再反推倍数。
+ * 切出来多长，成品就多长，不需要再反推倍数。
  * 每一段 segment 带着自己所属原集的倍数；跨两个原集的新集里，前后两段倍数可以不同。
  */
-function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Math.random }) {
+function planPieces({ sources, split, speedMin, speedMax, random = Math.random }) {
   const options = validateSplit(split);
   const warnings = [];
   const timeline = [];
@@ -241,10 +241,10 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
   const scores = [0, ...inner.map((node) => node.score), 1];
 
   const midFinal = (options.min_len + options.max_len) / 2;
-  const lengthMin = options.min_len - intro;
-  const lengthMax = options.max_len - intro;
+  const lengthMin = options.min_len;
+  const lengthMax = options.max_len;
   if (!(lengthMin > 0)) throw new Error('成品时长太短');
-  const preferred = midFinal - intro;
+  const preferred = midFinal;
 
   const tailSlack = lengthMin * TAIL_ABSORB_RATIO;
   let tailAbsorbed = 0;
@@ -329,7 +329,7 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
       number: options.start_number + order,
       segments,
       length: Number(length.toFixed(3)),
-      finalDuration: Number((length + intro).toFixed(2)),
+      finalDuration: Number(length.toFixed(2)),
     });
   });
   return { pieces, warnings, tailAbsorbed: Number(tailAbsorbed.toFixed(2)), totalSeconds: Number(total.toFixed(2)) };
@@ -340,7 +340,7 @@ function planPieces({ sources, split, speedMin, speedMax, intro = 0, random = Ma
  * sources: [{ file, duration }]，按播放顺序。真正的切法要等分析完切点才定，所以给「大约多少集」和一个范围：
  * 每集大致切在成品时长范围的中间偏长一点，再给 ±10% 的范围。
  */
-function estimatePlan({ sources, split, speedMin, speedMax, intro = 0 }) {
+function estimatePlan({ sources, split, speedMin, speedMax }) {
   const options = validateSplit(split);
   let total = 0;
   let used = 0;
@@ -351,8 +351,8 @@ function estimatePlan({ sources, split, speedMin, speedMax, intro = 0 }) {
       used += 1;
     }
   }
-  const lengthMin = options.min_len - intro;
-  const preferred = (options.min_len + options.max_len) / 2 - intro;
+  const lengthMin = options.min_len;
+  const preferred = (options.min_len + options.max_len) / 2;
   // 变速后的总时长：按倍数区间的中间值估。
   const finalTotal = total / ((speedMin + speedMax) / 2);
   if (!(total > 0) || !(lengthMin > 0)) {

@@ -345,7 +345,7 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     .filter((item) => selected.has(item.path))
     .map((item) => item.path)
     .join('|');
-  const estimateKey = JSON.stringify([selectedKey, split, opts?.speed_min, opts?.speed_max, opts?.black_intro]);
+  const estimateKey = JSON.stringify([selectedKey, split, opts?.speed_min, opts?.speed_max]);
   useEffect(() => {
     if (!detail?.dir || !selectedKey || !opts || !isPrefix) {
       setEstimate({ loading: false, data: null, error: '' });
