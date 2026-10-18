@@ -385,6 +385,43 @@ async function check(name, fn) {
     );
     assert.equal(noneMatched.success, false);
 
+    // 草稿要做的那几集，各自去重完成时就立刻排进去，不等整批：不在名单里的集不动，同一集不重复排。
+    {
+      const started = [];
+      context.__started = started;
+      vm.runInContext(
+        'startLibraryDrafts = async (arg) => { __started.push(arg); return { success: true }; }',
+        context,
+      );
+      const run = (batchJson, taskJson) =>
+        vm.runInContext(
+          `(() => { const b = ${batchJson}; const t = ${taskJson}; startSideTaskForOutput(b, t); return t; })()`,
+          context,
+        );
+      const batch = (extra = '') =>
+        `{ libraryDir: ${JSON.stringify(series.path)}, sideTasks: { jianyingDraft: { enabled: true, mode: 'simple', prompts: true, scope: { numbers: [1, 2] } } }${extra} }`;
+      const task = (n) => `{ dst: '/s/去重/剧_第${String(n).padStart(3, '0')}集.mp4' }`;
+      const first = run(batch(), task(2));
+      const outside = run(batch(), task(9));
+      const off = run(`{ libraryDir: ${JSON.stringify(series.path)}, sideTasks: null }`, task(1));
+      const cancelled = run(batch(', cancelled: true'), task(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(first.sideStarted, true);
+      assert.ok(!outside.sideStarted && !off.sideStarted && !cancelled.sideStarted);
+      assert.equal(started.length, 1, '只有名单里的、没取消的那一集被排进去');
+      assert.equal(JSON.stringify(started[0].files), JSON.stringify(['/s/去重/剧_第002集.mp4']));
+      assert.equal(started[0].prompts, true);
+      assert.equal(started[0].partial, true, '提前开始时不要为还没做完的集号报「没有成品」');
+      // 同一批里先后完成的几集按顺序排队，不并发地新建草稿任务。
+      const shared = batch();
+      vm.runInContext(`globalThis.__batch = ${shared}`, context);
+      for (const n of [1, 2]) run('__batch', task(n));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(
+        started.slice(1).map((arg) => arg.files[0].split('/').pop()),
+        ['剧_第001集.mp4', '剧_第002集.mp4'],
+      );
+    }
     // 剧名改了：「去重」里已有成品跟着改名（集号不变，_1 这种重复后缀去掉）
     const outDir = path.join(series.path, '去重');
     fs.mkdirSync(outDir, { recursive: true });
@@ -497,7 +534,10 @@ async function check(name, fn) {
         tasks.map((_, i) => `真剧_第${String(i + 3).padStart(3, '0')}集.mp4`),
       );
       assert.ok(tasks.every((item) => path.dirname(item.dst) === path.join(real, '去重')));
-      assert.ok(tasks.every((item) => item.speed >= 1.03 && item.speed <= 1.2));
+      assert.ok(
+        tasks.every((item) => item.segments.every((segment) => segment.speed >= 1.03 && segment.speed <= 1.2)),
+        '每段都带着自己所属原集的倍数',
+      );
       const used = tasks.flatMap((item) => item.segments);
       assert.equal(path.basename(used[0].src), '真剧_第001集.mp4', 'episodes are joined in episode order');
       const kept = used.reduce((sum, segment) => sum + segment.duration, 0);

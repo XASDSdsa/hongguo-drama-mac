@@ -563,6 +563,7 @@ async function encodeOne({
   onLog,
   onStage,
 }) {
+  const startedAt = Date.now();
   const options = validateOptions(opts);
   const inputs = [src];
   if (inputs.some((file) => !path.isAbsolute(file)) || !path.isAbsolute(dst))
@@ -704,7 +705,13 @@ async function encodeOne({
     }
     onProgress?.(100);
     onLog?.(`[完成] ${path.basename(dst)}`);
-    return { success: true, path: dst, rolled };
+    return {
+      success: true,
+      path: dst,
+      rolled,
+      encodeSeconds: (Date.now() - startedAt) / 1000,
+      outputSeconds: Number(result.duration) || 0,
+    };
   } finally {
     try {
       await fsp.unlink(tmp);
@@ -761,7 +768,8 @@ function buildPrepareCommand({ segments, media, dst }) {
     '[v]',
   ];
   if (media.has_audio) args.push('-map', '[a]');
-  args.push('-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p');
+  // 中间文件只给下一步读：用最快的预设和很低的 crf（几乎无损），换时间；文件大一点没关系，用完就删。
+  args.push('-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '14', '-pix_fmt', 'yuv420p');
   if (media.has_audio) args.push('-c:a', 'pcm_s16le');
   args.push('-progress', 'pipe:1', '-nostats', dst);
   const duration = segments.reduce((sum, segment) => sum + segment.duration / (segment.speed ?? 1), 0);
@@ -803,6 +811,7 @@ async function runJob(args) {
   const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
   if (withAudio !== 0 && withAudio !== probed.size) throw new Error('各集的音轨不一致，无法拼接');
   const first = probed.get(parts[0].src);
+  const mergeStart = Date.now();
   await fsp.mkdir(path.dirname(dst), { recursive: true });
   const middle = path.join(path.dirname(dst), `.hongguo-quchong-pre-${randomUUID()}.mkv`);
   try {
@@ -829,13 +838,15 @@ async function runJob(args) {
         `合并变速这一步失败（还没到去重编码）。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
       );
     }
-    return await encodeOne({
+    const mergeSeconds = (Date.now() - mergeStart) / 1000;
+    const done = await encodeOne({
       ...args,
       src: middle,
       segments: undefined,
       speed: 1,
       onProgress: (value) => onProgress?.(25 + value * 0.75),
     });
+    return { ...done, mergeSeconds };
   } finally {
     await fsp.rm(middle, { force: true });
   }

@@ -2699,6 +2699,36 @@ function emitQuchongLog(batch, task, force = false) {
   sendToRenderer('quchong-log', { batchId: batch.id, taskId: task.id, line });
 }
 
+const sideStartChains = new WeakMap();
+/**
+ * 去重成品一出来，就把「剪映草稿 / 分镜工程图」里需要的这一集立刻排进去，不等整批做完。
+ * 同一批里的几集几乎同时完成时，排队的动作按顺序一个个做，避免同时新建两个草稿任务。
+ */
+function startSideTaskForOutput(batch, task) {
+  const draftTask = batch.sideTasks?.jianyingDraft;
+  if (!draftTask?.enabled || !batch.libraryDir || batch.cancelled || !task.dst || task.sideStarted) return;
+  if (!selectDraftFiles([task.dst], draftTask.scope).files.length) return;
+  task.sideStarted = true;
+  const dir = batch.libraryDir;
+  const chain = (sideStartChains.get(batch) || Promise.resolve())
+    .then(() =>
+      startLibraryDrafts({
+        dir,
+        files: [task.dst],
+        mode: draftTask.mode,
+        scope: draftTask.scope,
+        prompts: draftTask.prompts,
+        partial: true,
+      }),
+    )
+    .then((started) => {
+      if (!started.success)
+        libLog(dir, 'error', `剪映草稿：${path.basename(task.dst)} 没有自动生成：${started.error}`, 'side');
+    })
+    .catch((error) => libLog(dir, 'error', `剪映草稿：没有自动生成：${error?.message || error}`, 'side'));
+  sideStartChains.set(batch, chain);
+}
+
 function finishQuchongBatch(batch) {
   if (batch.finished || batch.active > 0 || batch.queue.length > 0) return;
   batch.finished = true;
@@ -2720,23 +2750,29 @@ function finishQuchongBatch(batch) {
       `这一批处理${batch.status === 'completed' ? '全部完成' : '结束'}：成功 ${count('completed')} 集${failed ? `，失败 ${failed} 集` : ''}${stopped ? `，停止 ${stopped} 集` : ''}`,
     );
   }
-  // 勾选了「生成剪映草稿」：去重完成的成品接着生成草稿。
+  // 勾选了「生成剪映草稿」：需要的那几集在各自去重完成时就已经开始做了（startSideTaskForOutput）；
+  // 这里只补没赶上的（比如停了又续跑），并把没有成品的集号说清楚。
   const draftTask = batch.sideTasks?.jianyingDraft;
   if (draftTask?.enabled && batch.libraryDir && !batch.cancelled) {
     const outputs = batch.tasks.filter((task) => task.status === 'completed' && task.dst).map((task) => task.dst);
-    if (outputs.length) {
-      startLibraryDrafts({
-        dir: batch.libraryDir,
-        files: outputs,
-        mode: draftTask.mode,
-        scope: draftTask.scope,
-        prompts: draftTask.prompts,
-      }).then((started) => {
-        if (!started.success) {
-          libLog(batch.libraryDir, 'error', `剪映草稿：这一批没有自动生成：${started.error}`, 'side');
-        }
-      });
-    } else libLog(batch.libraryDir, 'warn', '剪映草稿：这一批没有成功的去重成品，没有生成草稿', 'side');
+    const picked = selectDraftFiles(outputs, draftTask.scope);
+    if (!outputs.length) {
+      libLog(batch.libraryDir, 'warn', '剪映草稿：这一批没有成功的去重成品，没有生成草稿', 'side');
+    } else if (!picked.files.length) {
+      libLog(
+        batch.libraryDir,
+        'error',
+        `剪映草稿：去重成品里没有第 ${picked.missing.join('、')} 集，没法生成剪映草稿`,
+        'side',
+      );
+    } else {
+      if (picked.missing.length)
+        libLog(batch.libraryDir, 'warn', `剪映草稿：成品里没有第 ${picked.missing.join('、')} 集，已跳过`, 'side');
+      const rest = batch.tasks
+        .filter((task) => task.status === 'completed' && task.dst && !task.sideStarted)
+        .map((task) => task.dst);
+      for (const task of batch.tasks) if (rest.includes(task.dst)) startSideTaskForOutput(batch, task);
+    }
   }
   sendToRenderer('quchong-complete', {
     batchId: batch.id,
@@ -2815,13 +2851,23 @@ function pumpQuchongBatch(batch) {
         task.stage = 'completed';
         task.progress = 100;
         task.path = result.path;
+        const took = Math.max(1, Math.round((Date.now() - (task.startedAt || Date.now())) / 1000));
+        // 耗时拆开写：合并变速多久、去重编码多久、成品多长，编码速度是成品时长的多少倍——慢在哪一眼能看出来。
+        const detail = [
+          result.mergeSeconds != null ? `合并变速 ${Math.round(result.mergeSeconds)} 秒` : '',
+          result.encodeSeconds != null ? `去重编码 ${Math.round(result.encodeSeconds)} 秒` : '',
+          result.outputSeconds ? `成品 ${Math.round(result.outputSeconds)} 秒` : '',
+        ]
+          .filter(Boolean)
+          .join('，');
         logQuchongTask(
           batch,
           task,
           'ok',
-          `完成，用时 ${Math.max(1, Math.round((Date.now() - (task.startedAt || Date.now())) / 1000))} 秒 → 去重/${path.basename(task.dst)}`,
+          `完成，用时 ${took} 秒${detail ? `（${detail}）` : ''} → 去重/${path.basename(task.dst)}`,
         );
         if (!task.segments) markPipelineDeduped(task.src, task.dst);
+        startSideTaskForOutput(batch, task);
       })
       .catch((error) => {
         task.status = batch.cancelled || controller.signal.aborted ? 'stopped' : 'failed';
@@ -3069,6 +3115,7 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
     if (!media.has_video) return { success: false, error: `这个文件没有视频轨：${path.basename(item.file)}` };
     durations.set(item.file, media.video_duration > 0 ? media.video_duration : media.duration);
   }
+  const analyzeStart = Date.now();
   const analysis = await resplit.analyzeSources({
     ffmpegPath,
     files: ordered.map((item) => item.file),
@@ -3076,6 +3123,11 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
     onProgress: progress,
   });
 
+  libLog(
+    dir,
+    'info',
+    `切点分析完成：${ordered.length} 集，用时 ${Math.max(1, Math.round((Date.now() - analyzeStart) / 1000))} 秒（找停顿和镜头切换，结果有缓存，同一批再排不用重做）`,
+  );
   const sources = ordered.map((item, position) => {
     const duration = durations.get(item.file);
     const previous = ordered[position - 1];
@@ -3098,6 +3150,11 @@ async function planAndQueueResplit({ dir, files, split, opts, outputDir, sideTas
     speedMax: options.speed_max,
   });
   if (!plan.pieces.length) return { success: false, error: plan.warnings.join('；') || '没有可处理的内容' };
+  libLog(
+    dir,
+    'info',
+    `排好 ${plan.pieces.length} 集新片，同时处理 ${options.jobs} 集，编码器 ${options.encoder}；每集先合并变速，再统一加去重特效`,
+  );
 
   // 新的一版开始前，旧成品挪进废纸篓：成品文件夹里只留最新一版。
   const retired = await retireLibraryOutputs(dir);
@@ -4210,7 +4267,7 @@ async function generateLibraryDraft(job, file, item) {
 }
 
 /** 对这些去重成品逐集生成剪映草稿；后台运行，进度和日志写进这部剧的「支线任务日志」。 */
-async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts = false }) {
+async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts = false, partial = false }) {
   const key = path.resolve(dir);
   if (!candidates.length)
     return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
@@ -4219,7 +4276,7 @@ async function startLibraryDrafts({ dir, files: candidates, mode, scope, prompts
   if (!files.length) {
     return { success: false, error: `去重成品里没有第 ${missing.join('、')} 集，没法生成剪映草稿` };
   }
-  if (missing.length)
+  if (missing.length && !partial)
     libLog(path.resolve(dir), 'warn', `剪映草稿：成品里没有第 ${missing.join('、')} 集，已跳过`, 'side');
   const kind = normalizeDraftMode(mode);
   const withPrompts = prompts === true;
