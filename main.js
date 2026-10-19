@@ -4217,7 +4217,12 @@ async function waitForDraftCapacity(job, state) {
   let told = false;
   while (!job.cancelled) {
     const othersBusy = draftEpisodesInProgress(job) + job.active.size >= draftLanesAllowed();
-    const lowMemory = process.platform === 'win32' && os.freemem() < DRAFT_LANE_MEMORY;
+    // 只在还有别的重活（去重、别的草稿）时才因为内存紧张而等；什么都没在跑时直接做，免得内存小的电脑永远等下去。
+    const heavyElsewhere =
+      [...quchongBatches.values()].some((batch) => !batch.finished) ||
+      draftEpisodesInProgress(job) > 0 ||
+      job.active.size > 0;
+    const lowMemory = process.platform === 'win32' && heavyElsewhere && os.freemem() < DRAFT_LANE_MEMORY;
     if (!othersBusy && !lowMemory) {
       if (told) {
         job.waitingReason = '';
