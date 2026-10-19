@@ -248,22 +248,32 @@ function Player({ target, onNavigate, active = true }) {
     } catch (_) {}
   };
 
-  const toggleAutoDelete = async () => {
-    const next = !autoDelete;
-    // 开启前说清楚：看完就永久删除，「管理剧集」里就没有这集的原片可以去重了。
-    if (
-      next &&
-      !window.confirm(
-        '开启后，每看完一集就会永久删除这一集的本地文件（不进回收站）。\n删除后「管理剧集」里就没有这集的原片可以去重了。确定开启吗？',
-      )
-    )
-      return;
+  const applyAutoDelete = async (next) => {
     setAutoDelete(next);
     try {
       const s = await window.electronAPI.getSettings();
-      await window.electronAPI.saveSettings({ ...s, auto_delete_watched: next });
+      const result = await window.electronAPI.saveSettings({ ...s, auto_delete_watched: next });
+      if (result && result.success === false) throw new Error(result.error);
       showToast(next ? '已开启：看完一集自动删除本地文件' : '已关闭自动删除');
-    } catch (_) {}
+    } catch (_) {
+      // 没保存成功就把开关拨回去，界面和实际设置保持一致。
+      setAutoDelete(!next);
+      showToast('设置没有保存成功，请稍后再试');
+    }
+  };
+
+  const toggleAutoDelete = () => {
+    const next = !autoDelete;
+    if (!next) return applyAutoDelete(false);
+    // 开启前说清楚：看完就永久删除，「管理剧集」里就没有这集的原片可以去重了。
+    setConfirmAsk({
+      title: '开启看完自动删',
+      message:
+        '开启后，每看完一集就会永久删除这一集的本地文件（不进回收站）。\n删除后「管理剧集」里就没有这集的原片可以去重了。确定开启吗？',
+      okText: '开启',
+      danger: true,
+      onOk: () => applyAutoDelete(true),
+    });
   };
 
   // 打开剧集面板时，补全各剧的下载进度（只拉一次）

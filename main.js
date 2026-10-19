@@ -8,7 +8,18 @@
  *   4. 下载管理：进度推送、暂停/取消、重试、删除、打开所在文件夹
  *   5. 设置：下载目录、命名规则、并发数（JSON 文件持久化）
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu, powerSaveBlocker } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  session,
+  protocol,
+  Menu,
+  powerSaveBlocker,
+  powerMonitor,
+} = require('electron');
 const path = require('path');
 const os = require('node:os');
 const fs = require('fs');
@@ -3096,7 +3107,14 @@ function registerQuchongBatch({
   quchongBatches.set(id, batch);
   persistQuchongBatch(batch);
   // 上次崩溃、断电或强制退出留下的半成品临时文件（隐藏的 .hongguo-quchong-*），开新批次时顺手清掉。
+  // 别的批次还在往同一个文件夹写时不清：它的中间文件可能很久没改过，但还要用。
+  const busyDirs = new Set(
+    [...quchongBatches.values()]
+      .filter((other) => other !== batch && !other.finished)
+      .flatMap((other) => other.tasks.filter((task) => task.dst).map((task) => quchongPathKey(path.dirname(task.dst)))),
+  );
   for (const dir of new Set(batch.tasks.map((task) => path.dirname(task.dst)).filter(Boolean))) {
+    if (busyDirs.has(quchongPathKey(dir))) continue;
     quchong
       .sweepStaleTemps(dir)
       .then((removed) => removed && libLog(libraryDir, 'info', `清理了上次中断留下的 ${removed} 个临时文件`))
@@ -8276,6 +8294,12 @@ function createWindow() {
     }
     if (mainWindow === createdWindow) rendererClosing = true;
   });
+  // Windows 关机、重启、注销时不再弹「还有任务」的确认框，否则系统会提示「此应用正在阻止关机」。
+  const allowSystemQuit = () => {
+    quitConfirmed = true;
+  };
+  createdWindow.on('query-session-end', allowSystemQuit);
+  createdWindow.on('session-end', allowSystemQuit);
 
   createdWindow.on('closed', () => {
     // Detach the destroyed window before cancelling jobs.  Their finally
@@ -8497,6 +8521,12 @@ app.whenReady().then(async () => {
   }
   createWindow();
   startSleepBlockerWatch();
+  // Mac 关机、重启时同样直接退出，不用确认框拦住关机。
+  try {
+    powerMonitor?.on?.('shutdown', () => {
+      quitConfirmed = true;
+    });
+  } catch (_) {}
 });
 
 function gpuAdapterNames(info) {

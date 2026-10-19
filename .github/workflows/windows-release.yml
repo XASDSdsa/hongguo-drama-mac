@@ -240,6 +240,7 @@ jobs:
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs
           node scripts/check-renderer-lifecycle.cjs
+          node scripts/check-quit-confirm.cjs
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-jianying-simple-draft.cjs
