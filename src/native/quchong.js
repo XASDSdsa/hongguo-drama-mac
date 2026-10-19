@@ -389,7 +389,7 @@ async function probeMedia(ffprobePath, file, signal) {
       '-v',
       'error',
       '-show_entries',
-      'format=duration,start_time:stream=codec_type,start_time,duration,width,height:stream_disposition=attached_pic:stream_side_data=rotation:stream_tags=rotate',
+      'format=duration,start_time:stream=codec_type,start_time,duration,width,height,sample_aspect_ratio:stream_disposition=attached_pic:stream_side_data=rotation:stream_tags=rotate',
       '-of',
       'json',
       file,
@@ -408,7 +408,12 @@ async function probeMedia(ffprobePath, file, signal) {
   const sideRotation = (videos[0]?.side_data_list || []).find((item) => item && item.rotation != null)?.rotation;
   const rotation = Number(sideRotation ?? videos[0]?.tags?.rotate ?? 0) || 0;
   const turned = Math.abs(Math.round(rotation)) % 180 === 90;
-  const codedWidth = Number(videos[0]?.width) || 0;
+  // 像素不是正方形（SAR 不是 1:1，少见的变形存储）时按显示宽度算，否则成品会被压窄。
+  const [sarNum, sarDen] = String(videos[0]?.sample_aspect_ratio || '1:1')
+    .split(':')
+    .map(Number);
+  const sar = sarNum > 0 && sarDen > 0 ? sarNum / sarDen : 1;
+  const codedWidth = Math.round((Number(videos[0]?.width) || 0) * sar);
   const codedHeight = Number(videos[0]?.height) || 0;
   return {
     duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
@@ -430,12 +435,25 @@ const DISK_FULL = /No space left on device|ENOSPC|There is not enough space on t
 function diskFullError(error) {
   return new Error(`磁盘空间不足：输出位置所在的磁盘写满了，请清理磁盘后再处理。\n${error.message}`);
 }
+/**
+ * 报错里说「没有空间」时再看一眼磁盘真实剩余空间：个别 FFmpeg 版本的滤镜内部也会报这句话（磁盘其实还有很多空间），
+ * 不能因此把整批停掉。读不到剩余空间时相信报错。
+ */
+async function reallyOutOfSpace(message, dir) {
+  if (!DISK_FULL.test(message)) return false;
+  try {
+    const stats = await fsp.statfs(dir);
+    return Number(stats.bavail) * Number(stats.bsize) < 1024 ** 3;
+  } catch (_) {
+    return true;
+  }
+}
 
 // 显卡编码会话：NVIDIA 消费级显卡同时能开的编码会话有限（旧驱动 3 个、新驱动 8 个，OBS、录屏软件也会占用）。
 // 遇到「会话已满」不算失败：把上限降到现在正在用的数量，多出来的集排队，等别的集编完再继续。
-// 全部空闲后上限恢复，下一批重新按实际情况来。
+// 上限每过一分钟没再遇到「已满」就放宽一路（录屏软件关掉后能慢慢恢复）；全部空闲后完全恢复。
 const NVENC_SESSION_FULL = /OpenEncodeSessionEx failed: (out of memory \(10\)|incompatible client key \(21\))/i;
-const hwSessions = { limit: Infinity, active: 0, waiters: [] };
+const hwSessions = { limit: Infinity, active: 0, waiters: [], lastFullAt: 0 };
 
 function acquireHwSession(signal) {
   return new Promise((resolve, reject) => {
@@ -459,6 +477,10 @@ function acquireHwSession(signal) {
 function releaseHwSession() {
   hwSessions.active = Math.max(0, hwSessions.active - 1);
   if (hwSessions.active === 0 && !hwSessions.waiters.length) hwSessions.limit = Infinity;
+  else if (Number.isFinite(hwSessions.limit) && Date.now() - hwSessions.lastFullAt > 60_000) {
+    hwSessions.limit += 1;
+    hwSessions.lastFullAt = Date.now();
+  }
   while (hwSessions.waiters.length && hwSessions.active < hwSessions.limit) {
     const next = hwSessions.waiters.shift();
     next.signal?.removeEventListener('abort', next.onAbort);
@@ -838,6 +860,7 @@ async function encodeOne({
     }
     let audioStep = 0;
     let sessionWaits = 0;
+    let soloSessionFails = 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
@@ -845,10 +868,19 @@ async function encodeOne({
       } catch (error) {
         if (signal?.aborted) throw new Error('已取消');
         // 磁盘写满：换参数、换编码器、重试都没用，直接说清楚（批次会停下剩下的集）。
-        if (DISK_FULL.test(error.message)) throw diskFullError(error);
+        if (await reallyOutOfSpace(error.message, path.dirname(dst))) throw diskFullError(error);
         // 显卡编码会话已满：排队等别的集编完再来，不算失败、不占重试次数。
-        if (encoder === 'nvenc' && NVENC_SESSION_FULL.test(error.message) && sessionWaits < 40) {
+        // 我们自己没有别的集在用显卡却还是满的（会话全被别的软件占着、显存不够）：等也没用，试两次就按失败处理。
+        const othersHolding = hwSessions.active - (holdingSession ? 1 : 0) > 0;
+        if (!othersHolding && NVENC_SESSION_FULL.test(error.message)) soloSessionFails += 1;
+        if (
+          encoder === 'nvenc' &&
+          NVENC_SESSION_FULL.test(error.message) &&
+          sessionWaits < 40 &&
+          soloSessionFails <= 2
+        ) {
           sessionWaits += 1;
+          hwSessions.lastFullAt = Date.now();
           hwSessions.limit = Math.max(1, hwSessions.active - 1);
           releaseHwSession();
           holdingSession = false;
@@ -932,6 +964,11 @@ async function encodeOne({
           if (signal?.aborted) throw new Error('已取消');
           continue;
         }
+        if (encoder === 'nvenc' && NVENC_SESSION_FULL.test(error.message)) {
+          throw new Error(
+            `显卡编码器打不开：显卡的编码通道被别的软件（录屏、直播、另一个剪辑软件）占满，或显存不够。请关掉这些软件后重试，或在「设置 → 去重编码方式」改成「只用 CPU」。\n${error.message}`,
+          );
+        }
         if (encoder !== 'cpu') {
           throw new Error(
             `${encoder} 编码失败${attempt ? `（已重试 ${attempt} 次）` : ''}，未自动切换编码器。可在「设置 → 去重编码方式」改成「只用 CPU」后重试。原因：${keyDiagnostics(error.message)}\n${error.message}`,
@@ -985,8 +1022,10 @@ function buildPrepareCommand({ segments, media, dst }) {
     const speed = segment.speed ?? 1;
     // 各集画面比例不同时按比例缩小再补黑边，不拉伸变形；尺寸相同时这两步什么都不做。
     // 先缩放再定 setsar：缩放会按新旧尺寸改写像素宽高比，顺序反了各段的 SAR 对不上，concat 会直接报 Invalid argument。
+    // 第一个 scale 把非正方形像素（少见）还原成正方形，正常素材是原样通过。
     filters.push(
-      `[${index}:V:0]scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+      `[${index}:V:0]scale=trunc(iw*sar/2)*2:ih,setsar=1,` +
+        `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
         `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=(PTS-STARTPTS)/${speed.toFixed(6)}[sv${index}]`,
     );
     labels.push(`[sv${index}]`);
@@ -1096,7 +1135,7 @@ async function runJob(args) {
       );
     } catch (error) {
       if (signal?.aborted) throw new Error('已取消');
-      if (DISK_FULL.test(error.message)) throw diskFullError(error);
+      if (await reallyOutOfSpace(error.message, path.dirname(dst))) throw diskFullError(error);
       throw new Error(
         `合并变速这一步失败（还没到去重编码）。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
       );

@@ -360,6 +360,40 @@ async function check(name, run) {
     assert.deepEqual(h.marks, [{ src: good.src, dst: good.dst }]);
   });
 
+  await check('confirmed disk full stops the rest of the batch; FFmpeg text alone does not', async () => {
+    const full = load();
+    const batch = await full.start(['f1', 'f2', 'f3', 'f4']);
+    assert.equal(full.starts.length, 2);
+    full.jobs
+      .get(batch.sources[0])
+      .reject(new Error('磁盘空间不足：输出位置所在的磁盘写满了\nNo space left on device'));
+    await tick();
+    const tasks = batch.snapshot().tasks;
+    assert.equal(tasks[0].status, 'failed');
+    assert.equal(tasks[1].status, 'running', '已经在跑的那一集照常收尾');
+    assert.deepEqual(
+      tasks.slice(2).map((task) => [task.status, task.error]),
+      [
+        ['stopped', '磁盘空间不足，已停止'],
+        ['stopped', '磁盘空间不足，已停止'],
+      ],
+    );
+    assert.equal(full.starts.length, 2, '磁盘满了不能再开新的一集');
+    full.jobs.get(batch.sources[1]).resolve();
+    await tick();
+
+    const quirk = load();
+    const other = await quirk.start(['q1', 'q2', 'q3']);
+    quirk.jobs
+      .get(other.sources[0])
+      .reject(new Error('合并变速这一步失败\nError while filtering: No space left on device'));
+    await tick();
+    assert.equal(quirk.starts.length, 3, '没确认是磁盘满（只是 FFmpeg 的字样）时，后面的集照常开始');
+    quirk.jobs.get(other.sources[1]).resolve();
+    quirk.jobs.get(other.sources[2]).resolve();
+    await tick();
+  });
+
   await check('cancel stops active and queued jobs only in the requested batch', async () => {
     // 全局并发 2：无关批次先占一个槽，被取消的这一批一集在跑、一集排队。
     const h = load({ quchong_jobs: 2 }),

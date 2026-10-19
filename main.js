@@ -2925,6 +2925,10 @@ function pumpQuchongBatch(batch) {
           task.logBuffer.push(String(line));
           if (task.logBuffer.length > 40) task.logBuffer.splice(0, task.logBuffer.length - 40);
           emitQuchongLog(batch, task);
+          // 排队等显卡、重试、降级、换编码器这几类提示也写进这部剧的处理日志：
+          // 进度停在 0% 时，用户能看到它在等什么，而不是以为卡死了。
+          const notice = String(line).match(/^\[(排队|重试|降级|编码器)\]\s*(.+)$/);
+          if (notice) logQuchongTask(batch, task, notice[1] === '排队' ? 'info' : 'warn', notice[2].slice(0, 300));
         },
       })
       .then((result) => {
@@ -2963,7 +2967,8 @@ function pumpQuchongBatch(batch) {
         // 磁盘写满：后面每一集都会同样失败，剩下的直接停下，不再白白占着电脑。
         if (
           task.status === 'failed' &&
-          /No space left on device|ENOSPC|磁盘空间不足/i.test(task.error) &&
+          // 只认确认过的「磁盘空间不足」和系统写文件时的 ENOSPC；FFmpeg 原始输出里的同名字样可能是误报（见 quchong.reallyOutOfSpace）。
+          /磁盘空间不足|ENOSPC:/.test(task.error) &&
           batch.queue.length
         ) {
           const left = batch.queue.length;

@@ -118,6 +118,57 @@ const brightness = (file, at, crop) =>
   assert.ok(middle > top + 30, `横屏片段中间应是画面，亮度 ${middle}`);
   console.log('PASS mixed episodes: silent episode padded with silence, other aspect letterboxed, duration as planned');
 
+  // 非正方形像素（480×640 存储、像素宽高比 4:3，显示出来是 640×640 的正方形画面）。
+  const anamorphic = path.join(work, 'anamorphic.mp4');
+  run([
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc=s=480x640:r=25:d=3',
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:sample_rate=44100:d=3',
+    '-vf',
+    'setsar=4/3',
+    '-c:v',
+    'libx264',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-shortest',
+    anamorphic,
+  ]);
+  const anaInfo = await quchong.probeMedia(ffprobe, anamorphic);
+  assert.equal(`${anaInfo.video_width}x${anaInfo.video_height}`, '640x640', '按显示宽度算');
+  const anaOut = path.join(work, 'anamorphic-out.mp4');
+  await quchong.runJob({
+    ffmpegPath: ffmpeg,
+    ffprobePath: ffprobe,
+    src: anamorphic,
+    dst: anaOut,
+    opts: { ...quchong.DEFAULTS, encoder: 'cpu', jobs: 1 },
+  });
+  const anaResult = await quchong.probeMedia(ffprobe, anaOut);
+  assert.equal(`${anaResult.video_width}x${anaResult.video_height}`, '640x640', '单集去重后仍是正方形画面');
+  // 拼进竖屏成片：正方形画面缩到 360×360、上下补黑边，不被压成 360×640。
+  const anaPiece = path.join(work, 'anamorphic-piece.mp4');
+  await quchong.runJob({
+    ffmpegPath: ffmpeg,
+    ffprobePath: ffprobe,
+    dst: anaPiece,
+    segments: [
+      { src: portrait, start: 0.2, duration: 1, speed: 1 },
+      { src: anamorphic, start: 0.2, duration: 1.5, speed: 1 },
+    ],
+    opts: { ...quchong.DEFAULTS, encoder: 'cpu', jobs: 1 },
+  });
+  const anaTop = brightness(anaPiece, '1.7', '200:40:80:20');
+  const anaMiddle = brightness(anaPiece, '1.7', '200:40:80:300');
+  assert.ok(anaTop < 90 && anaMiddle > anaTop + 30, `正方形画面应上下补黑边：上 ${anaTop} 中 ${anaMiddle}`);
+  console.log('PASS non-square pixels: shown at display size, letterboxed inside a portrait piece');
+
   // 显卡编码会话上限：假 FFmpeg 只给 2 个 h264_nvenc 会话，4 路同时跑 6 集。
   if (process.platform === 'win32') {
     console.log('SKIP nvenc session queue on Windows (bash fake encoder)');
