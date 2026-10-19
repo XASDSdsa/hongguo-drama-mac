@@ -1958,7 +1958,12 @@ async function executeHongguoDownload(task, attempt = 0) {
       }
     });
     // pipeline rejects on either side and destroys both streams (including abrupt CDN close).
-    await pipeline(response.data, writer);
+    const stopWatch = watchStall(response.data);
+    try {
+      await pipeline(response.data, writer);
+    } finally {
+      stopWatch();
+    }
     source.token.throwIfRequested();
     if (totalLength && received !== totalLength) throw new Error('视频下载不完整，请重试');
     if (playInfo.contentKey) {
@@ -5738,6 +5743,34 @@ function bufferedMediaResponse(request, buffer) {
   });
 }
 
+/**
+ * 下载流超过 idleMs 没收到任何数据就当作网络中断：CDN 半路停止发送时，axios 的 timeout 只管到收到响应头为止，
+ * 之后会一直卡在「下载中」占着名额。断开后按网络错误自动重试。
+ */
+function watchStall(stream, idleMs = 60_000) {
+  let last = Date.now();
+  const onData = () => {
+    last = Date.now();
+  };
+  stream.on?.('data', onData);
+  let timer = null;
+  const check = () => {
+    if (Date.now() - last > idleMs) {
+      timer = null;
+      stream.destroy?.(new Error(`网络中断：${Math.round(idleMs / 1000)} 秒没有收到数据`));
+      return;
+    }
+    timer = setTimeout(check, 5000);
+    timer?.unref?.();
+  };
+  check();
+  return () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    stream.off?.('data', onData);
+  };
+}
+
 /** Same media headers and cancellation apply to download and playback. */
 async function requestMedia(playInfo, options = {}) {
   const url = new URL(playInfo.url);
@@ -5999,7 +6032,12 @@ async function fetchDecryptedEpisode(vid, onProgress, seriesId, playInfo, signal
           lastProgress = Date.now();
         }
       });
-      await pipeline(response.data, fs.createWriteStream(input, { mode: 0o600 }), { signal });
+      const stopWatch = watchStall(response.data);
+      try {
+        await pipeline(response.data, fs.createWriteStream(input, { mode: 0o600 }), { signal });
+      } finally {
+        stopWatch();
+      }
       if (total && received !== total) throw new Error('视频下载不完整，请重试');
       if (onProgress) onProgress(received, received, 'decrypting');
       await decryptContentKeyFile(input, output, playInfo.contentKey, { signal });
