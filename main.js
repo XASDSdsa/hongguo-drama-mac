@@ -3453,7 +3453,22 @@ function linkedSeriesEntries() {
   return result;
 }
 
+// 总任务每隔两秒、每来一个处理/下载事件就读一次：扫描整个下载目录（每个视频都要读一次大小和时间）
+// 在剧多的电脑上要几百毫秒到几秒，会拖慢主进程。总任务只用到「有哪些剧文件夹、对应哪部剧」，
+// 这份名单很少变，30 秒内复用上一次的扫描；「管理剧集」列表每次打开仍然重新扫描并刷新这份名单。
+let folderRecordsCache = null;
+function libraryFolderRecordsCached() {
+  if (folderRecordsCache && Date.now() - folderRecordsCache.at < 30_000) return folderRecordsCache.records;
+  return libraryFolderRecords();
+}
+
 function libraryFolderRecords() {
+  const records = scanLibraryFolderRecords();
+  folderRecordsCache = { at: Date.now(), records };
+  return records;
+}
+
+function scanLibraryFolderRecords() {
   const linked = linkedSeriesEntries();
   return seriesLibrary.scanLibrary(downloadRoot(), libraryFolders().list()).map((folder) => {
     const entry = !folder.imported ? linked.get(folder.name.toLowerCase()) : null;
@@ -3533,7 +3548,7 @@ ipcMain.handle('library-overview', () => {
     return {
       success: true,
       ...libraryActivity.buildOverview({
-        folders: libraryFolderRecords(),
+        folders: libraryFolderRecordsCached(),
         batches: getQuchongSnapshots(),
         downloads: downloadTasks,
         jobs: [...libraryJobs.values()],
@@ -3663,6 +3678,7 @@ ipcMain.handle('library-import', async () => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths[0]) return { success: true, dir: null };
+    folderRecordsCache = null;
     return { success: true, dir: libraryFolders().add(result.filePaths[0]) };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
@@ -3678,6 +3694,7 @@ ipcMain.handle('library-remove-import', (_event, dir) => {
       (libraryDraftJobs.get(path.resolve(String(dir || '')))?.status === 'running' ? '剪映草稿正在生成' : '');
     if (busy) return { success: false, error: `${busy}，做完或停止后再移除` };
     libraryFolders().remove(dir);
+    folderRecordsCache = null;
     return { success: true };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
