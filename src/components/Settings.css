@@ -575,3 +575,8 @@
   font-weight: 600;
   color: var(--warning);
 }
+
+.settings-logs {
+  margin-left: auto;
+  align-self: flex-start;
+}

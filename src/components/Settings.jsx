@@ -283,6 +283,14 @@ function SettingsPage({ active = true }) {
             保存位置、下载、去重与剪映草稿、AI 素材。改完点最下面的「保存设置」才会生效。
           </p>
         </div>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm settings-logs"
+          title="遇到问题时，把这个文件夹里的 main.log 发给我们"
+          onClick={() => window.electronAPI.openLogFolder?.().catch(() => {})}
+        >
+          打开日志文件夹
+        </button>
       </div>
 
       <fieldset className="settings-form" disabled={saving}>

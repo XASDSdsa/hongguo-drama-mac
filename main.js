@@ -8332,8 +8332,54 @@ function askToQuit(win) {
 }
 
 // ===== 应用生命周期 =====
+/**
+ * 主进程的错误和警告同时写进 用户数据/logs/main.log：用户遇到问题时可以把日志发过来。
+ * 启动时超过 5 MB 就换成 main.old.log；运行中最多再写 10 MB，不会把磁盘写满。
+ */
+function installFileLog() {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'main.log');
+    try {
+      if (fs.statSync(file).size > 5 * 1024 * 1024) fs.renameSync(file, path.join(dir, 'main.old.log'));
+    } catch (_) {}
+    const stream = fs.createWriteStream(file, { flags: 'a' });
+    stream.on('error', () => {});
+    let written = 0;
+    const format = (value) => {
+      if (value instanceof Error) return value.stack || value.message;
+      if (typeof value === 'string') return value;
+      try {
+        return JSON.stringify(value);
+      } catch (_) {
+        return String(value);
+      }
+    };
+    for (const level of ['error', 'warn']) {
+      const original = console[level].bind(console);
+      console[level] = (...args) => {
+        original(...args);
+        if (written > 10 * 1024 * 1024) return;
+        const line = `[${new Date().toISOString()}] ${level.toUpperCase()} ${args.map(format).join(' ')}\n`;
+        written += Buffer.byteLength(line);
+        stream.write(line);
+      };
+    }
+    console.warn(`[App] 启动 ${APP_VERSION} ${process.platform}-${process.arch}`);
+  } catch (_) {}
+}
+
+ipcMain.handle('open-log-folder', async () => {
+  const dir = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  const error = await shell.openPath(dir);
+  return error ? { success: false, error } : { success: true };
+});
+
 app.whenReady().then(async () => {
   if (!singleInstance) return;
+  installFileLog();
   // 主进程里的未捕获错误只记录，不弹出 Electron 的致命错误对话框，也不让正在运行的下载/处理任务陪葬。
   process.on('unhandledRejection', (reason) => console.error('[Main] 未处理的 Promise 拒绝:', reason?.stack || reason));
   process.on('uncaughtException', (error) => console.error('[Main] 未捕获异常:', error?.stack || error));
