@@ -166,6 +166,8 @@ function clearOnlineCache() {
 
 // ===== 下载任务管理 =====
 let downloadTasks = [];
+// 保存路径索引（见 savePathVids）。
+let savePathIndex = null;
 let downloadQueue = [];
 let activeDownloads = 0;
 const runningDownloads = new Set();
@@ -576,6 +578,14 @@ function pipelineEpisodeByPath(filePath) {
   const key = quchongPathKey(filePath);
   if (!key) return [];
   const matches = [];
+  // 先把「下载到这个路径」的任务挑出来（只扫一遍下载记录），再逐集对照；
+  // 以前每一集都把全部下载记录扫一遍，记录多了以后每做完一集主进程会卡住一两秒。
+  const owners = new Set();
+  for (const item of downloadTasks) {
+    const index = Number(item.hongguoInfo?.vid_index);
+    if (item.savePath && Number.isFinite(index) && quchongPathKey(item.savePath) === key)
+      owners.add(`${String(item.hongguoInfo.series_id)}|${index}`);
+  }
   for (const entry of seriesRegistry) {
     const pipeline = pipelineForEntry(entry);
     for (const [idx, record] of Object.entries(pipeline.episodes)) {
@@ -584,14 +594,10 @@ function pipelineEpisodeByPath(filePath) {
         matches.push({ entry, index: Number(idx), record });
       }
     }
+    if (!owners.size) continue;
     for (const episode of entry.episodes || []) {
-      const task = downloadTasks.find(
-        (item) =>
-          String(item.hongguoInfo?.series_id) === String(entry.series_id) &&
-          Number(item.hongguoInfo?.vid_index) === Number(episode.vid_index) &&
-          quchongPathKey(item.savePath) === key,
-      );
-      if (task && !matches.some((item) => item.entry === entry && item.index === Number(episode.vid_index))) {
+      const owned = owners.has(`${String(entry.series_id)}|${Number(episode.vid_index)}`);
+      if (owned && !matches.some((item) => item.entry === entry && item.index === Number(episode.vid_index))) {
         matches.push({ entry, index: Number(episode.vid_index), record: pipelineEpisode(entry, episode.vid_index) });
       }
     }
@@ -1925,6 +1931,7 @@ async function executeHongguoDownload(task, attempt = 0) {
     const downloadDir = task.customDir || seriesFolder(series_title, hongguoInfo?.series_id);
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
+    if (task.savePath !== finalPath) savePathIndex = null;
     task.savePath = finalPath;
     // Recheck source access before reusing an existing third-party file or URL.
     const checkedPlayInfo = /^(xifan|hema):/.test(String(vid))
@@ -4705,9 +4712,15 @@ ipcMain.handle('library-draft', async (_event, payload = {}) => {
   }
 });
 
-ipcMain.handle('library-plan-cancel', (_event, dir) =>
-  cancelLibraryPlanning(dir) ? { success: true } : { success: false, error: '没有在分析切点' },
-);
+ipcMain.handle('library-plan-cancel', (_event, dir) => {
+  if (cancelLibraryPlanning(dir)) return { success: true };
+  // 切点已经分析完、正在挪旧成品和登记新批次（几秒钟）：这时停不了规划，等批次出现后在处理进度里停。
+  const planning = [...libraryPlanning.keys()].some((key) => quchongPathKey(key) === quchongPathKey(String(dir || '')));
+  return {
+    success: false,
+    error: planning ? '切点已分析完，正在开始处理；稍等几秒，等这一批出现后再点「停止」' : '没有在分析切点',
+  };
+});
 
 ipcMain.handle('library-draft-cancel', (_event, dir) => {
   try {
@@ -5170,17 +5183,34 @@ function seriesWorkDir(seriesId) {
   return path.join(app.getPath('userData'), 'series-data', id);
 }
 
+// 保存路径 -> 登记在这个路径上的集（vid）。判断「同一路径被别的集占用」时查这张表，
+// 不用每次把全部下载记录扫一遍：记录多了以后，打开剧集面板、列出整部剧会把主进程拖慢。
+// 下载记录增删或超过 1 秒就重建；改了保存路径（repairTaskDestination）时立即作废。
+function savePathVids(savePath) {
+  const now = Date.now();
+  if (
+    !savePathIndex ||
+    savePathIndex.tasks !== downloadTasks ||
+    savePathIndex.size !== downloadTasks.length ||
+    now - savePathIndex.at > 1000
+  ) {
+    const map = new Map();
+    for (const item of downloadTasks) {
+      if (!item?.savePath) continue;
+      let vids = map.get(item.savePath);
+      if (!vids) map.set(item.savePath, (vids = new Set()));
+      vids.add(String(item.hongguoInfo?.vid));
+    }
+    savePathIndex = { map, tasks: downloadTasks, size: downloadTasks.length, at: now };
+  }
+  return savePathIndex.map.get(savePath);
+}
+
 function hasCompleteTaskFile(task) {
   if (!task?.savePath || task.pathConflict) return false;
-  if (
-    downloadTasks.some(
-      (other) =>
-        other !== task &&
-        other.savePath === task.savePath &&
-        String(other.hongguoInfo?.vid) !== String(task.hongguoInfo?.vid),
-    )
-  )
-    return false;
+  const own = String(task.hongguoInfo?.vid);
+  const vids = savePathVids(task.savePath);
+  if (vids && [...vids].some((vid) => vid !== own)) return false;
   try {
     const stat = fs.statSync(task.savePath);
     return stat.isFile() && stat.size > 1024 * 100;
@@ -5209,6 +5239,7 @@ function repairTaskDestination(task) {
   task.filename = filename.replace(/\.mp4$/, `-${suffix}.mp4`);
   task.savePath = path.join(task.customDir, task.filename);
   task.pathConflict = false;
+  savePathIndex = null;
 }
 
 function uniqueEpisodeFilename(settings, title, episode) {
