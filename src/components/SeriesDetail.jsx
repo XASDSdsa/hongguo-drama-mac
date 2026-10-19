@@ -485,6 +485,13 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activitySignal]);
+  // 这部剧正在下载/排队、已暂停的集：可以在这里暂停或继续（下载管理页已经去掉了）。
+  const downloadingIds = (detail?.missing || [])
+    .filter((item) => item.state === 'downloading' && item.task?.id)
+    .map((item) => item.task.id);
+  const pausedIds = (detail?.missing || [])
+    .filter((item) => item.state === 'failed' && item.task?.status === 'stopped')
+    .map((item) => item.task.id);
   const draftNumbers = [...new Set(draftNums.map((n) => Math.floor(Number(n))).filter((n) => n >= 1 && n < 10000))];
   const draftScopeValue = { numbers: draftNumbers };
   const nothingToDo = dedupOn ? !selectedCount : !draftOn;
@@ -580,6 +587,20 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
                   : `处理前 ${selectedCount} 集（共 ${episodes.length} 集）`}
               </span>
               <span className="lib-toolbar-btns">
+                {downloadingIds.length > 0 && (
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => runTile(() => window.electronAPI.pauseAll(downloadingIds))}
+                    title="暂停这部剧正在下载和排队的集，之后可以继续"
+                  >
+                    暂停下载（{downloadingIds.length} 集）
+                  </button>
+                )}
+                {!downloadingIds.length && pausedIds.length > 0 && (
+                  <button className="btn btn-sm" onClick={() => runTile(() => window.electronAPI.resumeAll(pausedIds))}>
+                    继续下载（{pausedIds.length} 集）
+                  </button>
+                )}
                 <label className="lib-number">
                   只处理前
                   <input
