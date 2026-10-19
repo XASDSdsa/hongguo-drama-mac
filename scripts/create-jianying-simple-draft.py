@@ -7,7 +7,7 @@ draft.  No clip files are rendered and no voice / background / effect tracks
 are built (the structure analysis itself still ran before this script).
 
   视频  one segment per final shot, taken from the original video
-  音频  the original audio, one full-length segment
+  音频  the original audio, cut at the same shot boundaries as 视频
   文案  one text segment per subtitle cue
 
 The multi-track variant stays in create-jianying-draft.py; this file only
@@ -36,7 +36,7 @@ def _load_base():
 base = _load_base()
 draft = base.draft
 TOLERANCE = base.TOLERANCE
-SCHEMA = "hongguo-jianying-draft/simple-v1"
+SCHEMA = "hongguo-jianying-draft/simple-v2"
 TRACK_VIDEO = "视频"
 TRACK_AUDIO = "音频"
 TRACK_TEXT = "文案"
@@ -197,11 +197,20 @@ def main() -> int:
             draft.VideoSegment(video, window, source_timerange=source_window, speed=1.0, volume=0.0),
             track=TRACK_VIDEO,
         )
+    audio_clips: list[dict] = []
     if has_audio:
+        # 音频和画面在同样的镜头边界切开，一个镜头一段，拖动、删除、调换镜头时声音跟着走。
+        # 声音不需要画面那 1/4 帧的后移：时间线位置和素材位置一一对应，前后段首尾相接、不重叠也没有空隙。
         audio = base.audio_material_from_ffprobe(asset, ffprobe, probe_cache)
-        length = min(duration_us, audio.duration)
-        window = draft.trange(0, duration=length)
-        script.add_segment(draft.AudioSegment(audio, window, source_timerange=window, volume=1.0), track=TRACK_AUDIO)
+        audio_end = min(duration_us, audio.duration) if audio.duration else duration_us
+        for row in shots:
+            start = row["start_us"]
+            length = min(row["duration_us"], audio_end - start)
+            if length <= 0:
+                break  # 音轨比画面短：后面的镜头没有声音可切
+            window = draft.trange(start, duration=length)
+            script.add_segment(draft.AudioSegment(audio, window, source_timerange=window, volume=1.0), track=TRACK_AUDIO)
+            audio_clips.append({"shot_id": row["shot_id"], "start_us": start, "duration_us": length})
     for row in texts:
         script.add_segment(
             draft.TextSegment(
@@ -247,7 +256,7 @@ def main() -> int:
         "canvas": {"width": width, "height": height, "fps": fps, "duration_us": duration_us},
         "tracks": {
             "video": {"name": TRACK_VIDEO, "clip_count": len(shots), "clips": shots},
-            "audio": {"name": TRACK_AUDIO, "present": has_audio, "scope": "full_episode"},
+            "audio": {"name": TRACK_AUDIO, "present": has_audio, "scope": "per_shot", "clip_count": len(audio_clips), "clips": audio_clips},
             "text": {"name": TRACK_TEXT, "cue_count": len(texts), "segments": texts},
         },
     }

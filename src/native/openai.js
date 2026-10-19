@@ -11,8 +11,57 @@ const MAX_IMAGE = 20 * 1024 * 1024;
 const MAX_AUDIO = 24 * 1024 * 1024;
 const MAX_TEXT = 2 * 1024 * 1024;
 
-function requestSignal(signal, timeout = 180000) {
+const TEXT_TIMEOUT = 300000;
+const IMAGE_TIMEOUT = 600000;
+
+function requestSignal(signal, timeout = TEXT_TIMEOUT) {
   return signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
+}
+
+// 主进程启动后换成 Electron 的 net.fetch：走设置里的代理和系统代理（Clash 等），也没有 Node 自带的
+// 「5 分钟没回包头就断开」限制。测试和命令行里仍用全局 fetch。
+let fetchImpl = (...args) => globalThis.fetch(...args);
+function setFetch(fn) {
+  fetchImpl = typeof fn === 'function' ? fn : (...args) => globalThis.fetch(...args);
+}
+
+const NETWORK_TEXT = [
+  [/NAME_NOT_RESOLVED|ENOTFOUND|EAI_AGAIN/, '找不到这个地址（域名解析失败），请检查中转地址是否写对、网络是否正常'],
+  [/ERR_PROXY|TUNNEL_CONNECTION_FAILED|ERR_SOCKS/, '代理连不上，请检查设置里的代理或电脑上的代理软件'],
+  [/CONNECTION_REFUSED|ECONNREFUSED/, '对方拒绝连接，请检查中转地址和端口'],
+  [
+    /CERT|SSL|ERR_BAD_SSL|UNABLE_TO_VERIFY|self.signed/i,
+    '证书校验失败（中转地址的 https 证书有问题，或被代理软件拦截）',
+  ],
+  [/INTERNET_DISCONNECTED|NETWORK_CHANGED|ADDRESS_UNREACHABLE|ENETUNREACH/, '网络断开或切换了'],
+  [/CONNECTION_TIMED_OUT|ERR_TIMED_OUT|ETIMEDOUT|CONNECT_TIMEOUT/, '连接超时，网络不通或被拦截'],
+  [/HEADERS_TIMEOUT|BODY_TIMEOUT/, '接口太久没有返回'],
+  [
+    /CONNECTION_RESET|ECONNRESET|CONNECTION_CLOSED|EMPTY_RESPONSE|UND_ERR_SOCKET|other side closed|EPIPE|HTTP2|QUIC/,
+    '连接被中途断开（中转站或网络把这个请求断了）',
+  ],
+];
+
+/** 把底层网络错误（net::ERR_xxx、fetch failed + cause）翻成一句看得懂的中文，附上原始代码方便排查。 */
+function describeNetworkError(error) {
+  const cause = error?.cause;
+  const raw = [error?.message, cause?.code, cause?.message, cause?.cause?.code].filter(Boolean).join(' ');
+  const code = (raw.match(/net::ERR_[A-Z_]+|UND_ERR_[A-Z_]+|E[A-Z]{4,}/) || [])[0] || '';
+  const hit = NETWORK_TEXT.find(([pattern]) => pattern.test(raw));
+  return `${hit ? hit[1] : '网络请求失败'}${code ? `（${code}）` : raw ? `（${raw.slice(0, 120)}）` : ''}`;
+}
+
+function isTimeout(error) {
+  return error?.name === 'TimeoutError' || /due to timeout/i.test(String(error?.message || ''));
+}
+
+/** 连接被断、对方一时连不上这类「再试一次多半就好」的错误；超时、证书、地址写错不重试。 */
+function isTransientNetworkError(error) {
+  if (isTimeout(error) || error?.name === 'AbortError') return false;
+  const raw = [error?.message, error?.cause?.code, error?.cause?.message].filter(Boolean).join(' ');
+  return /CONNECTION_RESET|ECONNRESET|CONNECTION_CLOSED|EMPTY_RESPONSE|UND_ERR_SOCKET|other side closed|EPIPE|NETWORK_CHANGED|HTTP2|QUIC|fetch failed$/.test(
+    raw,
+  );
 }
 
 function redactError(error, apiKey = '') {
@@ -151,18 +200,48 @@ async function request(baseConfig, suffix, options = {}) {
   const image = options.kind === 'image';
   const apiKey = image ? config.imageApiKey : config.apiKey;
   const headers = { ...(options.headers || {}), Authorization: `Bearer ${apiKey}` };
-  const response = await fetch(endpoint(image ? config.imageBaseUrl : config.baseUrl, suffix), {
-    method: options.method || 'POST',
-    headers,
-    body: options.body,
-    signal: requestSignal(options.signal, options.timeout),
-  });
-  const payload = await readResponse(response, response.ok ? options.maxBytes || MAX_TEXT : 32 * 1024);
-  if (!response.ok) {
-    const detail = redactError(errorMessage(payload, response.statusText || '未知错误'), apiKey);
-    throw new Error(`AI 接口请求失败（HTTP ${response.status}）：${detail}`);
+  const url = endpoint(image ? config.imageBaseUrl : config.baseUrl, suffix);
+  const timeout = options.timeout || TEXT_TIMEOUT;
+  const what = image ? '作图接口' : 'AI 接口';
+  for (let attempt = 1; ; attempt += 1) {
+    let response;
+    let payload;
+    try {
+      response = await fetchImpl(url, {
+        method: options.method || 'POST',
+        headers,
+        body: options.body,
+        signal: requestSignal(options.signal, timeout),
+      });
+      payload = await readResponse(response, response.ok ? options.maxBytes || MAX_TEXT : 32 * 1024);
+    } catch (error) {
+      if (options.signal?.aborted) throw error; // 用户点了取消
+      if (/超过允许大小/.test(String(error?.message))) throw error;
+      if (attempt === 1 && isTransientNetworkError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        continue;
+      }
+      if (isTimeout(error))
+        throw new Error(
+          `${what}等了 ${Math.round(timeout / 60000)} 分钟还没返回结果，已放弃。可以稍后重试，或换个更快的模型/中转`,
+        );
+      let host = '';
+      try {
+        host = new URL(url).host;
+      } catch (_) {}
+      throw new Error(
+        redactError(
+          `连不上${image ? '' : ' '}${what}${host ? `（${host}）` : ''}：${describeNetworkError(error)}`,
+          apiKey,
+        ),
+      );
+    }
+    if (!response.ok) {
+      const detail = redactError(errorMessage(payload, response.statusText || '未知错误'), apiKey);
+      throw new Error(`AI 接口请求失败（HTTP ${response.status}）：${detail}`);
+    }
+    return { payload, response };
   }
-  return { payload, response };
 }
 
 function dataUrlBuffer(value) {
@@ -193,7 +272,7 @@ async function readImage(image, signal) {
   const data = dataUrlBuffer(value);
   if (data) return { ...data, name: 'cover.png' };
   if (/^https?:\/\//i.test(value)) {
-    const response = await fetch(value, { signal: requestSignal(signal) });
+    const response = await fetchImpl(value, { signal: requestSignal(signal) });
     if (!response.ok) throw new Error(`原封面下载失败（HTTP ${response.status}）`);
     return {
       buffer: await boundedBody(response, MAX_IMAGE),
@@ -221,7 +300,7 @@ function parseImageData(payload) {
 async function fetchImageResult(result, signal) {
   if (!result?.url) return result;
   if (!/^https?:\/\//i.test(result.url)) throw new Error('生成图片链接无效');
-  const response = await fetch(result.url, { signal: requestSignal(signal) });
+  const response = await fetchImpl(result.url, { signal: requestSignal(signal) });
   if (!response.ok) throw new Error(`生成图片下载失败（HTTP ${response.status}）`);
   return {
     buffer: await boundedBody(response, MAX_IMAGE),
@@ -244,7 +323,7 @@ async function generateImage(options = {}, baseConfig = {}) {
       n: 1,
     }),
     signal: options.signal,
-    timeout: 600000,
+    timeout: IMAGE_TIMEOUT,
     maxBytes: MAX_IMAGE * 1.4,
   });
   return fetchImageResult(parseImageData(payload), options.signal);
@@ -266,7 +345,7 @@ async function editImage(options = {}, baseConfig = {}) {
     kind: 'image',
     body: form,
     signal: options.signal,
-    timeout: 600000,
+    timeout: IMAGE_TIMEOUT,
     maxBytes: MAX_IMAGE * 1.4,
   });
   return fetchImageResult(parseImageData(payload), options.signal);
@@ -327,7 +406,7 @@ async function chat(messages, options = {}, baseConfig = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal: options.signal,
-    timeout: options.timeout || 180000,
+    timeout: options.timeout || TEXT_TIMEOUT,
   });
   const text = messageText(payload);
   if (!text) throw new Error('文本接口没有返回内容');
@@ -485,6 +564,8 @@ async function analyzeEpisode(transcriptSrt, metadata = {}, baseConfig = {}) {
 }
 
 module.exports = {
+  setFetch,
+  describeNetworkError,
   normalizeBaseUrl,
   normalizeConfig,
   requireApiConfig,

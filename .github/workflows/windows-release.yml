@@ -245,7 +245,15 @@ jobs:
           node scripts/check-download-index.cjs
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
-          node scripts/check-jianying-simple-draft.cjs
+          node scripts/check-storyboard-reuse.cjs
+          node scripts/check-ai-network-errors.cjs
+          # 三分轨草稿用打包剪映运行时的同一个 Python 环境真跑一遍（含 pyJianYingDraft），不跳过。
+          JY_PY="$PWD/.cache/jianying-venv/Scripts/python.exe"
+          if [ -f "$JY_PY" ]; then
+            PYTHON="$JY_PY" FFMPEG_PATH="$PWD/build/ffmpeg/ffmpeg.exe" REQUIRE_JIANYING=1 node scripts/check-jianying-simple-draft.cjs
+          else
+            node scripts/check-jianying-simple-draft.cjs
+          fi
           node scripts/check-quchong-queue.cjs
           node scripts/check-pipeline-gate.cjs
           node scripts/check-whisper-adapter.cjs

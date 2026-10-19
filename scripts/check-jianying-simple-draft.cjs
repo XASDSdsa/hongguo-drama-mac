@@ -12,6 +12,10 @@ const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 
 const probe = spawnSync(python, ['-c', 'import pyJianYingDraft'], { encoding: 'utf8' });
 if (probe.status !== 0) {
+  if (process.env.REQUIRE_JIANYING === '1') {
+    console.error(`pyJianYingDraft is required here but could not be imported: ${probe.stderr || probe.error}`);
+    process.exit(1);
+  }
   console.log('SKIP jianying simple draft (pyJianYingDraft is not installed here)');
   process.exit(0);
 }
@@ -124,9 +128,28 @@ try {
     assert.equal(segment.source_timerange.duration, segment.target_timerange.duration);
     assert.equal(segment.volume, 0, 'the video segments are muted; sound is on its own track');
   }
-  assert.equal(byName['音频'].segments.length, 1);
-  assert.equal(byName['音频'].segments[0].target_timerange.start, 0);
-  assert.ok(byName['音频'].segments[0].target_timerange.duration >= 5900000);
+  // 音频按同样的镜头边界切开：一个镜头一段，时间线位置和素材位置一致，首尾相接。
+  const audioSegments = byName['音频'].segments;
+  assert.equal(audioSegments.length, 3, 'audio is cut at every shot boundary');
+  assert.deepEqual(
+    audioSegments.map((segment) => segment.target_timerange.start),
+    ranges.map(([start]) => start),
+    'audio cuts line up with the video cuts',
+  );
+  for (const [index, segment] of audioSegments.entries()) {
+    assert.equal(segment.source_timerange.start, segment.target_timerange.start, 'audio is not shifted');
+    assert.equal(segment.source_timerange.duration, segment.target_timerange.duration);
+    if (index < 2) assert.equal(segment.target_timerange.duration, ranges[index][1], 'same length as its shot');
+    const next = audioSegments[index + 1];
+    if (next)
+      assert.equal(
+        segment.target_timerange.start + segment.target_timerange.duration,
+        next.target_timerange.start,
+        'no gap or overlap between audio pieces',
+      );
+  }
+  const audioEnd = audioSegments.at(-1).target_timerange.start + audioSegments.at(-1).target_timerange.duration;
+  assert.ok(audioEnd >= 5900000, 'audio runs to the end of the episode');
   const texts = byName['文案'].segments;
   assert.equal(texts.length, 3);
   // 和多分轨的字幕轨一致：隐藏（静音）并缩放 1%。
@@ -141,8 +164,10 @@ try {
     'cues never overlap on the 文案 track',
   );
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'hongguo-draft-manifest.json'), 'utf8'));
-  assert.equal(manifest.schema, 'hongguo-jianying-draft/simple-v1');
+  assert.equal(manifest.schema, 'hongguo-jianying-draft/simple-v2');
   assert.equal(manifest.tracks.video.clip_count, 3);
+  assert.equal(manifest.tracks.audio.scope, 'per_shot');
+  assert.equal(manifest.tracks.audio.clip_count, 3);
 
   // 同名草稿不覆盖，--force 才覆盖。
   assert.notEqual(run().status, 0, 'an existing draft is not overwritten silently');
@@ -161,7 +186,9 @@ try {
   );
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /缺口|反向/);
-  console.log('PASS jianying simple draft: 视频 / 音频 / 文案 three tracks cut from the original video');
+  console.log(
+    'PASS jianying simple draft: 视频 / 音频 / 文案 three tracks; 视频 and 音频 cut at the same shot boundaries',
+  );
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

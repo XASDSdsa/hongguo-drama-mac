@@ -271,7 +271,7 @@ async function main() {
   // ---- 接线：做剪映草稿时才反推，设置和界面都有对应入口 ----
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(main, /prompts: draft\.prompts === true/, '草稿支线任务带上 prompts 开关');
-  assert.match(main, /if \(item\.prompts\) await deriveLibraryPrompts\(job, file, item, structure\)/, '拆解完成后才反推');
+  assert.match(main, /if \(item\.prompts && results\) await deriveLibraryPrompts\(job, file, item, results\)/, '拆解完成后才反推');
   assert.match(main, /withPrompts \? videoPromptProblem\(\) : ''/, '没填方舟 Key 或模型名就不开始');
   assert.match(main, /path\.join\(job\.dir, '视频提示词'\)/, '成果放在剧文件夹的「视频提示词」里');
   assert.match(main, /ark_video_model: ''/, '模型名没有默认值');

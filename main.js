@@ -19,6 +19,7 @@ const {
   Menu,
   powerSaveBlocker,
   powerMonitor,
+  net,
 } = require('electron');
 const path = require('path');
 const os = require('node:os');
@@ -3944,7 +3945,10 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
         libLog(context.dir, 'ok', `发布素材：${PUBLISH_TASK_TEXT[task]}完成`, 'side');
       } catch (error) {
         job.status = controller.signal.aborted ? 'cancelled' : 'failed';
-        job.error = controller.signal.aborted ? '' : aiRedact(error);
+        const stepText = { scene: '构思画面', art: '画海报底图', poster: '排标题' }[job.stage];
+        job.error = controller.signal.aborted
+          ? ''
+          : `${task === 'poster' && stepText ? `（在「${stepText}」这一步）` : ''}${aiRedact(error)}`;
         job.message = controller.signal.aborted ? '已取消' : '生成失败';
         if (controller.signal.aborted)
           libLog(context.dir, 'warn', `发布素材：${PUBLISH_TASK_TEXT[task]}已取消`, 'side');
@@ -4419,12 +4423,21 @@ function videoPromptProblem() {
  * 这一集拆解完成后，用同一份分镜和台词结果反推 Seedance 2.5 提示词，写成「视频提示词/集名.txt」。
  * 失败只记日志、不影响剪映草稿。
  */
-async function deriveLibraryPrompts(job, file, item, structure) {
-  const key = path.resolve(job.dir);
-  const label = path.basename(file, path.extname(file));
-  const settings = getCurrentSettings();
+// ===== 分镜结果留底：草稿做完就把这一集的分镜（alignment）和台词（transcript）存一份小文件 =====
+// 分析中间文件（几百 MB 到几 GB）草稿做完会清掉；之后再要分镜工程图，直接用这份留底和已有的草稿，
+// 不重新分析、不再多做一份草稿，分镜和草稿里的镜头一一对得上。存在软件数据目录，不放进剧文件夹。
+const DRAFT_RESULT_MAX_FILES = 3000;
+function draftResultDir() {
+  return path.join(app.getPath('userData'), 'structure-results');
+}
+function draftResultFile(projectId) {
+  return path.join(draftResultDir(), `${projectId}.json`);
+}
+
+async function structureResults(structure, file) {
   const readResult = async (id) =>
     JSON.parse(await fsp.readFile(path.join(structure.projectDir, structure.modules[id].result_path), 'utf8'));
+  const [alignment, transcript] = await Promise.all([readResult('alignment'), readResult('transcript')]);
   let sourceKey = '';
   try {
     sourceKey = JSON.parse(await fsp.readFile(structure.manifestPath, 'utf8')).source_sha256 || '';
@@ -4435,6 +4448,72 @@ async function deriveLibraryPrompts(job, file, item, structure) {
     const stat = await fsp.stat(file);
     sourceKey = `${stat.size}-${Math.round(stat.mtimeMs)}`;
   }
+  return { alignment, transcript, sourceKey };
+}
+
+/** 草稿做好后留底；失败只记日志，不影响草稿本身。 */
+async function saveDraftResult({ projectId, file, mode, draftPath, results }) {
+  try {
+    const stat = await fsp.stat(file);
+    const body = JSON.stringify({
+      version: 1,
+      file: path.resolve(file),
+      size: stat.size,
+      mtimeMs: Math.round(stat.mtimeMs),
+      mode,
+      draftPath,
+      sourceKey: results.sourceKey,
+      alignment: results.alignment,
+      transcript: results.transcript,
+      savedAt: Date.now(),
+    });
+    if (body.length > 20 * 1024 * 1024) return; // 异常大的结果不留底，之后按老办法重新分析
+    await fsp.mkdir(draftResultDir(), { recursive: true });
+    const target = draftResultFile(projectId);
+    const temp = `${target}.${process.pid}.tmp`;
+    await fsp.writeFile(temp, body);
+    await fsp.rename(temp, target);
+    // 只留最近的一批，防止常年使用后越攒越多。
+    const names = (await fsp.readdir(draftResultDir())).filter((name) => name.endsWith('.json'));
+    if (names.length > DRAFT_RESULT_MAX_FILES) {
+      const dated = await Promise.all(
+        names.map(async (name) => {
+          const full = path.join(draftResultDir(), name);
+          return { full, mtime: (await fsp.stat(full).catch(() => null))?.mtimeMs || 0 };
+        }),
+      );
+      dated.sort((a, b) => a.mtime - b.mtime);
+      for (const { full } of dated.slice(0, names.length - DRAFT_RESULT_MAX_FILES)) await fsp.rm(full, { force: true });
+    }
+  } catch (error) {
+    console.warn('[Draft] 分镜结果留底失败:', error?.message || error);
+  }
+}
+
+/**
+ * 这一集以前做过草稿、成品没变、草稿还在、分轨方式一样：返回留底（分镜、台词、草稿位置），否则 null。
+ */
+async function loadDraftResult(projectId, file, mode) {
+  try {
+    const saved = JSON.parse(await fsp.readFile(draftResultFile(projectId), 'utf8'));
+    const stat = await fsp.stat(file);
+    if (saved?.version !== 1 || saved.file !== path.resolve(file)) return null;
+    if (saved.size !== stat.size || saved.mtimeMs !== Math.round(stat.mtimeMs)) return null; // 成品重新做过
+    if (!saved.alignment?.shots?.length || !saved.transcript) return null;
+    const manifest = JSON.parse(
+      await fsp.readFile(path.join(String(saved.draftPath || ''), 'hongguo-draft-manifest.json'), 'utf8'),
+    );
+    if (String(manifest?.schema || '').includes('simple') !== (mode === 'simple')) return null;
+    return saved;
+  } catch (_) {
+    return null; // 没有留底、草稿被删了、文件读不了：按老办法重新分析
+  }
+}
+
+async function deriveLibraryPrompts(job, file, item, { alignment, transcript, sourceKey }) {
+  const key = path.resolve(job.dir);
+  const label = path.basename(file, path.extname(file));
+  const settings = getCurrentSettings();
   const model = String(settings.ark_video_model || '').trim();
   const log = (level, text) =>
     libLog(
@@ -4449,7 +4528,6 @@ async function deriveLibraryPrompts(job, file, item, structure) {
   libLog(key, 'info', `视频提示词：${label} 开始`, 'side');
   libraryDraftEmit(job);
   try {
-    const [alignment, transcript] = await Promise.all([readResult('alignment'), readResult('transcript')]);
     const result = await deriveEpisodePrompts({
       ffmpeg: getFfmpegPath(),
       inputPath: file,
@@ -4494,6 +4572,21 @@ async function generateLibraryDraft(job, file, item) {
     path.join(app.getPath('userData'), 'structure-work');
   const projectId = libraryDraftProjectId(file);
   item.projectId = projectId;
+  // 只差分镜工程图：这一集已经有草稿、成品没变，就直接用当时的分镜，不重新分析，也不再多做一份草稿。
+  if (item.prompts) {
+    const saved = await loadDraftResult(projectId, file, item.mode);
+    if (saved) {
+      libLog(
+        path.resolve(job.dir),
+        'info',
+        `剪映草稿：${label} 已有草稿，沿用它的 ${saved.alignment.shots.length} 个分镜，只补做分镜工程图（不重新分析）`,
+        'side',
+      );
+      await deriveLibraryPrompts(job, file, item, saved);
+      if (job.cancelled) throw Object.assign(new Error('已停止'), { stopped: true });
+      return saved.draftPath;
+    }
+  }
   libraryDraftPlans.set(projectId, { mode: item.mode, fallbackRoot: path.join(job.dir, '剪映草稿') });
   try {
     await pipeline.start({ inputPath: file, projectId, outputRoot: workRoot, threads: job.threadsEach });
@@ -4504,7 +4597,20 @@ async function generateLibraryDraft(job, file, item) {
       throw new Error(structure?.error || `拆解没有完成：${incomplete.map((id) => DRAFT_STAGE_TEXT[id]).join('、')}`);
     }
     libLog(path.resolve(job.dir), 'info', `剪映草稿：${label} ${describeStructure(structure)}`, 'side');
-    if (item.prompts) await deriveLibraryPrompts(job, file, item, structure);
+    // 读分镜/台词结果失败不影响草稿：只是这一集做不了分镜工程图、也不留底。
+    let results = null;
+    try {
+      results = await structureResults(structure, file);
+    } catch (error) {
+      if (item.prompts)
+        libLog(
+          path.resolve(job.dir),
+          'error',
+          `视频提示词：${label}：没有生成：读不到分镜结果（${error?.message || error}）`,
+          'side',
+        );
+    }
+    if (item.prompts && results) await deriveLibraryPrompts(job, file, item, results);
     // 拆解结果是缓存复用的：以前生成的草稿和这次要的分轨方式不一样时，只重做最后一步。
     const manifestOf = (draftPath) => {
       try {
@@ -4523,7 +4629,9 @@ async function generateLibraryDraft(job, file, item) {
         throw new Error(structure?.modules?.jianying?.error || structure?.error || '剪映草稿没有生成');
       }
     }
-    return structure.modules.jianying.summary.draft_path;
+    const draftPath = structure.modules.jianying.summary.draft_path;
+    if (results) await saveDraftResult({ projectId, file, mode: item.mode, draftPath, results });
+    return draftPath;
   } finally {
     libraryDraftPlans.delete(projectId);
   }
@@ -8480,6 +8588,17 @@ ipcMain.handle('open-log-folder', async () => {
 app.whenReady().then(async () => {
   if (!singleInstance) return;
   installFileLog();
+  // AI 文案/海报请求走 Chromium 网络栈：跟随设置里的代理和系统代理，长时间作图不会被 Node 的 5 分钟限制断开。
+  // Chromium 拒绝的少数端口（ERR_UNSAFE_PORT）退回 Node 自带的 fetch。
+  if (typeof net?.fetch === 'function')
+    openai.setFetch(async (url, init) => {
+      try {
+        return await net.fetch(url, init);
+      } catch (error) {
+        if (/ERR_UNSAFE_PORT/.test(String(error?.message))) return globalThis.fetch(url, init);
+        throw error;
+      }
+    });
   // 主进程里的未捕获错误只记录，不弹出 Electron 的致命错误对话框，也不让正在运行的下载/处理任务陪葬。
   process.on('unhandledRejection', (reason) => console.error('[Main] 未处理的 Promise 拒绝:', reason?.stack || reason));
   process.on('uncaughtException', (error) => console.error('[Main] 未捕获异常:', error?.stack || error));

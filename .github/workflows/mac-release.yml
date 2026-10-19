@@ -120,6 +120,8 @@ jobs:
           node scripts/check-library-activity.cjs
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
+          node scripts/check-storyboard-reuse.cjs
+          node scripts/check-ai-network-errors.cjs
           node scripts/check-jianying-simple-draft.cjs
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs

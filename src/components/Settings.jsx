@@ -471,7 +471,7 @@ function SettingsPage({ active = true }) {
                 value={settings.structure_cleanup === false ? 'off' : 'on'}
                 onChange={(e) => update('structure_cleanup', e.target.value === 'on')}
               >
-                <option value="on">自动清理（省磁盘；之后重做草稿要重新分析）</option>
+                <option value="on">自动清理（省磁盘；分镜结果另存一份小文件，之后补做分镜工程图不用重新分析）</option>
                 <option value="off">保留（重做草稿更快，但每集占几百 MB 到几 GB）</option>
               </select>
               <em>只清理分析用的中间文件，去重成品、剪映草稿和原视频不会动。</em>
