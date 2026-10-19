@@ -6749,6 +6749,7 @@ ipcMain.handle('hongguo-download-batch', async (event, payload) => {
     if (!Array.isArray(episodes) || episodes.length === 0) {
       return { success: false, error: '未选择集数' };
     }
+    if (episodes.length > 2000) return { success: false, error: '一次最多提交 2000 集，请分几次下载' };
     const count = await enqueueEpisodes({ seriesId, seriesTitle, episodes, cover });
     return { success: true, count, requested: episodes.length };
   } catch (error) {
