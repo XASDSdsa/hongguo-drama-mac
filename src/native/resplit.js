@@ -114,17 +114,20 @@ async function detectScenes(ffmpegPath, file, signal) {
 
 async function detectOne(ffmpegPath, file, signal) {
   // 某一项检测失败（比如没有音轨）不影响另一项，只是少一类切点。
+  let failed = false;
   const [pauses, scenes] = await Promise.all([
     detectPauses(ffmpegPath, file, signal).catch((error) => {
       if (signal?.aborted) throw error;
+      failed = true;
       return [];
     }),
     detectScenes(ffmpegPath, file, signal).catch((error) => {
       if (signal?.aborted) throw error;
+      failed = true;
       return [];
     }),
   ]);
-  return { pauses, scenes };
+  return { pauses, scenes, failed };
 }
 
 /** 检测结果缓存在应用私有目录（按文件路径+大小+修改时间），同一批视频换参数重排时不用重新分析。 */
@@ -149,9 +152,10 @@ async function analyzeSources({ ffmpegPath, files, cacheDir, concurrency = 3, si
         } catch (_) {}
       }
       if (!result.has(file)) {
-        const found = await detectOne(ffmpegPath, file, signal);
+        const { failed, ...found } = await detectOne(ffmpegPath, file, signal);
         result.set(file, found);
-        if (cacheFile) {
+        // 检测出错（FFmpeg 临时失败等）时不缓存：下次重新分析，不让一次失败永远变成「没有切点」。
+        if (cacheFile && !failed) {
           try {
             await fsp.mkdir(cacheDir, { recursive: true });
             await fsp.writeFile(cacheFile, JSON.stringify(found));

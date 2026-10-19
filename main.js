@@ -2538,6 +2538,8 @@ const quchongBatches = new Map();
 const quchongOutputReservations = new Set();
 const quchongInputRuns = new Map();
 const QUCHONG_MAX_ACTIVE = 8;
+// 开新批次时清理旧临时文件：只清 10 分钟没动过的。
+const QUCHONG_TEMP_MIN_AGE = 10 * 60 * 1000;
 let quchongActive = 0;
 let quchongHistory = [];
 
@@ -2674,6 +2676,8 @@ function loadQuchongTasks() {
   try {
     const saved = store.getQuchongTasks() || [];
     let changed = false;
+    // 上次被中断的任务所在的文件夹：启动时（还没有任何任务在跑）把它们留下的临时文件清掉。
+    const interruptedDirs = new Set();
     quchongHistory = saved
       .filter((item) => item && item.id)
       .slice(0, 50)
@@ -2690,6 +2694,7 @@ function loadQuchongTasks() {
             ['processing', 'queued'].includes(task.stage)
           ) {
             changed = true;
+            if (task.dst) interruptedDirs.add(path.dirname(String(task.dst)));
             return {
               ...task,
               status: 'stopped',
@@ -2722,6 +2727,7 @@ function loadQuchongTasks() {
         return snapshot;
       });
     if (changed) saveQuchongHistory();
+    for (const dir of interruptedDirs) quchong.sweepStaleTemps(dir, 0).catch(() => {});
   } catch (error) {
     quchongHistory = [];
     console.error('[Quchong] 读取任务快照失败:', error.message);
@@ -2834,6 +2840,11 @@ function finishQuchongBatch(batch) {
   quchongBatches.delete(batch.id);
 }
 
+/** 全应用同时跑的去重 FFmpeg 上限：设置里的并发数（最多 8）。 */
+function quchongGlobalCap() {
+  return Math.min(QUCHONG_MAX_ACTIVE, getCurrentSettings().quchong_jobs);
+}
+
 function stopQueuedQuchongTasks(batch, reason) {
   while (batch.queue.length) {
     const task = batch.queue.shift();
@@ -2850,7 +2861,7 @@ function pumpQuchongBatch(batch) {
   if (batch.finished) return;
   while (!batch.cancelled && batch.active < batch.concurrency && batch.queue.length) {
     // 全应用同时跑的去重 FFmpeg 数不超过设置里的并发数（几部剧一起处理也一样），避免 CPU、内存被打满。
-    if (quchongActive >= Math.min(QUCHONG_MAX_ACTIVE, getCurrentSettings().quchong_jobs)) break;
+    if (quchongActive >= quchongGlobalCap()) break;
     const task = batch.queue.shift();
     task.status = 'running';
     task.stage = 'processing';
@@ -3106,8 +3117,9 @@ function registerQuchongBatch({
   batch.queue = [...batch.tasks];
   quchongBatches.set(id, batch);
   persistQuchongBatch(batch);
-  // 上次崩溃、断电或强制退出留下的半成品临时文件（隐藏的 .hongguo-quchong-*），开新批次时顺手清掉。
+  // 上次崩溃、断电或强制退出留下的半成品临时文件（.hongguo-quchong-*），开新批次时顺手清掉。
   // 别的批次还在往同一个文件夹写时不清：它的中间文件可能很久没改过，但还要用。
+  // 只清 10 分钟前的：这一批自己马上要写的临时文件是新的，不会被误删。
   const busyDirs = new Set(
     [...quchongBatches.values()]
       .filter((other) => other !== batch && !other.finished)
@@ -3116,7 +3128,7 @@ function registerQuchongBatch({
   for (const dir of new Set(batch.tasks.map((task) => path.dirname(task.dst)).filter(Boolean))) {
     if (busyDirs.has(quchongPathKey(dir))) continue;
     quchong
-      .sweepStaleTemps(dir)
+      .sweepStaleTemps(dir, QUCHONG_TEMP_MIN_AGE)
       .then((removed) => removed && libLog(libraryDir, 'info', `清理了上次中断留下的 ${removed} 个临时文件`))
       .catch(() => {});
   }
@@ -3131,7 +3143,7 @@ function registerQuchongBatch({
   return {
     success: true,
     batchId: id,
-    status: quchongActive >= QUCHONG_MAX_ACTIVE ? 'queued' : 'running',
+    status: quchongActive >= quchongGlobalCap() ? 'queued' : 'running',
     tasks: batch.tasks.map(quchongTaskPayload),
   };
 }
@@ -3300,6 +3312,8 @@ async function planAndQueueResplit({
   if (lowSpace) return { success: false, error: lowSpace };
   // 用户在分析期间点了「停止」：到这里为止什么都没动，旧成品也还在。
   if (signal?.aborted) throw new Error('已停止');
+  // 从这里开始要挪旧成品、登记新批次，分析阶段的「停止」不再生效（之后在处理进度里停止这一批）。
+  libraryPlanControllers.delete(path.resolve(dir));
 
   // 新的一版开始前，旧成品挪进废纸篓：成品文件夹里只留最新一版。
   const retired = await retireLibraryOutputs(dir);
@@ -3376,6 +3390,10 @@ async function startQuchongBatch(payload = {}) {
     const ffprobePath = resolveFfmpeg('ffprobe');
     if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
 
+    const lowSpace = await dedupSpaceProblem(outputDir, sources);
+    if (lowSpace) return { success: false, error: lowSpace };
+
+    // 查重和登记之间不能再有 await：连点两下时两个请求都会通过查重，同一集被处理两遍。
     const pendingSources = new Set(
       [...quchongBatches.values()].flatMap((batch) =>
         batch.tasks
@@ -3385,9 +3403,6 @@ async function startQuchongBatch(payload = {}) {
     );
     const duplicate = sources.find((file) => pendingSources.has(quchongPathKey(file)));
     if (duplicate) return { success: false, error: `视频已在去重队列中：${path.basename(duplicate)}` };
-
-    const lowSpace = await dedupSpaceProblem(outputDir, sources);
-    if (lowSpace) return { success: false, error: lowSpace };
     const destinations = allocateQuchongDestinations(sources, outputDirs);
     const libraryDir =
       typeof payload.libraryDir === 'string' &&
@@ -7685,7 +7700,9 @@ function isFileInUse(file) {
   // 正在分析切点的剧：它文件夹里的原集马上要被拼接处理，先不能删。
   if (
     key &&
-    [...libraryPlanControllers.keys()].some((dir) => quchongPathKey(path.dirname(file)) === quchongPathKey(dir))
+    [...libraryPlanControllers.keys(), ...libraryPlanning.keys()].some(
+      (dir) => quchongPathKey(path.dirname(file)) === quchongPathKey(dir),
+    )
   )
     return true;
   // AI 文案提取只读取已下载源文件，任务在 queued/running 阶段也不能删除输入。

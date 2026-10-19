@@ -274,6 +274,19 @@ const plan = (sources, split = {}, overrides = {}) =>
       assert.deepEqual(again.get(a), found.get(a));
     });
 
+    await check('a failed detection is not cached (next run analyses again)', async () => {
+      const cacheDir = path.join(tmp, 'cache-failed');
+      const broken = await resplit.analyzeSources({
+        ffmpegPath: path.join(tmp, 'no-such-ffmpeg'),
+        files: [a],
+        cacheDir,
+      });
+      assert.deepEqual(broken.get(a), { pauses: [], scenes: [] });
+      assert.ok(!fs.existsSync(cacheDir) || fs.readdirSync(cacheDir).length === 0, '失败的结果不能写进缓存');
+      const fixed = await resplit.analyzeSources({ ffmpegPath: 'ffmpeg', files: [a], cacheDir });
+      assert.equal(fixed.get(a).pauses.length, 1, '换回正常的 FFmpeg 后重新分析出切点');
+    });
+
     const durationOf = (file) =>
       Number(
         execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file])

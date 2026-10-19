@@ -84,6 +84,7 @@ jobs:
           export PATH="$(dirname "$FFMPEG_PATH"):$PATH"
           run_check node scripts/check-quchong.cjs
           run_check node scripts/check-quchong-size.cjs
+          run_check node scripts/check-quchong-sources.cjs
           run_check node scripts/check-dedup-defaults.cjs
           run_check node scripts/check-resplit.cjs
           run_check node scripts/check-encoder-retry.cjs

@@ -195,22 +195,24 @@ function probeEncoder(ffmpegPath, name) {
 async function resolveWorkingEncoder(requested, ffmpegPath, platform = process.platform) {
   const picked = resolveEncoder(requested, platform);
   if (requested !== 'auto' || platform !== 'win32' || !ffmpegPath || ['cpu', 'auto'].includes(picked)) return picked;
-  if (!encoderProbes.has(ffmpegPath)) {
-    encoderProbes.set(
-      ffmpegPath,
-      (async () => {
-        const order = [
-          ...new Set([
-            picked,
-            ...['nvenc', 'qsv', 'amf'].filter((name) => ADAPTER_PATTERN[name].test(windowsAdapters)),
-          ]),
-        ];
-        for (const name of order) if (await probeEncoder(ffmpegPath, name)) return name;
-        return 'cpu';
-      })(),
-    );
-  }
-  return encoderProbes.get(ffmpegPath);
+  // 首选显卡编码试编成功就一直用；退到别的编码器时只记 10 分钟（可能只是当时显卡正忙），之后再试一次首选。
+  const cached = encoderProbes.get(ffmpegPath);
+  if (cached && !(cached.fallback && Date.now() - cached.at > 10 * 60 * 1000)) return cached.promise;
+  const entry = { at: Date.now(), fallback: false, promise: null };
+  entry.promise = (async () => {
+    const order = [
+      ...new Set([picked, ...['nvenc', 'qsv', 'amf'].filter((name) => ADAPTER_PATTERN[name].test(windowsAdapters))]),
+    ];
+    for (const name of order)
+      if (await probeEncoder(ffmpegPath, name)) {
+        entry.fallback = name !== picked;
+        return name;
+      }
+    entry.fallback = true;
+    return 'cpu';
+  })();
+  encoderProbes.set(ffmpegPath, entry);
+  return entry.promise;
 }
 
 function encoderArgs(name, lean, width, height) {
@@ -387,7 +389,7 @@ async function probeMedia(ffprobePath, file, signal) {
       '-v',
       'error',
       '-show_entries',
-      'format=duration,start_time:stream=codec_type,start_time,duration,width,height:stream_disposition=attached_pic',
+      'format=duration,start_time:stream=codec_type,start_time,duration,width,height:stream_disposition=attached_pic:stream_side_data=rotation:stream_tags=rotate',
       '-of',
       'json',
       file,
@@ -401,6 +403,13 @@ async function probeMedia(ffprobePath, file, signal) {
   const duration = Number(data.format?.duration);
   const streamDuration = Number(videos[0]?.duration);
   const formatStart = Number(data.format?.start_time) || 0;
+  // 手机拍的竖屏视频常常是「横着存 + 旋转 90°」：FFmpeg 解码时会自动转正，所以宽高要按转正后的算，
+  // 否则成品会被压扁。
+  const sideRotation = (videos[0]?.side_data_list || []).find((item) => item && item.rotation != null)?.rotation;
+  const rotation = Number(sideRotation ?? videos[0]?.tags?.rotate ?? 0) || 0;
+  const turned = Math.abs(Math.round(rotation)) % 180 === 90;
+  const codedWidth = Number(videos[0]?.width) || 0;
+  const codedHeight = Number(videos[0]?.height) || 0;
   return {
     duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
     video_duration:
@@ -409,14 +418,54 @@ async function probeMedia(ffprobePath, file, signal) {
         : Math.max(0, (duration || 0) - Math.max(0, start(videos) - formatStart)),
     has_video: videos.length > 0,
     has_audio: audios.length > 0,
-    video_width: Number(videos[0]?.width) || 0,
-    video_height: Number(videos[0]?.height) || 0,
+    video_width: turned ? codedHeight : codedWidth,
+    video_height: turned ? codedWidth : codedHeight,
     video_start: start(videos),
     audio_start: start(audios),
   };
 }
 
 const ENCODER_RETRY_DELAYS = [1500, 4000];
+const DISK_FULL = /No space left on device|ENOSPC|There is not enough space on the disk/i;
+function diskFullError(error) {
+  return new Error(`磁盘空间不足：输出位置所在的磁盘写满了，请清理磁盘后再处理。\n${error.message}`);
+}
+
+// 显卡编码会话：NVIDIA 消费级显卡同时能开的编码会话有限（旧驱动 3 个、新驱动 8 个，OBS、录屏软件也会占用）。
+// 遇到「会话已满」不算失败：把上限降到现在正在用的数量，多出来的集排队，等别的集编完再继续。
+// 全部空闲后上限恢复，下一批重新按实际情况来。
+const NVENC_SESSION_FULL = /OpenEncodeSessionEx failed: (out of memory \(10\)|incompatible client key \(21\))/i;
+const hwSessions = { limit: Infinity, active: 0, waiters: [] };
+
+function acquireHwSession(signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('已取消'));
+    if (hwSessions.active < hwSessions.limit) {
+      hwSessions.active += 1;
+      return resolve();
+    }
+    const waiter = { resolve, reject, signal };
+    const onAbort = () => {
+      const index = hwSessions.waiters.indexOf(waiter);
+      if (index >= 0) hwSessions.waiters.splice(index, 1);
+      reject(new Error('已取消'));
+    };
+    waiter.onAbort = onAbort;
+    signal?.addEventListener('abort', onAbort, { once: true });
+    hwSessions.waiters.push(waiter);
+  });
+}
+
+function releaseHwSession() {
+  hwSessions.active = Math.max(0, hwSessions.active - 1);
+  if (hwSessions.active === 0 && !hwSessions.waiters.length) hwSessions.limit = Infinity;
+  while (hwSessions.waiters.length && hwSessions.active < hwSessions.limit) {
+    const next = hwSessions.waiters.shift();
+    next.signal?.removeEventListener('abort', next.onAbort);
+    hwSessions.active += 1;
+    next.resolve();
+  }
+}
 // FFmpeg 7 把失败的输出流写在日志里：aost#0:1/aac 是音频编码器。收尾时的 [aac @ …] Qavg 统计行不代表音频失败。
 const AUDIO_FAILURE = /aost#\d+:\d+\/aac[^\n]*(error code|Terminating thread|Invalid argument)/i;
 
@@ -662,7 +711,8 @@ async function renderSeparately({
           eq: options.eq_enable,
           volume: options.orig_volume,
           audioDelay: command.audioDelay,
-          padTo: 0,
+          // 原声比画面短时补静音到画面长度：合并时不能让短的音轨把画面截短。
+          padTo: command.duration,
         }).join(',')}[oa]`,
       ];
       const inputs = ['-i', full];
@@ -708,7 +758,7 @@ async function renderSeparately({
       '1:a:0',
       '-c',
       'copy',
-      '-shortest',
+      // 音轨在上一步已按画面长度截好（-t），这里不用 -shortest：音轨短时它会把画面一起截短。
       '-map_metadata',
       '-1',
       '-movflags',
@@ -755,6 +805,7 @@ async function encodeOne({
   await fsp.mkdir(path.dirname(dst), { recursive: true });
   const tmp = path.join(path.dirname(dst), `.hongguo-quchong-${randomUUID()}.mp4`);
   let rolled;
+  let holdingSession = false;
   try {
     rolled = rollParams(options);
     // 重新拆分时变速已经在前一步做完，这一步固定按 1 倍走。
@@ -781,13 +832,37 @@ async function encodeOne({
     // 硬件编码器同时开多路时偶尔会初始化失败（同一秒起 4 路最常见），隔几秒重来一次就好了；
     // 重试用的仍是同一个编码器，不会悄悄换成别的。显卡驱动版本不兼容这类必然失败的不重试。
     const retryable = encoder !== 'cpu' && encoder !== 'auto';
+    if (encoder === 'nvenc') {
+      await acquireHwSession(signal);
+      holdingSession = true;
+    }
     let audioStep = 0;
+    let sessionWaits = 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         await runProcess(ffmpegPath, command.args, command.duration, onProgress, signal, onStage, onLog);
         break;
       } catch (error) {
         if (signal?.aborted) throw new Error('已取消');
+        // 磁盘写满：换参数、换编码器、重试都没用，直接说清楚（批次会停下剩下的集）。
+        if (DISK_FULL.test(error.message)) throw diskFullError(error);
+        // 显卡编码会话已满：排队等别的集编完再来，不算失败、不占重试次数。
+        if (encoder === 'nvenc' && NVENC_SESSION_FULL.test(error.message) && sessionWaits < 40) {
+          sessionWaits += 1;
+          hwSessions.limit = Math.max(1, hwSessions.active - 1);
+          releaseHwSession();
+          holdingSession = false;
+          if (sessionWaits === 1)
+            onLog?.(
+              `[排队] 显卡同时编码的数量到上限了（同时处理的集数太多，或录屏等软件占用），这一集等别的集编完再继续（同时最多 ${hwSessions.limit} 路）`,
+            );
+          onProgress?.(0);
+          await new Promise((resolve) => setTimeout(resolve, 1500 + Math.floor(Math.random() * 1500)));
+          await acquireHwSession(signal);
+          holdingSession = true;
+          attempt -= 1;
+          continue;
+        }
         const nvencApi =
           encoder === 'nvenc' &&
           error.message.match(
@@ -865,6 +940,11 @@ async function encodeOne({
         throw error;
       }
     }
+    // 编码做完就把显卡会话让给排队的集，检查和保存不占会话。
+    if (holdingSession) {
+      holdingSession = false;
+      releaseHwSession();
+    }
     if (signal?.aborted) throw new Error('已取消');
     onStage?.('validating');
     const result = await probeMedia(ffprobePath, tmp, signal);
@@ -883,6 +963,7 @@ async function encodeOne({
       outputSeconds: Number(result.duration) || 0,
     };
   } finally {
+    if (holdingSession) releaseHwSession();
     try {
       await fsp.unlink(tmp);
     } catch (_) {}
@@ -902,16 +983,26 @@ function buildPrepareCommand({ segments, media, dst }) {
   const labels = [];
   segments.forEach((segment, index) => {
     const speed = segment.speed ?? 1;
+    // 各集画面比例不同时按比例缩小再补黑边，不拉伸变形；尺寸相同时这两步什么都不做。
     // 先缩放再定 setsar：缩放会按新旧尺寸改写像素宽高比，顺序反了各段的 SAR 对不上，concat 会直接报 Invalid argument。
     filters.push(
-      `[${index}:V:0]scale=${width}:${height},setsar=1,setpts=(PTS-STARTPTS)/${speed.toFixed(6)}[sv${index}]`,
+      `[${index}:V:0]scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+        `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=(PTS-STARTPTS)/${speed.toFixed(6)}[sv${index}]`,
     );
     labels.push(`[sv${index}]`);
     if (media.has_audio) {
-      const tempo = speed === 1 ? '' : `,atempo=${speed.toFixed(6)}`;
-      filters.push(
-        `[${index}:a:0]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS${tempo}[sa${index}]`,
-      );
+      if (segment.has_audio === false) {
+        // 这一集没有音轨（个别集）：补同样长度的静音，别的集照常拼接。
+        const seconds = (Number(segment.duration) / speed).toFixed(6);
+        filters.push(
+          `anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${seconds},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[sa${index}]`,
+        );
+      } else {
+        const tempo = speed === 1 ? '' : `,atempo=${speed.toFixed(6)}`;
+        filters.push(
+          `[${index}:a:0]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS${tempo}[sa${index}]`,
+        );
+      }
       labels.push(`[sa${index}]`);
     }
   });
@@ -978,8 +1069,9 @@ async function runJob(args) {
   const probed = new Map();
   for (const file of files) probed.set(file, await probeMedia(ffprobePath, file, signal));
   for (const [file, info] of probed) if (!info.has_video) throw new Error(`输入没有可用视频轨：${file}`);
+  // 个别集没有音轨时，那几段补静音（见 buildPrepareCommand），不让整集失败。
   const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
-  if (withAudio !== 0 && withAudio !== probed.size) throw new Error('各集的音轨不一致，无法拼接');
+  for (const part of parts) part.has_audio = probed.get(part.src).has_audio;
   const first = probed.get(parts[0].src);
   const mergeStart = Date.now();
   await fsp.mkdir(path.dirname(dst), { recursive: true });
@@ -1004,6 +1096,7 @@ async function runJob(args) {
       );
     } catch (error) {
       if (signal?.aborted) throw new Error('已取消');
+      if (DISK_FULL.test(error.message)) throw diskFullError(error);
       throw new Error(
         `合并变速这一步失败（还没到去重编码）。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
       );
