@@ -1,29 +1,20 @@
-name: create v1.2.1 release page
+name: probe mac checks
 on: push
-permissions:
-  contents: write
 jobs:
-  release:
+  mac:
     if: "!contains(github.event.head_commit.message, '[pages]')"
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-      R: ${{ github.repository }}
-      SHA: e2babe4882c8a4889f4e68f6463abbfd49357e55
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with: { ref: perf/structure-speed }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0 }
       - shell: bash {0}
         run: |
-          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 4 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
-          set -o pipefail
-          git config user.name github-actions; git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git fetch -q origin perf/structure-speed main
-          # 1.2.1 的软件代码原样不动，只把 .github/workflows 换成 main 分支的（GitHub 不允许打包机给改过 workflow 的提交打标签）。
-          git read-tree "$SHA"
-          git rm -rq --cached .github/workflows
-          for f in $(git ls-tree --name-only origin/main .github/workflows/); do git update-index --add --cacheinfo "100644,$(git rev-parse origin/main:$f),$f"; done
-          tree=$(git write-tree)
-          x=$(git commit-tree "$tree" -p "$SHA" -m "AI短剧助手 1.2.1 发布标签（软件代码同 ${SHA:0:7}，workflow 文件同 main）")
-          note notice "release commit" "$x $(git diff --stat $SHA $x | tail -1)"
-          out=$(git push origin "$x:refs/tags/v1.2.1" 2>&1) && note notice tag-ok "$out" || { note error tag "$out"; exit 1; }
-          out=$(gh release create v1.2.1 -R "$R" --verify-tag --prerelease --title "AI短剧助手 1.2.1" --notes "AI短剧助手 1.2.1（软件代码 ${SHA}）。" 2>&1) && note notice create-ok "$out" || { note error create "$out"; exit 1; }
+          npm i --no-save axios@1 >/dev/null 2>&1
+          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 14 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
+          for c in check-draft-capacity check-catalog check-hot-rank-live; do
+            out=$(node scripts/$c.cjs 2>&1); code=$?
+            [ $code -eq 0 ] && note notice "ok $c" "$out" || note error "FAIL $c ($code)" "$out"
+          done
+          note notice sysctl "$(sysctl -n hw.perflevel0.physicalcpu hw.physicalcpu hw.ncpu 2>&1)"
