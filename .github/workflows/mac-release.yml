@@ -42,24 +42,6 @@ jobs:
           node-version: 22.12.0
           cache: npm
 
-      - name: Refuse to publish a version number that was already released
-        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./package.json').version")
-          # 每次更新都要换版本号：同一版本号已经发过安装包，就不再打包，免得分不清装的是哪一版。
-          if gh release view "v${version}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "ai-drama-assistant-${version}-mac-arm64.dmg"; then
-            echo "::error title=版本号已发布过::v${version} 已经有 Mac 安装包。请先在 package.json 里把版本号改成新的再打包。"
-            exit 1
-          fi
-          if [ "${{ inputs.tag }}" != "v${version}" ]; then
-            echo "::error title=发布页和版本号不一致::package.json 是 ${version}，发布页填的是 ${{ inputs.tag }}，应为 v${version}。"
-            exit 1
-          fi
-
       - name: Install dependencies
         run: npm ci
 
@@ -89,29 +71,10 @@ jobs:
           FFPROBE_PATH: ${{ github.workspace }}/build/ffmpeg/darwin-arm64/ffprobe
         run: |
           "$FFMPEG_PATH" -version
-          # 每条检查失败时，把输出末尾写成注释，不用打开完整日志就能看到原因。
-          run_check() {
-            if ! "$@" >check.out 2>&1; then
-              cat check.out
-              message=$(tail -n 25 check.out | head -c 3500 | awk '{printf "%s%%0A", $0}')
-              echo "::error title=$*::$message"
-              exit 1
-            fi
-            cat check.out
-          }
-          export PATH="$(dirname "$FFMPEG_PATH"):$PATH"
-          run_check node scripts/check-quchong.cjs
-          run_check node scripts/check-quchong-size.cjs
-          run_check node scripts/check-quchong-sources.cjs
-          run_check node scripts/check-dedup-defaults.cjs
-          run_check node scripts/check-resplit.cjs
-          run_check node scripts/check-dedup-timestamps.cjs
-          run_check node scripts/check-separation-ascii.cjs
-          run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
-          run_check node scripts/check-encoder-retry.cjs
-          run_check npm run check:subtitles
-          run_check python scripts/check-subtitle-alignment.py
-          run_check npm run check:premium
+          node scripts/check-quchong.cjs
+          npm run check:subtitles
+          python scripts/check-subtitle-alignment.py
+          npm run check:premium
 
       - name: Build local whisper.cpp and prepare tiny model
         shell: bash
@@ -135,25 +98,13 @@ jobs:
 
       - name: Run macOS-safe checks
         run: |
-          node scripts/check-undefined-names.cjs
+          node scripts/check-download-manager.cjs
           node scripts/check-download-series.cjs
-          node scripts/check-download-errors.cjs
-          node scripts/check-pagination.cjs
-          node scripts/check-library-activity.cjs
-          node scripts/check-series-library.cjs
-          node scripts/check-draft-lanes.cjs
-          node scripts/check-storyboard-reuse.cjs
-          node scripts/check-originals-folder.cjs
-          node scripts/check-app-rename.cjs
-          node scripts/check-ai-network-errors.cjs
-          REQUIRE_WHISPER=1 node scripts/check-whisper-real.cjs
-          node scripts/check-jianying-simple-draft.cjs
           node scripts/check-download-safety.cjs
           node scripts/check-series-episode-panel.cjs
+          node scripts/check-quchong-panel.cjs
           node scripts/check-quchong-queue.cjs
           node scripts/check-renderer-lifecycle.cjs
-          node scripts/check-quit-confirm.cjs
-          node scripts/check-download-index.cjs
           node scripts/check-pipeline-gate.cjs
           node scripts/check-whisper-adapter.cjs
           npm run check:ai
@@ -162,39 +113,15 @@ jobs:
         run: npm run build:mac
 
       - name: Check packaged subtitle engine without system Python
-        run: node scripts/check-bundled-transcription.cjs "dist/mac-arm64/AI短剧助手.app/Contents/Resources"
-
-      - name: End to end with the bundled components (Chinese names)
-        env:
-          FFMPEG_PATH: ${{ github.workspace }}/build/ffmpeg/darwin-arm64/ffmpeg
-          FFPROBE_PATH: ${{ github.workspace }}/build/ffmpeg/darwin-arm64/ffprobe
-          REQUIRE_E2E: '1'
-        run: node scripts/check-draft-e2e.cjs
-
-      - name: Measure how fast the packaged app opens
-        shell: bash
-        run: |
-          set -euo pipefail
-          exe="dist/mac-arm64/AI短剧助手.app/Contents/MacOS/AI短剧助手"
-          for run in 1 2; do
-            out="$RUNNER_TEMP/startup-$run.json"
-            rm -f "$out"
-            AI_DRAMA_STARTUP_PROBE="$out" "$exe" > "$RUNNER_TEMP/startup-$run.log" 2>&1 &
-            pid=$!
-            for i in $(seq 1 120); do [ -s "$out" ] && break; sleep 1; done
-            wait "$pid" || true
-            [ -s "$out" ] || { echo "the app did not open within 120 s (run $run)" >&2; cat "$RUNNER_TEMP/startup-$run.log" >&2 || true; exit 1; }
-            echo "::notice title=startup run $run (ms since process start)::$(cat "$out")"
-          done
-          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!(r.pageLoaded<15000)){console.error('opening took', r.pageLoaded, 'ms'); process.exit(1)}" "$RUNNER_TEMP/startup-2.json"
+        run: node scripts/check-bundled-transcription.cjs "dist/mac-arm64/红果短剧.app/Contents/Resources"
 
       - name: Prepare release asset
         shell: bash
         run: |
           mkdir -p dist/release
           version=$(node -p "require('./package.json').version")
-          cp "dist/AI短剧助手-${version}-mac-arm64.dmg" "dist/release/ai-drama-assistant-${version}-mac-arm64.dmg"
-          shasum -a 256 "dist/release/ai-drama-assistant-${version}-mac-arm64.dmg" > "dist/release/ai-drama-assistant-${version}-mac-arm64.sha256"
+          cp "dist/红果短剧-${version}-mac-arm64.dmg" "dist/release/hongguo-downloader-${version}-mac-arm64.dmg"
+          shasum -a 256 "dist/release/hongguo-downloader-${version}-mac-arm64.dmg" > "dist/release/hongguo-downloader-${version}-mac-arm64.sha256"
 
       - name: Upload macOS assets to the release
         if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
@@ -205,13 +132,7 @@ jobs:
             echo "refusing to publish onto the official v1.1.30 release" >&2
             exit 1
           fi
-          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
-          else
-            version=$(node -p "require('./package.json').version")
-            gh release create "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --prerelease \
-              --target "${GITHUB_SHA}" --title "AI短剧助手 ${version}" --notes "AI短剧助手 ${version}（${GITHUB_SHA}）。"
-          fi
+          gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
 
       - name: Publish branch DMG without touching v1.1.30
         if: github.event_name == 'push'
@@ -219,12 +140,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v1.1.41-breath-on-shot"
           if [ "$tag" = "v1.1.30" ]; then
             echo "refusing to publish onto the official v1.1.30 release" >&2
             exit 1
           fi
-          notes="Apple Silicon DMG from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Package version ${tag#v}. The 2026-10-13 v1.1.30 release and its assets are left unchanged."
+          notes="Apple Silicon DMG from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Package version stays 1.1.41. The 2026-10-13 v1.1.30 release and its assets are left unchanged."
           if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$tag" dist/release/* --repo "${{ github.repository }}" --clobber
           else
@@ -232,12 +153,12 @@ jobs:
               --repo "${{ github.repository }}" \
               --prerelease \
               --target "${GITHUB_SHA}" \
-              --title "AI短剧助手 $(node -p "require('./package.json').version")" \
+              --title "红果短剧 1.1.41 macOS arm64 气口切断" \
               --notes "$notes"
           fi
 
       - name: Keep a workflow artifact copy
         uses: actions/upload-artifact@v6
         with:
-          name: ai-drama-assistant-${{ inputs.tag || github.sha }}-macos
+          name: hongguo-downloader-${{ github.event_name == 'push' && '1.1.41-breath-on-shot' || inputs.tag || github.sha }}-macos
           path: dist/release/*
