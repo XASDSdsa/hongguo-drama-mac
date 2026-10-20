@@ -42,6 +42,24 @@ jobs:
           node-version: 22.12.0
           cache: npm
 
+      - name: Refuse to publish a version number that was already released
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          # 每次更新都要换版本号：同一版本号已经发过安装包，就不再打包，免得分不清装的是哪一版。
+          if gh release view "v${version}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "ai-drama-assistant-${version}-mac-arm64.dmg"; then
+            echo "::error title=版本号已发布过::v${version} 已经有 Mac 安装包。请先在 package.json 里把版本号改成新的再打包。"
+            exit 1
+          fi
+          if [ "${{ inputs.tag }}" != "v${version}" ]; then
+            echo "::error title=发布页和版本号不一致::package.json 是 ${version}，发布页填的是 ${{ inputs.tag }}，应为 v${version}。"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
 
