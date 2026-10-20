@@ -366,6 +366,35 @@ async function main() {
     const deriveSource = fsx.readFileSync(pathx.join(__dirname, '..', 'src/native/video-prompt/derive.js'), 'utf8');
     assert.equal((deriveSource.match(/onTimings:/g) || []).length, 2, '素材库和每一段都写用时');
   }
+  // 账号层面的问题（额度用完、Key 不对、模型没开通）：说清楚原因，不重试。
+  {
+    const { accountProblem } = require('../src/native/video-prompt/ark');
+    const limit = JSON.stringify({ error: { code: 'SetLimitExceeded', message: 'Your account [1] has reached the set usage limit for the [doubao-seed-2-1-turbo] model', type: 'TooManyRequests' } });
+    assert.match(accountProblem(429, limit), /安全体验模式/);
+    assert.match(accountProblem(401, '{}'), /API Key 不对/);
+    assert.match(accountProblem(404, JSON.stringify({ error: { code: 'InvalidEndpointOrModel.NotFound' } })), /找不到这个模型/);
+    assert.equal(accountProblem(429, JSON.stringify({ error: { code: 'RateLimitExceeded' } })), '', '普通限流仍然重试');
+    assert.equal(accountProblem(500, 'oops'), '');
+    let asks = 0;
+    const limited = async (url, init) => {
+      if (init.method === 'POST' && url.endsWith('/files')) return { ok: true, status: 200, json: async () => ({ id: 'f1' }) };
+      if (init.method === 'GET') return { ok: true, status: 200, json: async () => ({ status: 'processed' }) };
+      if (init.method === 'DELETE') return { ok: true, status: 200, json: async () => ({}) };
+      asks += 1;
+      return { ok: false, status: 429, text: async () => limit, json: async () => JSON.parse(limit) };
+    };
+    const c = createArkClient({ apiKey: 'ark-key-1234', model: 'm', fetchImpl: limited, sleep: async () => {}, pollMs: 0 });
+    const fsx = require('node:fs'), osx = require('node:os'), pathx = require('node:path');
+    const clip = pathx.join(fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'ark-fatal-')), 'c.mp4');
+    fsx.writeFileSync(clip, Buffer.alloc(512));
+    await assert.rejects(() => c.askAboutVideo(clip, 'x'), (error) => {
+      assert.equal(error.fatal, true);
+      assert.match(error.message, /^方舟账号这个模型的用量到了设定上限（「安全体验模式」）.*（方舟返回 429 SetLimitExceeded）$/);
+      assert.ok(!/卡在/.test(error.message), '账号问题不用再写卡在哪一步');
+      return true;
+    });
+    assert.equal(asks, 1);
+  }
   console.log('video prompt checks passed');
 }
 

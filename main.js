@@ -4724,7 +4724,10 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
     } else log('ok', `已生成 → ${result.htmlFile || result.file}`);
   } catch (error) {
     if (job.cancelled || job.controller.signal.aborted) throw Object.assign(new Error('已停止'), { stopped: true });
-    log('error', `没有生成：${openai.redactError(error, settings.ark_api_key)}`);
+    const message = openai.redactError(error, settings.ark_api_key);
+    log('error', `没有生成：${message}`);
+    // 额度用完、Key 不对这类账号问题：这次任务里排着的其他集也不再去问方舟。
+    if (error?.fatal) job.promptFatal ||= message;
   }
 }
 
@@ -4750,6 +4753,11 @@ function queueLibraryPrompts(job, file, item, data) {
 }
 
 function pumpLibraryPrompts(job) {
+  // 出过账号问题：排着的集不再去问方舟，记下来，任务结束时一条日志说清楚。
+  if (job.promptFatal && job.promptQueue?.length) {
+    job.promptSkipped ||= [];
+    job.promptSkipped.push(...job.promptQueue.splice(0).map((item) => item.entry.label));
+  }
   while (!job.cancelled && job.promptQueue?.length && job.promptActive.size < PROMPT_PARALLEL) {
     const { file, entry, data } = job.promptQueue.shift();
     job.promptActive.set(entry.label, entry);
@@ -4978,6 +4986,14 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
       await Promise.all(Array.from({ length: job.lanes }, (_, index) => runLane(index)));
       await waitLibraryPrompts(job); // 草稿都做完了，分镜工程图还在问方舟：等它们做完
     } while (job.queue.length && !job.cancelled); // 车道都退出之后又有新的集排进来：接着做
+    if (job.promptSkipped?.length) {
+      libLog(
+        key,
+        'error',
+        `视频提示词：剩下 ${job.promptSkipped.length} 集（${job.promptSkipped.join('、')}）没有做：${job.promptFatal}`,
+        'side',
+      );
+    }
     job.status = job.cancelled ? 'stopped' : job.failed ? 'failed' : 'completed';
     job.active.clear();
     job.queue = [];

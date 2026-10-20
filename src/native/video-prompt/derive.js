@@ -95,7 +95,7 @@ async function withRetries(task, { signal, sleep, label, log }) {
     try {
       return await task(attempt, lastError);
     } catch (error) {
-      if (signal?.aborted) throw error;
+      if (signal?.aborted || error?.fatal) throw error; // 额度用完、Key 不对这类，重试也没用
       lastError = error;
       if (attempt < ATTEMPTS) {
         log('warn', `${label}第 ${attempt} 次没成功（${error.message}），重试`);
@@ -226,7 +226,7 @@ async function deriveEpisodePrompts({
         await fsp.rm(clip, { force: true });
         results.push({ segment, shots });
       } catch (error) {
-        if (signal?.aborted) throw error;
+        if (signal?.aborted || error?.fatal) throw error; // 账号问题：后面的段也一样会失败，整集直接停
         failed += 1;
         log('error', `第 ${segment.index} 段没有生成：${error.message}`);
         results.push({ segment, error: error.message });

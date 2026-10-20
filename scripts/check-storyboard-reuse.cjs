@@ -78,6 +78,7 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   // 以前这里整个换掉了，结果它里面调用了一个不存在的函数也没测出来。
   const promptCalls = [];
   let promptGate = null;
+  let promptFatal = '';
   const { context, logs } = makeMain(
     path.join(tmp, 'root'),
     path.join(tmp, 'ud'),
@@ -89,6 +90,7 @@ function makeMain(root, userData, storeExtra, modules = {}) {
       './src/native/video-prompt/derive': {
         deriveEpisodePrompts: async (args) => {
           promptCalls.push(args);
+          if (promptFatal) throw Object.assign(new Error(promptFatal), { fatal: true });
           if (promptGate) await promptGate.promise;
           return { segments: 3, failed: 0, file: path.join(args.outDir, 'x.json') };
         },
@@ -226,7 +228,8 @@ function makeMain(root, userData, storeExtra, modules = {}) {
     while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(check(), what);
   };
-  await until(() => job2.done === 2, 'both drafts are made while the storyboards still wait for Ark');
+  // done 先加一，清理完分析中间文件才从「正在做」里移走：两样都到位再看界面文字。
+  await until(() => job2.done === 2 && job2.active.size === 0, 'both drafts are made while the storyboards still wait for Ark');
   assert.equal(pipelineStarts - startsBefore, 2);
   assert.equal(job2.status, 'running', 'the job is not finished while storyboards are still being made');
   assert.match(context.libraryDraftSnapshot(job2).message, /分镜工程图还剩 \d 集/);
@@ -237,6 +240,30 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   assert.equal(job2.status, 'completed');
   assert.equal(promptCalls.length - callsBefore, 2, 'both episodes got a storyboard');
   console.log('PASS storyboards run in the background: the next draft does not wait for Ark, the job waits for them');
+
+  // 8. 方舟账号额度用完（安全体验模式）：这一集写明原因，排着的其他集不再去问方舟，一条日志说清楚。
+  const dir3 = path.join(tmp, '剧三');
+  const files3 = [1, 2, 3].map((n) => path.join(dir3, '去重', `剧三_第00${n}集.mp4`));
+  files3.forEach((f, i) => {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, Buffer.alloc(4000 + i, 4));
+  });
+  promptFatal = '方舟账号这个模型的用量到了设定上限（「安全体验模式」）';
+  const callsBefore3 = promptCalls.length;
+  const started3 = await context.startLibraryDrafts({ dir: dir3, files: files3, mode: 'simple', scope: { numbers: [1, 2, 3] }, prompts: true });
+  assert.equal(started3.success, true, JSON.stringify(started3));
+  const job3 = vm.runInContext('libraryDraftJobs', context).get(path.resolve(dir3));
+  await until(() => job3.status !== 'running', 'the job ends');
+  assert.equal(job3.status, 'completed', 'the drafts themselves are fine');
+  assert.equal(job3.done, 3);
+  assert.equal(promptCalls.length - callsBefore3, 1, 'only the first episode asked Ark');
+  assert.ok(logs.some((line) => /视频提示词：.*没有生成：方舟账号这个模型的用量到了设定上限/.test(line)));
+  assert.ok(
+    logs.some((line) => /视频提示词：剩下 2 集（剧三_第002集、剧三_第003集）没有做：方舟账号这个模型的用量到了设定上限/.test(line)),
+    logs.filter((line) => /视频提示词/.test(line)).slice(-4).join('\n'),
+  );
+  promptFatal = '';
+  console.log('PASS account problem (usage limit): the other episodes skip Ark with one clear log line');
 })().catch((error) => {
   console.error(error);
   process.exit(1);

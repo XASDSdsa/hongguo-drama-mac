@@ -58,6 +58,27 @@ function describePhases(timings = {}, stuck = '') {
   return parts.length ? `${head}；之前${parts.join('，')}` : head;
 }
 
+/**
+ * 账号或设置层面的问题：重试多少次都一样（额度用完、Key 不对、模型没开通、欠费），返回给用户看的说明；其余返回空。
+ * 这类错误标成 fatal：不再重试，后面的段和集也不再去碰。
+ */
+function accountProblem(status, body) {
+  let code = '';
+  try {
+    code = String(JSON.parse(body)?.error?.code || '');
+  } catch (_) {}
+  const text = `${code} ${body}`;
+  if (/SetLimitExceeded/i.test(text))
+    return '方舟账号这个模型的用量到了设定上限（「安全体验模式」），方舟已暂停这个模型的服务。请到方舟控制台「开通管理」里关闭「安全体验模式」或调高上限（超出免费额度要按量付费），然后重新开始';
+  if (/Overdue|InsufficientBalance|Arrears/i.test(text)) return '方舟账户欠费或余额不足，请充值后重新开始';
+  if (status === 401 || /AuthenticationError|InvalidApiKey|Unauthorized/i.test(code))
+    return '方舟 API Key 不对或已失效，请在设置里重新填写';
+  if (/ModelNotOpen|NotActivated/i.test(text)) return '这个模型还没有在方舟控制台「开通管理」里开通';
+  if (status === 404 || /ModelNotFound|InvalidEndpointOrModel/i.test(code))
+    return '方舟找不到这个模型，请检查设置里的视频理解模型名（要和方舟控制台里的完全一样）';
+  return '';
+}
+
 function createArkClient({
   baseUrl = DEFAULT_BASE_URL,
   apiKey = '',
@@ -87,6 +108,17 @@ function createArkClient({
     }
     if (!response.ok) {
       const body = await response.text().catch(() => '');
+      const problem = accountProblem(response.status, body);
+      if (problem) {
+        let code = '';
+        try {
+          code = String(JSON.parse(body)?.error?.code || '');
+        } catch (_) {}
+        throw Object.assign(new Error(`${problem}（方舟返回 ${response.status}${code ? ` ${code}` : ''}）`), {
+          fatal: true,
+          status: response.status,
+        });
+      }
       throw new Error(`方舟接口返回 ${response.status}：${redact(body, apiKey)}`);
     }
     return response.json();
@@ -182,7 +214,7 @@ function createArkClient({
       onTimings?.(timings);
       return answer;
     } catch (error) {
-      if (signal?.aborted) throw error;
+      if (signal?.aborted || error?.fatal) throw error; // 账号问题说清楚就够了，不用再写卡在哪一步
       timings[phase] = Date.now() - mark;
       const wrapped = new Error(`${error?.message || error}（${describePhases(timings, phase)}）`);
       wrapped.timings = timings;
@@ -201,6 +233,7 @@ module.exports = {
   extractText,
   redact,
   describePhases,
+  accountProblem,
   DEFAULT_BASE_URL,
   MAX_UPLOAD_BYTES,
   ASK_TIMEOUT_MS,
