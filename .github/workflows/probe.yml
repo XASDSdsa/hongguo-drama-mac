@@ -1,4 +1,4 @@
-name: probe release from tag
+name: probe tag rule
 on: push
 permissions:
   contents: write
@@ -6,21 +6,17 @@ jobs:
   release:
     if: "!contains(github.event.head_commit.message, '[pages]')"
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-      R: ${{ github.repository }}
-      SHA: e2babe4882c8a4889f4e68f6463abbfd49357e55
     steps:
       - uses: actions/checkout@v4
       - shell: bash {0}
         run: |
-          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 6 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
-          git fetch -q origin perf/structure-speed
-          out=$(git push origin "$SHA:refs/tags/v1.2.1" 2>&1) && note notice tag-push-ok "$out" || note error tag-push "$out"
-          echo test > probe-check.txt
-          if out=$(gh release create v1.2.1 probe-check.txt -R "$R" --verify-tag --prerelease --title "AI短剧助手 1.2.1" --notes "AI短剧助手 1.2.1（$SHA）。" 2>&1); then
-            note notice create-ok "$out"
-            out=$(gh release delete-asset v1.2.1 probe-check.txt -R "$R" -y 2>&1); note notice delete-asset "$out"
-          else
-            note error create-failed "$out"
-          fi
+          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 3 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
+          git fetch -q origin perf/structure-speed main
+          for c in 18be767df314acb73ab3bc93d5ad3f952e395739 a2bcfe7 3035f89 e2babe4882c8a4889f4e68f6463abbfd49357e55 origin/main; do
+            sha=$(git rev-parse "$c"); t="probe-tagtest-${sha:0:7}"
+            if out=$(git push origin "$sha:refs/tags/$t" 2>&1); then
+              note notice "ok $c" "$out"; git push -q origin ":refs/tags/$t" || note warning "delete $t failed" x
+            else
+              note warning "rejected $c" "$out"
+            fi
+          done
