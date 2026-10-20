@@ -1,20 +1,8 @@
 name: probe rank page
 on: push
-permissions:
-  contents: write
 jobs:
-  fetch:
-    if: "!contains(github.event.head_commit.message, '[pages]')"
+  live:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          mkdir out
-          for p in rank/hot-drama "rank/hot-drama?page=2" "rank/hot-drama?page=99" rank/hot-real-drama rank/hot-ai-drama rank/hot-comic-drama category/real-drama; do
-            f=$(echo "$p" | tr '/?=' '___')
-            curl -sS -m 20 -o "out/$f.html" -w "$p axios-like %{http_code} %{size_download}\n" "https://hongguoduanju.com/$p" || true
-          done
-          curl -sS -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36" -o out/rank_hot-drama_ua.html -w "ua %{http_code} %{size_download}\n" https://hongguoduanju.com/rank/hot-drama
-      - run: |
-          git config user.name probe; git config user.email probe@users.noreply.github.com
-          git add out && git commit -qm "[pages] fetched rank pages" && git push -q
+      - run: npm i --no-save axios@1 && node scripts/check-hot-rank-live.cjs
