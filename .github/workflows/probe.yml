@@ -1,22 +1,22 @@
-name: probe release create
+name: probe release perms
 on: push
 permissions:
   contents: write
 jobs:
   release:
+    if: "!contains(github.event.head_commit.message, '[pages]')"
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
       R: ${{ github.repository }}
     steps:
+      - uses: actions/checkout@v4
       - run: |
-          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 12 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
-          out=$(gh release view v1.2.1 -R "$R" 2>&1) && note notice view-ok "$out" || note warning view "$out"
-          echo test > probe-check.txt
-          if out=$(gh release create v1.2.1 probe-check.txt -R "$R" --prerelease --target e2babe4882c8a4889f4e68f6463abbfd49357e55 --title "AI短剧助手 1.2.1" --notes "AI短剧助手 1.2.1（e2babe4882c8a4889f4e68f6463abbfd49357e55）。" 2>&1); then
-            note notice create-ok "$out"
-            out=$(gh release delete-asset v1.2.1 probe-check.txt -R "$R" -y 2>&1); note notice delete-asset "$out"
-          else
-            note error create-failed "$out"
-            out=$(gh api repos/$R/releases -f tag_name=v1.2.1-apitest -f target_commitish=e2babe4882c8a4889f4e68f6463abbfd49357e55 -F draft=true 2>&1) && { note notice api-draft-ok "$(echo "$out" | head -c 300)"; id=$(echo "$out" | jq -r .id); gh api -X DELETE repos/$R/releases/$id; } || note error api-draft "$out"
-          fi
+          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 6 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
+          id=$(gh api repos/$R/releases/tags/v1.2.0 --jq .id)
+          name=$(gh api repos/$R/releases/tags/v1.2.0 --jq .name)
+          out=$(gh api -X PATCH repos/$R/releases/$id -f name="$name" --jq .name 2>&1) && note notice patch-existing-ok "$out" || note error patch-existing "$out"
+          out=$(gh api repos/$R/actions/permissions/workflow 2>&1); note notice workflow-perms "$out"
+          out=$(gh api repos/$R --jq '{visibility, archived, permissions}' 2>&1); note notice repo "$out"
+          git config user.name probe; git config user.email probe@users.noreply.github.com
+          git commit -q --allow-empty -m "[pages] push test" && (git push -q 2>&1 && note notice git-push-ok ok || note error git-push "$(git push 2>&1)")
