@@ -144,6 +144,7 @@ jobs:
           node scripts/check-library-activity.cjs
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
+          node scripts/check-draft-capacity.cjs
           node scripts/check-storyboard-reuse.cjs
           node scripts/check-originals-folder.cjs
           node scripts/check-app-rename.cjs

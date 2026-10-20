@@ -51,6 +51,7 @@ const { createAiMaterialQueue } = require('./src/native/ai-material-queue');
 const { createVideoStructurePipeline } = require('./src/native/video-structure/pipeline');
 const { createJianyingDraft } = require('./src/native/video-structure/jianying');
 const arkVideo = require('./src/native/video-prompt/ark');
+const { draftCapacity } = require('./src/native/draft-capacity');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
@@ -4319,12 +4320,15 @@ function libraryDedupOutputs(dir) {
 // 不是越多越好：每集的分析（检测分镜、人声分离）都吃 CPU 和内存，同时开太多反而全卡住。
 const DRAFT_MAX_LANES = 4;
 const DRAFT_LANE_MEMORY = 2.5 * 1024 ** 3; // 一集分析大约要用的内存
-const DRAFT_LANE_MIN_THREADS = 2;
 
-function draftThreadBudget() {
-  const configured = Number(getCurrentSettings().structure_threads || 0);
-  const cores = os.availableParallelism?.() || os.cpus().length || 1;
-  return configured > 0 ? configured : Math.max(2, Math.min(8, cores - 2));
+/** 草稿分析可用的线程总数和每集最少线程数（Mac 只算性能核，见 draft-capacity.js）。 */
+function draftCapacityNow() {
+  return draftCapacity({ configuredThreads: getCurrentSettings().structure_threads });
+}
+/** 每集分到几个线程：平分总线程，但不少于每集最少线程（总线程比这还少时就用总线程）。 */
+function draftThreadsEach(lanes) {
+  const { budget, minThreads } = draftCapacityNow();
+  return Math.max(Math.min(minThreads, budget), Math.floor(budget / Math.max(1, lanes)));
 }
 
 /**
@@ -4339,7 +4343,8 @@ function systemBusy() {
 
 /** 现在这台电脑适合同时做几集：看线程预算、内存，有去重在跑或系统已经很忙就退回一集一集做。 */
 function draftLanesAllowed() {
-  const byThreads = Math.floor(draftThreadBudget() / DRAFT_LANE_MIN_THREADS);
+  const { budget, minThreads } = draftCapacityNow();
+  const byThreads = Math.floor(budget / minThreads);
   const byMemory = Math.floor((os.totalmem() * 0.5) / DRAFT_LANE_MEMORY);
   let lanes = Math.min(DRAFT_MAX_LANES, byThreads, byMemory);
   const dedupRunning = [...quchongBatches.values()].some((batch) => !batch.finished);
@@ -4782,7 +4787,7 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
     done: 0,
     failed: 0,
     lanes,
-    threadsEach: Math.max(DRAFT_LANE_MIN_THREADS, Math.floor(draftThreadBudget() / lanes)),
+    threadsEach: draftThreadsEach(lanes),
     startedAt: Date.now(),
     endTime: null,
     cancelled: false,
