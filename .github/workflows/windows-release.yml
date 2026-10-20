@@ -335,6 +335,8 @@ jobs:
         shell: bash
         run: |
           set -e
+          # 哪一项检查失败，就把那条命令写进打包页面的提示里（日志看不到时也能一眼知道是谁）。
+          trap 'echo "::error title=检查失败::$BASH_COMMAND"' ERR
           node scripts/check-undefined-names.cjs
           node scripts/check-hot-rank-live.cjs
           node scripts/check-catalog.cjs
