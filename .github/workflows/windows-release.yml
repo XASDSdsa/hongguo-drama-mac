@@ -119,9 +119,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/upload"
-          # 安装包必须有；zip / 便携版超过 GitHub 2 GiB 上限时在打包阶段已被跳过，这里有就带上。
-          for pattern in '*-Setup.exe' '*-win-x64.zip'; do
-            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "ai-drama-assistant-*$pattern" | head -n 1)
+          # 安装包必须有；zip 超过 GitHub 2 GiB 上限时在打包阶段已被跳过，这里有就带上；
+          # 内置 FFmpeg 和它的完整源码包跟安装包一起发（许可要求）。
+          for pattern in 'ai-drama-assistant-*-Setup.exe' 'ai-drama-assistant-*-win-x64.zip' 'ffmpeg-*-win-x64.zip' 'ffmpeg-*-win-x64-source.tar.xz'; do
+            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "$pattern" | head -n 1)
             if [ -z "$f" ]; then
               if [ "$pattern" = '*-Setup.exe' ]; then echo "missing $pattern" >&2; exit 1; fi
               echo "skip $pattern (not built or over 2 GiB)"
@@ -129,10 +130,13 @@ jobs:
             fi
             cp "$f" "$RUNNER_TEMP/upload/"
           done
-          (cd "$RUNNER_TEMP/upload" && sha256sum * > ai-drama-assistant-windows.sha256)
+          (cd "$RUNNER_TEMP/upload" && sha256sum ai-drama-assistant-* > ai-drama-assistant-windows.sha256)
           sizes=$(ls -l "$RUNNER_TEMP/upload" | awk 'NR>1{printf "%s %s; ", $5, $9}')
           echo "::notice title=asset sizes::$sizes"
-          gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || gh release create "${{ inputs.tag }}" --repo "${{ github.repository }}" --prerelease --title "${{ inputs.tag }}" --notes "Windows build from ${GITHUB_SHA}."
+          if ! gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error title=发布页不存在::${{ inputs.tag }} 还没有发布页。用正常打包（不填 artifact_run）会自动新建。"
+            exit 1
+          fi
           failed=0
           for f in "$RUNNER_TEMP"/upload/*; do
             if ! gh release upload "${{ inputs.tag }}" "$f" --repo "${{ github.repository }}" --clobber > "$RUNNER_TEMP/up.log" 2>&1; then
@@ -444,12 +448,9 @@ jobs:
         run: |
           set -euo pipefail
           (cd dist/release && sha256sum ai-drama-assistant-* > ai-drama-assistant-windows.sha256)
-          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
-          else
-            version=$(node -p "require('./package.json').version")
-            gh release create "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --prerelease --target "${GITHUB_SHA}" --title "AI短剧助手 ${version}" --notes "AI短剧助手 ${version}（${GITHUB_SHA}）。"
-          fi
+          version=$(node -p "require('./package.json').version")
+          bash scripts/create-release-page.sh "${{ inputs.tag }}" "AI短剧助手 ${version}" "AI短剧助手 ${version}（软件代码 ${GITHUB_SHA}）。"
+          gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
 
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources

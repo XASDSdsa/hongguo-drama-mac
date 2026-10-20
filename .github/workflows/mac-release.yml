@@ -207,13 +207,9 @@ jobs:
             echo "refusing to publish onto the official v1.1.30 release" >&2
             exit 1
           fi
-          if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
-          else
-            version=$(node -p "require('./package.json').version")
-            gh release create "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --prerelease \
-              --target "${GITHUB_SHA}" --title "AI短剧助手 ${version}" --notes "AI短剧助手 ${version}（${GITHUB_SHA}）。"
-          fi
+          version=$(node -p "require('./package.json').version")
+          bash scripts/create-release-page.sh "${{ inputs.tag }}" "AI短剧助手 ${version}" "AI短剧助手 ${version}（软件代码 ${GITHUB_SHA}）。"
+          gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
 
       - name: Publish branch DMG without touching v1.1.30
         if: github.event_name == 'push'
@@ -227,16 +223,8 @@ jobs:
             exit 1
           fi
           notes="Apple Silicon DMG from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Package version ${tag#v}. The 2026-10-13 v1.1.30 release and its assets are left unchanged."
-          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/release/* --repo "${{ github.repository }}" --clobber
-          else
-            gh release create "$tag" dist/release/* \
-              --repo "${{ github.repository }}" \
-              --prerelease \
-              --target "${GITHUB_SHA}" \
-              --title "AI短剧助手 $(node -p "require('./package.json').version")" \
-              --notes "$notes"
-          fi
+          bash scripts/create-release-page.sh "$tag" "AI短剧助手 ${tag#v}" "$notes"
+          gh release upload "$tag" dist/release/* --repo "${{ github.repository }}" --clobber
 
       - name: Keep a workflow artifact copy
         uses: actions/upload-artifact@v6
