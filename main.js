@@ -1,5 +1,5 @@
 /**
- * main.js - 红果短剧下载器（独立版）主进程
+ * main.js - AI短剧助手 主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -55,11 +55,46 @@ const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
-const APP_TITLE = '红果短剧';
+const APP_TITLE = 'AI短剧助手';
 
 let mainWindow = null;
 // 用户在「还有任务在跑」的提示里确认过退出，之后关窗口不再拦。
 let quitConfirmed = false;
+// 软件改名（红果短剧 → AI短剧助手）后数据目录跟着名字变了：新目录里还没有数据时，把旧目录里的设置、
+// 下载记录、日志等逐项挪过来，用户不用重新填设置。挪不动（旧版还开着）的 JSON 文件改为复制。
+function migrateRenamedUserData() {
+  try {
+    if (typeof app.getPath !== 'function') return;
+    const target = app.getPath('userData');
+    if (fs.existsSync(path.join(target, 'data.json'))) return;
+    const appData = app.getPath('appData');
+    for (const oldName of ['红果短剧', 'hongguo-downloader']) {
+      const old = path.join(appData, oldName);
+      if (path.resolve(old) === path.resolve(target) || !fs.existsSync(path.join(old, 'data.json'))) continue;
+      fs.mkdirSync(target, { recursive: true });
+      for (const name of fs.readdirSync(old)) {
+        const from = path.join(old, name);
+        const to = path.join(target, name);
+        if (fs.existsSync(to)) continue;
+        try {
+          fs.renameSync(from, to);
+        } catch (_) {
+          try {
+            if (name.endsWith('.json') && fs.statSync(from).isFile()) fs.copyFileSync(from, to);
+          } catch (_) {}
+        }
+      }
+      try {
+        fs.rmdirSync(old); // 只在已经挪空时删掉旧目录
+      } catch (_) {}
+      return;
+    }
+  } catch (error) {
+    console.warn('[App] 迁移旧数据目录失败:', error?.message || error);
+  }
+}
+migrateRenamedUserData();
+
 // 只允许开一个：两个进程同时读写 data.json、同时往同一个「去重」文件夹写成品会互相覆盖。
 // 再次打开时把已有窗口拉到前面。
 const singleInstance = typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true;
@@ -1259,7 +1294,7 @@ function updateWorkflowRecord(entry, episodeIndex, patch, persist = true) {
 function workflowDraftExists(record) {
   try {
     if (!record?.draftPath || !fs.statSync(record.draftPath).isDirectory()) return false;
-    const manifestPath = path.join(record.draftPath, 'hongguo-draft-manifest.json');
+    const manifestPath = path.join(record.draftPath, 'draft-manifest.json');
     if (!fs.existsSync(manifestPath)) return false;
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     return (
@@ -1382,7 +1417,7 @@ function resolveJianyingPython() {
 }
 
 function resolveBundledJianyingRuntime() {
-  const executableName = process.platform === 'win32' ? 'hongguo-jianying.exe' : 'hongguo-jianying';
+  const executableName = process.platform === 'win32' ? 'jianying-runtime.exe' : 'jianying-runtime';
   const roots = [];
   if (app.isPackaged) roots.push(path.join(process.resourcesPath, 'jianying', executableName));
   roots.push(path.join(__dirname, 'build', 'jianying', `${process.platform}-${process.arch}`, executableName));
@@ -1930,8 +1965,8 @@ async function executeHongguoDownload(task, attempt = 0) {
     task.progress = 0;
     sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
     const downloadDir = task.customDir || seriesFolder(series_title, hongguoInfo?.series_id);
-    fs.mkdirSync(downloadDir, { recursive: true });
-    const finalPath = task.savePath || path.join(downloadDir, filename);
+    const finalPath = task.savePath || path.join(downloadDir, seriesInfo.ORIGINAL_DIR, filename);
+    fs.mkdirSync(path.dirname(finalPath), { recursive: true });
     if (task.savePath !== finalPath) savePathIndex = null;
     task.savePath = finalPath;
     // Recheck source access before reusing an existing third-party file or URL.
@@ -2136,7 +2171,7 @@ function getSearchWindow() {
     width: 1100,
     height: 820,
     show: false,
-    title: '搜索 - 红果短剧',
+    title: `搜索 - ${APP_TITLE}`,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -3130,7 +3165,7 @@ function registerQuchongBatch({
   batch.queue = [...batch.tasks];
   quchongBatches.set(id, batch);
   persistQuchongBatch(batch);
-  // 上次崩溃、断电或强制退出留下的半成品临时文件（.hongguo-quchong-*），开新批次时顺手清掉。
+  // 上次崩溃、断电或强制退出留下的半成品临时文件（.ai-drama-quchong-*），开新批次时顺手清掉。
   // 别的批次还在往同一个文件夹写时不清：它的中间文件可能很久没改过，但还要用。
   // 只清 10 分钟前的：这一批自己马上要写的临时文件是新的，不会被误删。
   const busyDirs = new Set(
@@ -3469,6 +3504,7 @@ function libraryFolderRecordsCached() {
 }
 
 function libraryFolderRecords() {
+  migrateAllSeriesOriginals();
   const records = scanLibraryFolderRecords();
   folderRecordsCache = { at: Date.now(), records };
   return records;
@@ -3616,6 +3652,7 @@ function libraryEpisodeDetail(dir) {
   if (!seriesLibrary.isLibraryFolder(dir, root, imported)) return { success: false, error: '这不是剧文件夹' };
   const folder = path.resolve(String(dir));
   const isImported = imported.some((item) => path.resolve(item) === folder);
+  if (!isImported) migrateSeriesOriginals(folder);
   const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
   const remote = new Map((entry?.episodes || []).map((episode) => [Number(episode.vid_index), episode]));
   const cover = seriesInfo.findCover(folder);
@@ -4501,7 +4538,7 @@ async function loadDraftResult(projectId, file, mode) {
     if (saved.size !== stat.size || saved.mtimeMs !== Math.round(stat.mtimeMs)) return null; // 成品重新做过
     if (!saved.alignment?.shots?.length || !saved.transcript) return null;
     const manifest = JSON.parse(
-      await fsp.readFile(path.join(String(saved.draftPath || ''), 'hongguo-draft-manifest.json'), 'utf8'),
+      await fsp.readFile(path.join(String(saved.draftPath || ''), 'draft-manifest.json'), 'utf8'),
     );
     if (String(manifest?.schema || '').includes('simple') !== (mode === 'simple')) return null;
     return saved;
@@ -4614,7 +4651,7 @@ async function generateLibraryDraft(job, file, item) {
     // 拆解结果是缓存复用的：以前生成的草稿和这次要的分轨方式不一样时，只重做最后一步。
     const manifestOf = (draftPath) => {
       try {
-        return JSON.parse(fs.readFileSync(path.join(draftPath, 'hongguo-draft-manifest.json'), 'utf8'));
+        return JSON.parse(fs.readFileSync(path.join(draftPath, 'draft-manifest.json'), 'utf8'));
       } catch (_) {
         return null;
       }
@@ -5036,7 +5073,8 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
       ...new Set(Array.isArray(payload.files) ? payload.files.map((file) => path.resolve(String(file))) : []),
     ];
     if (!files.length) return { success: false, error: '请先选择要处理的集' };
-    if (files.some((file) => path.dirname(file) !== dir || !seriesLibrary.VIDEO_EXT.test(file))) {
+    const originals = path.resolve(seriesInfo.originalDir(dir));
+    if (files.some((file) => path.dirname(file) !== originals || !seriesLibrary.VIDEO_EXT.test(file))) {
       return { success: false, error: '选中的文件不在这部剧的文件夹里' };
     }
     const outputDir = path.join(dir, '去重');
@@ -5266,6 +5304,98 @@ function seriesFolder(seriesTitle, seriesId) {
   return path.join(root, seriesInfo.pickFolderName({ title: base, seriesId, owners: seriesFolderOwners() }));
 }
 
+/**
+ * 下载目录里的剧：把散在剧文件夹外层的原集、原封面、原简介挪进「原剧」子文件夹，下载记录跟着改。
+ * 用户导入的文件夹不动；这部剧正在处理、分析、补下载或做发布素材时先不挪，正在用的文件也跳过，下次再挪。
+ */
+function migrateSeriesOriginals(dir) {
+  try {
+    const folder = path.resolve(String(dir || ''));
+    if (path.dirname(folder) !== downloadRoot() || path.basename(folder).startsWith('.')) return 0;
+    if (
+      libraryFolders()
+        .list()
+        .some((item) => path.resolve(item) === folder)
+    )
+      return 0;
+    if (!fs.existsSync(folder) || libraryBusyReason(folder) || publishJobs.get(folder)?.status === 'running') return 0;
+    const isFile = (name) => {
+      try {
+        return fs.statSync(path.join(folder, name)).isFile();
+      } catch (_) {
+        return false;
+      }
+    };
+    const names = [
+      ...seriesLibrary.scanVideos(folder).map((episode) => episode.name),
+      ...seriesInfo.COVER_EXTENSIONS.map((ext) => seriesInfo.COVER_BASENAME + ext),
+      seriesInfo.SYNOPSIS_FILENAME,
+    ].filter(isFile);
+    const target = path.join(folder, seriesInfo.ORIGINAL_DIR);
+    const moved = new Map();
+    if (names.length) {
+      fs.mkdirSync(target, { recursive: true });
+      for (const name of names) {
+        const from = path.join(folder, name);
+        const to = path.join(target, name);
+        if (fs.existsSync(to) || isFileInUse(from)) continue;
+        try {
+          fs.renameSync(from, to);
+          moved.set(from, to);
+        } catch (_) {}
+      }
+    }
+    // 下载记录：挪走的指向新位置；还没下完的（文件不在外层）以后直接下进「原剧」。正在下的不动，下完再挪。
+    let changed = false;
+    for (const task of downloadTasks) {
+      if (!task.savePath || path.dirname(path.resolve(task.savePath)) !== folder) continue;
+      // 正在下的不动（下完再挪）；排队还没开始的可以直接改成下进「原剧」。
+      if (task.status === 'downloading' || runningDownloads.has(task.id) || runningDownloadPaths.has(task.savePath))
+        continue;
+      const from = path.resolve(task.savePath);
+      if (!moved.has(from) && fs.existsSync(from)) continue; // 这个文件没挪成，记录保持原样
+      const next = moved.get(from) || path.join(target, path.basename(from));
+      for (const suffix of ['.enc.tmp', '.enc.tmp.decoded']) {
+        try {
+          if (fs.existsSync(from + suffix)) {
+            fs.mkdirSync(target, { recursive: true });
+            fs.renameSync(from + suffix, next + suffix);
+          }
+        } catch (_) {}
+      }
+      task.savePath = next;
+      changed = true;
+    }
+    if (changed) {
+      savePathIndex = null;
+      try {
+        saveDownloadTasks();
+      } catch (_) {}
+    }
+    if (moved.size) {
+      folderRecordsCache = null;
+      libLog(folder, 'info', `已把 ${moved.size} 个原剧文件（原集、封面、简介）挪进「原剧」文件夹`);
+    }
+    return moved.size;
+  } catch (error) {
+    console.warn('[Library] 整理原剧文件夹失败:', error?.message || error);
+    return 0;
+  }
+}
+
+/** 下载目录下每一部剧都整理一遍（打开「管理剧集」时）。 */
+function migrateAllSeriesOriginals() {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(downloadRoot(), { withFileTypes: true });
+  } catch (_) {
+    return;
+  }
+  for (const entry of entries)
+    if (entry.isDirectory() && !entry.name.startsWith('.'))
+      migrateSeriesOriginals(path.join(downloadRoot(), entry.name));
+}
+
 /** 把剧文件夹名记进剧档案，之后这部剧一直用它（剧名后来变了也不会换文件夹）。 */
 function rememberSeriesFolder(seriesId, dir) {
   const entry = seriesRegistry.find((s) => String(s.series_id) === String(seriesId));
@@ -5290,9 +5420,15 @@ async function fetchCoverImage(url) {
 /** 把来源平台的封面和简介存进剧文件夹（已有的不覆盖），失败只记日志，不影响下载。 */
 function writeSeriesInfoFiles(seriesId, dir, coverHint) {
   const entry = seriesRegistry.find((s) => String(s.series_id) === String(seriesId));
+  // 原封面、原简介一律写进「原剧」；传进来的是剧文件夹时先把旧布局整理好，免得外层和里面各有一份。
+  let target = path.resolve(String(dir));
+  if (path.basename(target) !== seriesInfo.ORIGINAL_DIR) {
+    migrateSeriesOriginals(target);
+    target = path.join(target, seriesInfo.ORIGINAL_DIR);
+  }
   return seriesInfo
     .saveSeriesInfo({
-      dir,
+      dir: target,
       cover: coverHint || entry?.cover || '',
       synopsis: entry?.synopsis || '',
       fetchImage: fetchCoverImage,
@@ -5367,7 +5503,7 @@ function repairTaskDestination(task) {
   });
   const suffix = createHash('sha256').update(String(info.vid)).digest('hex').slice(0, 8);
   task.filename = filename.replace(/\.mp4$/, `-${suffix}.mp4`);
-  task.savePath = path.join(task.customDir, task.filename);
+  task.savePath = path.join(task.customDir, seriesInfo.ORIGINAL_DIR, task.filename);
   task.pathConflict = false;
   savePathIndex = null;
 }
@@ -5901,19 +6037,6 @@ ipcMain.handle('save-playback-position', async (event, seriesId, vidIndex, curre
 ipcMain.handle('get-playback-position', async (event, seriesId) => {
   const map = store.getPlayback() || {};
   return map[String(seriesId)] || null;
-});
-
-/**
- * 从「浏览」页点播：切到播放页并选中该剧。
- * 主进程只负责发导航指令，具体的剧集状态由渲染层拉取，避免重复维护一份数据。
- */
-ipcMain.handle('play-series', async (event, payload) => {
-  const { seriesId, vidIndex } = payload || {};
-  sendToRenderer('navigate', {
-    page: 'player',
-    payload: { seriesId: seriesId ? String(seriesId) : '', vidIndex: Number(vidIndex) || 0 },
-  });
-  return { success: true };
 });
 
 // ===== 在线播放 =====
@@ -6833,14 +6956,17 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   }
 
   const settings = getCurrentSettings();
-  const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
+  const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '未命名短剧';
   const downloadDir = seriesFolder(cleanSeriesTitle, seriesId);
+  // 原集、原封面、原简介都放进「原剧」子文件夹；剧文件夹外层只放成品。
+  const originalsDir = path.join(downloadDir, seriesInfo.ORIGINAL_DIR);
+  migrateSeriesOriginals(downloadDir);
   try {
-    fs.mkdirSync(downloadDir, { recursive: true });
+    fs.mkdirSync(originalsDir, { recursive: true });
   } catch (_) {}
   rememberSeriesFolder(seriesId, downloadDir);
-  // 封面和简介跟着下载一起存进剧文件夹；不等它完成，也不让它影响下载。
-  void writeSeriesInfoFiles(seriesId, downloadDir, cover || (episodes[0] && episodes[0].cover));
+  // 封面和简介跟着下载一起存进「原剧」；不等它完成，也不让它影响下载。
+  void writeSeriesInfoFiles(seriesId, originalsDir, cover || (episodes[0] && episodes[0].cover));
 
   const batchId = 'hongguobatch_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
   const firstCover = cover || (episodes[0] && episodes[0].cover) || '';
@@ -6860,7 +6986,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   for (const ep of episodes) {
     const epIndexStr = String(ep.vid_index).padStart(3, '0');
     const filename = uniqueEpisodeFilename(settings, cleanSeriesTitle, ep);
-    const finalPath = path.join(downloadDir, filename);
+    const finalPath = path.join(originalsDir, filename);
 
     // 已有同一集在队列/已完成，避免重复建任务。重复记录中只要有完整文件或活动任务，
     // 就跳过；只有没有可用记录时，才把最新失败/停止记录重新入队。
@@ -7406,7 +7532,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
     transcript = await fsp.readFile(transcriptPath, 'utf8');
     update({ stage: 'summarizing', progress: 55, transcriptPath });
   } else {
-    const tempDir = path.join(app.getPath('temp'), 'hongguo-ai', randomUUID());
+    const tempDir = path.join(app.getPath('temp'), 'ai-drama-material', randomUUID());
     const audioPath = path.join(tempDir, 'audio.wav');
     try {
       await fsp.mkdir(tempDir, { recursive: true });
@@ -7862,7 +7988,7 @@ function isFileInUse(file) {
   if (
     key &&
     [...libraryPlanControllers.keys(), ...libraryPlanning.keys()].some(
-      (dir) => quchongPathKey(path.dirname(file)) === quchongPathKey(dir),
+      (dir) => quchongPathKey(seriesInfo.seriesDirOf(file)) === quchongPathKey(dir),
     )
   )
     return true;

@@ -210,7 +210,7 @@ function createOneclick({ quchong, openai, resolveFfmpeg, getSettings, send }) {
       ).trim(),
     );
     const at = Number.isFinite(seconds) && seconds > 0 ? Math.min(Math.max(1, seconds * 0.3), seconds - 0.1) : 1;
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hongguo-oneclick-'));
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-oneclick-'));
     const file = path.join(dir, 'frame.png');
     await execute(
       run.ffmpegPath,

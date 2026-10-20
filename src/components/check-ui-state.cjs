@@ -191,85 +191,6 @@ function mount(file, api, props = {}) {
     );
     ui.unmount();
   });
-  await test('browse play starts an undownloaded episode', async () => {
-    let payload;
-    const ui = mount('Browse', {
-      getSeriesList: async () => [],
-      browseCategories: async () => [],
-      browseList: async () => ({ success: true, results: [{ series_id: 'A', series_title: 'A' }] }),
-      searchResolve: async () => ok(detail('A')),
-      getSeriesEpisodes: async () => ok(detail('A')),
-      playSeries: async (p) => {
-        payload = p;
-        return { success: true };
-      },
-    });
-    await ui.flush();
-    ui.find((n) => n.props.className === 'browse-card').props.onClick();
-    await ui.flush();
-    await ui.button('立即播放').props.onClick();
-    assert.equal(payload?.vidIndex, 1);
-    ui.unmount();
-  });
-  await test('late old online prepare cannot replace latest episode, and unmount releases it', async () => {
-    const first = deferred(),
-      second = deferred(),
-      released = [],
-      requested = [];
-    const ui = mount('Player', {
-      getSeriesList: async () => [{ series_id: 'A' }],
-      getSeriesEpisodes: async () => ok(detail('A')),
-      getPlaybackPosition: async () => null,
-      prepareOnlinePlay: (p) => {
-        requested.push(p);
-        return requested.length === 1 ? first.promise : second.promise;
-      },
-      releaseOnlinePlay: async (p) => released.push(p),
-    });
-    await ui.flush();
-    const firstButton = ui.find((n) => n.props['aria-label'] === '第 1 集');
-    assert.ok(firstButton, ui.text());
-    firstButton.props.onClick();
-    ui.render();
-    ui.find((n) => n.props['aria-label'] === '第 2 集').props.onClick();
-    ui.render();
-    second.resolve({ success: true, url: 'hongguo-stream://new', streamId: 'new' });
-    await ui.flush();
-    first.resolve({ success: true, url: 'hongguo-stream://old', streamId: 'old' });
-    await ui.flush();
-    assert.equal(ui.find((n) => n.type === 'video')?.props.src, 'hongguo-stream://new');
-    assert.ok(
-      requested.every((p) => p.requestId),
-      'each prepare must be cancellable',
-    );
-    ui.find((n) => n.type === 'video').props.onError({ currentTarget: { error: { code: 2 } } });
-    ui.render();
-    assert.ok(ui.button('在线播放'), 'network error must offer preparation retry');
-    assert.ok(!ui.text().includes('当前片源无法正常解码'), 'network error must not claim decoder failure');
-    ui.unmount();
-    assert.ok(released.some((p) => p.streamId === 'old'));
-    assert.ok(released.some((p) => p.streamId === 'new'));
-  });
-  await test('browse navigation prepares the requested missing episode without waiting for a download', async () => {
-    const requested = [];
-    const ui = mount(
-      'Player',
-      {
-        getSeriesList: async () => [{ series_id: 'A' }],
-        getSeriesEpisodes: async () => ok(detail('A')),
-        getPlaybackPosition: async () => null,
-        prepareOnlinePlay: async (p) => {
-          requested.push(p);
-          return { success: true, url: 'hongguo-stream://target' };
-        },
-      },
-      { target: { seriesId: 'A', vidIndex: 2, ts: 123 } },
-    );
-    await ui.flush();
-    assert.equal(requested.length, 1);
-    assert.equal(requested[0].vidIndex, 2);
-    ui.unmount();
-  });
   await test('download latest parse wins over a late earlier parse', async () => {
     const first = deferred(),
       second = deferred();
@@ -291,96 +212,6 @@ function mount(file, api, props = {}) {
     await ui.flush();
     assert.ok(ui.text().includes('《B》'));
     assert.ok(!ui.text().includes('《A》'));
-    ui.unmount();
-  });
-  await test('download play opens the selected series in the library without downloading', async () => {
-    for (const id of ['123', 'xifan:test:123', 'hema:123']) {
-      let navigate,
-        downloaded = false,
-        played;
-      const app = mount('../App', {
-        getAppInfo: async () => ({}),
-        onNavigate: (fn) => {
-          navigate = fn;
-          return () => {};
-        },
-      });
-      const ui = mount('HongguoDownload', {
-        playSeries: async (p) => {
-          played = p;
-          navigate({ page: 'player', payload: p });
-          return { success: true };
-        },
-        hongguoDownloadBatch: async () => {
-          downloaded = true;
-        },
-      });
-      const data = detail(id);
-      data.episodes[0].locked = true;
-      ui.find((n) => n.props.onSelectSeries).props.onSelectSeries(data);
-      ui.render();
-      const button = ui.button('立即播放');
-      assert.ok(button, 'selected-series header must expose play');
-      await button.props.onClick();
-      await ui.flush();
-      app.render();
-      assert.equal(played.seriesId, id);
-      assert.equal(played.vidIndex, 2);
-      assert.equal(downloaded, false);
-      const player = app.find((n) => n.props.target?.seriesId === id);
-      assert.ok(player);
-      assert.equal(player.props.active, true);
-      assert.equal(player.props.target.vidIndex, 2);
-      ui.unmount();
-      app.unmount();
-    }
-  });
-  await test('download play disables fully locked series', async () => {
-    let called = false;
-    const data = detail('hema:123');
-    data.episodes.forEach((ep) => {
-      ep.locked = true;
-    });
-    const ui = mount('HongguoDownload', {
-      playSeries: async () => {
-        called = true;
-      },
-    });
-    ui.find((n) => n.props.onSelectSeries).props.onSelectSeries(data);
-    ui.render();
-    const button = ui.button('立即播放');
-    assert.ok(button);
-    assert.equal(button.props.disabled, true);
-    await button.props.onClick();
-    assert.equal(called, false);
-    ui.unmount();
-  });
-  await test('download play prevents duplicate requests and exposes failures', async () => {
-    const pending = deferred();
-    let calls = 0;
-    const ui = mount('HongguoDownload', {
-      playSeries: () => {
-        calls++;
-        return pending.promise;
-      },
-    });
-    ui.find((n) => n.props.onSelectSeries).props.onSelectSeries(detail('123'));
-    ui.render();
-    const button = ui.button('立即播放');
-    assert.ok(button);
-    button.props.onClick();
-    button.props.onClick();
-    ui.render();
-    assert.equal(calls, 1);
-    assert.ok(
-      ui.find(
-        (n) => n.type === 'button' && n.props.disabled && n.children.some((c) => c?.children?.includes('正在打开…')),
-      ),
-    );
-    pending.resolve({ success: false, error: '打开失败示例' });
-    await ui.flush();
-    assert.ok(ui.text().includes('打开失败示例'));
-    assert.equal(ui.button('立即播放').props.disabled, false);
     ui.unmount();
   });
   await test('download ignores search selection after leaving its search panel', async () => {
@@ -738,81 +569,6 @@ function mount(file, api, props = {}) {
     assert.equal(submitted.episodes[0].vid_index, 2);
     ui.unmount();
   });
-  await test('xifan browse locks selection and starts the first unlocked episode', async () => {
-    const data = detail('X');
-    data.episodes[0].locked = true;
-    let played, submitted;
-    const ui = mount('Browse', {
-      getSeriesList: async () => [],
-      browseCategories: async () => [],
-      browseList: async () => ({ success: true, results: [{ series_id: 'X', series_title: 'X' }] }),
-      searchResolve: async () => ok(data),
-      getSeriesEpisodes: async () => ok(data),
-      playSeries: async (p) => {
-        played = p;
-        return { success: false };
-      },
-      hongguoDownloadBatch: async (p) => {
-        submitted = p;
-        return { success: false };
-      },
-    });
-    await ui.flush();
-    ui.find((n) => n.props.className === 'browse-card').props.onClick();
-    await ui.flush();
-    assert.ok(ui.button('下载选中 (1)'));
-    ui.button('全选').props.onClick();
-    ui.render();
-    assert.ok(ui.button('下载选中 (1)'));
-    ui.find((n) => n.props['aria-label'] === '选择集数范围').props.onChange({ target: { value: '1-2' } });
-    ui.render();
-    ui.button('应用').props.onClick();
-    ui.render();
-    assert.ok(ui.button('下载选中 (1)'));
-    await ui.button('立即播放').props.onClick();
-    assert.equal(played.vidIndex, 2);
-    await ui.button('下载选中').props.onClick();
-    assert.equal(submitted.episodes.length, 1);
-    assert.equal(submitted.episodes[0].vid_index, 2);
-    ui.unmount();
-  });
-  await test('xifan player skips locked episodes in auto next and download missing', async () => {
-    const data = detail('X');
-    data.total = 3;
-    data.episodes.push(episode(3));
-    data.episodes[1].locked = true;
-    const requested = [],
-      downloaded = [];
-    const ui = mount(
-      'Player',
-      {
-        getSeriesList: async () => [{ series_id: 'X' }],
-        getSeriesEpisodes: async () => ok(data),
-        getPlaybackPosition: async () => null,
-        prepareOnlinePlay: async (p) => {
-          requested.push(p);
-          return { success: true, url: `hongguo-stream://${p.vidIndex}` };
-        },
-        downloadSeriesEpisodes: async (sid, indices) => {
-          downloaded.push(...indices);
-          return { success: true, count: indices.length };
-        },
-      },
-      { target: { seriesId: 'X', vidIndex: 1, ts: 1 } },
-    );
-    await ui.flush();
-    const locked = ui.find((n) => n.props['aria-label'] === '第 2 集');
-    assert.equal(locked.props.disabled, true);
-    locked.props.onClick();
-    await ui.flush();
-    assert.equal(requested.length, 1, 'handler must also guard locked');
-    ui.find((n) => n.type === 'video').props.onEnded();
-    await ui.flush();
-    assert.equal(requested.at(-1).vidIndex, 3);
-    await ui.button('下载未完成集').props.onClick();
-    assert.deepEqual(downloaded, [1, 3]);
-    ui.unmount();
-  });
   await test('app navigation keeps visited pages and marks background pages inactive', async () => {
     const ui = mount('../App', { getAppInfo: async () => ({ platform: 'darwin' }) });
     await ui.flush();
@@ -820,39 +576,20 @@ function mount(file, api, props = {}) {
     ui.render();
     assert.ok(ui.find((n) => n.props['data-page'] === 'browse')?.props.hidden, 'browse must remain mounted but hidden');
     assert.equal(ui.find((n) => n.props['data-page'] === 'settings')?.props.hidden, false);
-    ui.button('我的剧库').props.onClick();
+    ui.button('管理剧集').props.onClick();
     ui.render();
     ui.button('发现短剧').props.onClick();
     ui.render();
-    const player = ui.find((n) => n.props['data-page'] === 'player');
-    assert.ok(player?.props.hidden, 'visited player must be retained');
+    const library = ui.find((n) => n.props['data-page'] === 'library');
+    assert.ok(library?.props.hidden, 'visited library must be retained');
     // 每页外面包着 ErrorBoundary：页面元素是它的第一个子元素。
-    assert.equal(player.children[0]?.children?.[0]?.props.active, false, 'hidden player must receive inactive state');
+    assert.equal(library.children[0]?.children?.[0]?.props.active, false, 'hidden library must receive inactive state');
+    assert.equal(ui.button('我的剧库'), undefined, 'the playback page is gone from the menu');
+    assert.equal(
+      ui.find((n) => n.props['data-page'] === 'player'),
+      undefined,
+    );
     assert.equal(ui.nodes().filter((n) => n.props['data-page'] === 'browse').length, 1);
-    ui.unmount();
-  });
-  await test('app ordinary navigation preserves the last playback target', async () => {
-    let navigate;
-    const ui = mount('../App', {
-      getAppInfo: async () => ({ platform: 'darwin' }),
-      onNavigate: (fn) => {
-        navigate = fn;
-        return () => {};
-      },
-    });
-    await ui.flush();
-    navigate({ page: 'player', payload: { seriesId: 'A', vidIndex: 2 } });
-    ui.render();
-    const player = () => ui.find((n) => n.props['data-page'] === 'player').children[0].children[0];
-    const target = player().props.target;
-    assert.equal(target.seriesId, 'A');
-    assert.equal(target.vidIndex, 2);
-    ui.button('管理剧集').props.onClick();
-    ui.render();
-    assert.equal(player().props.target, target, 'background navigation must not reset playback initialization');
-    ui.button('我的剧库').props.onClick();
-    ui.render();
-    assert.equal(player().props.target, target, 'returning must keep the same playback target');
     ui.unmount();
   });
   await test('download keeps its search panel mounted while selecting episodes', async () => {

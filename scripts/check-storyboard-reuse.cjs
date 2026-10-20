@@ -108,8 +108,8 @@ function makeMain(root, userData, storeExtra) {
       const draftPath = path.join(tmp, 'drafts', `草稿-${draftsMade}`);
       fs.mkdirSync(draftPath, { recursive: true });
       fs.writeFileSync(
-        path.join(draftPath, 'hongguo-draft-manifest.json'),
-        JSON.stringify({ schema: 'hongguo-jianying-draft/simple-v2' }),
+        path.join(draftPath, 'draft-manifest.json'),
+        JSON.stringify({ schema: 'jianying-draft/simple-v2' }),
       );
       const modules = Object.fromEntries(
         ['media', 'audio', 'shots', 'clips', 'separation', 'transcript', 'alignment', 'export', 'jianying'].map((m) => [

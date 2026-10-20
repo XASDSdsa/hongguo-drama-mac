@@ -121,6 +121,8 @@ jobs:
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-storyboard-reuse.cjs
+          node scripts/check-originals-folder.cjs
+          node scripts/check-app-rename.cjs
           node scripts/check-ai-network-errors.cjs
           node scripts/check-jianying-simple-draft.cjs
           node scripts/check-download-safety.cjs
@@ -137,15 +139,15 @@ jobs:
         run: npm run build:mac
 
       - name: Check packaged subtitle engine without system Python
-        run: node scripts/check-bundled-transcription.cjs "dist/mac-arm64/红果短剧.app/Contents/Resources"
+        run: node scripts/check-bundled-transcription.cjs "dist/mac-arm64/AI短剧助手.app/Contents/Resources"
 
       - name: Prepare release asset
         shell: bash
         run: |
           mkdir -p dist/release
           version=$(node -p "require('./package.json').version")
-          cp "dist/红果短剧-${version}-mac-arm64.dmg" "dist/release/hongguo-downloader-${version}-mac-arm64.dmg"
-          shasum -a 256 "dist/release/hongguo-downloader-${version}-mac-arm64.dmg" > "dist/release/hongguo-downloader-${version}-mac-arm64.sha256"
+          cp "dist/AI短剧助手-${version}-mac-arm64.dmg" "dist/release/ai-drama-assistant-${version}-mac-arm64.dmg"
+          shasum -a 256 "dist/release/ai-drama-assistant-${version}-mac-arm64.dmg" > "dist/release/ai-drama-assistant-${version}-mac-arm64.sha256"
 
       - name: Upload macOS assets to the release
         if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
@@ -177,12 +179,12 @@ jobs:
               --repo "${{ github.repository }}" \
               --prerelease \
               --target "${GITHUB_SHA}" \
-              --title "红果短剧 1.1.41 macOS arm64 气口切断" \
+              --title "AI短剧助手 1.1.41" \
               --notes "$notes"
           fi
 
       - name: Keep a workflow artifact copy
         uses: actions/upload-artifact@v6
         with:
-          name: hongguo-downloader-${{ github.event_name == 'push' && '1.1.41-breath-on-shot' || inputs.tag || github.sha }}-macos
+          name: ai-drama-assistant-${{ github.event_name == 'push' && '1.1.41-breath-on-shot' || inputs.tag || github.sha }}-macos
           path: dist/release/*

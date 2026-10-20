@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createOneclick, scanVideos, DEFAULT_POSTER_PROMPT } = require('../src/native/oneclick');
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-oneclick-'));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-drama-oneclick-'));
 let serial = 0;
 const wait = async (read, ms = 8000) => {
   const end = Date.now() + ms;

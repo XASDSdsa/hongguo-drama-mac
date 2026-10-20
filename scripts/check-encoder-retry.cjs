@@ -179,7 +179,7 @@ exec ffmpeg "\${args[@]}"
     assert.equal(fs.existsSync(path.join(tmp, 'audio-bad.mp4')), false);
   });
 
-  const leftovers = () => fs.readdirSync(tmp).filter((name) => name.startsWith('.hongguo-quchong'));
+  const leftovers = () => fs.readdirSync(tmp).filter((name) => name.startsWith('.ai-drama-quchong'));
   const audioStreams = (file) =>
     execFileSync('ffprobe', [
       '-v',

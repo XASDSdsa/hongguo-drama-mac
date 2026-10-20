@@ -7,6 +7,12 @@
   align-items: center;
   margin-bottom: 16px;
 }
+.lib-crumb-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .lib-back-icon {
   transform: rotate(180deg);
 }

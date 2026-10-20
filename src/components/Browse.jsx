@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Browse.css';
-import { Film, RefreshCw, ExternalLink, Download, Play, Check, X, Search } from './icons';
+import { Film, RefreshCw, ExternalLink, Download, Check, X, Search } from './icons';
 import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 
 const pageCache = new Map();
@@ -308,20 +308,6 @@ function Browse({ onNavigate, active = true }) {
     }
   };
 
-  // 从第一集开始；播放器按实际状态选择本地或在线片源。
-  const playNow = async () => {
-    if (!detail) return;
-    const first = detail.episodes.find((e) => !e.locked);
-    if (!first) return;
-    try {
-      const res = await window.electronAPI.playSeries({ seriesId: detail.series_id, vidIndex: first.vid_index });
-      if (res?.success) closeDetail();
-      else showToast(res?.error || '打开播放器失败，请重试', 'error');
-    } catch (e) {
-      showToast('打开播放器失败: ' + e.message, 'error');
-    }
-  };
-
   const showBrowser = async () => {
     if (source !== 'hongguo' || !sourceUrl) return;
     try {
@@ -502,7 +488,7 @@ function Browse({ onNavigate, active = true }) {
                   )}
                   <div className="browse-hover">
                     <span className="browse-hover-play">
-                      <Play size={16} /> {dl && dl.completed > 0 ? '播放' : '查看'}
+                      <Film size={16} /> 查看
                     </span>
                   </div>
                 </div>
@@ -680,14 +666,6 @@ function Browse({ onNavigate, active = true }) {
                 </div>
 
                 <div className="browse-drawer-foot">
-                  <button
-                    className="btn btn-outline"
-                    disabled={!detail.episodes.some((ep) => !ep.locked)}
-                    onClick={playNow}
-                  >
-                    <Play size={15} />
-                    立即播放
-                  </button>
                   <div className="browse-foot-right">
                     <button
                       className="btn btn-primary"

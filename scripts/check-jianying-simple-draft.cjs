@@ -100,7 +100,7 @@ try {
   assert.equal(created.subtitle_count, 3);
 
   const dir = created.draft_dir;
-  for (const file of ['draft_info.json', 'draft_meta_info.json', 'hongguo-draft-manifest.json']) {
+  for (const file of ['draft_info.json', 'draft_meta_info.json', 'draft-manifest.json']) {
     assert.ok(fs.existsSync(path.join(dir, file)), file);
   }
   assert.ok(fs.existsSync(path.join(dir, '素材', '视频', '第001集.mp4')), '素材拷进草稿文件夹');
@@ -163,8 +163,8 @@ try {
     t1.start + t1.duration <= t2.start && t2.start + t2.duration <= t3.start,
     'cues never overlap on the 文案 track',
   );
-  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'hongguo-draft-manifest.json'), 'utf8'));
-  assert.equal(manifest.schema, 'hongguo-jianying-draft/simple-v2');
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'draft-manifest.json'), 'utf8'));
+  assert.equal(manifest.schema, 'jianying-draft/simple-v2');
   assert.equal(manifest.tracks.video.clip_count, 3);
   assert.equal(manifest.tracks.audio.scope, 'per_shot');
   assert.equal(manifest.tracks.audio.clip_count, 3);

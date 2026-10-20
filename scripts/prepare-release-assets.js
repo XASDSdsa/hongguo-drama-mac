@@ -2,7 +2,7 @@
  * prepare-release-assets.js —— 为 GitHub Release 准备 ASCII 文件名的资产
  *
  * 为什么需要：
- *   本地打包产物的文件名是中文（红果短剧下载器-1.0.0-win-x64.zip），
+ *   本地打包产物的文件名是中文（AI短剧助手-1.0.0-win-x64.zip），
  *   但 GitHub 的 Release 资产接口会把文件名里的非 ASCII 字符直接过滤掉，
  *   变成 "-1.0.0-win-x64.zip"（gh CLI 与直连 API 都会这样）。
  *   所以上传前先把产物复制成 ASCII 文件名。
@@ -22,7 +22,7 @@ const OUT = path.join(DIST, 'release');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = pkg.version;
 const PRODUCT = pkg.build.productName || pkg.name;
-const SLUG = pkg.name; // hongguo-downloader
+const SLUG = pkg.name; // ai-drama-assistant
 
 // 本地产物名（中文） -> Release 资产名（ASCII）
 const MAP = [
@@ -77,7 +77,7 @@ function main() {
   }
 
   console.log('\n下一步（示例）：');
-  console.log(`  gh release create v${VERSION} --title "红果短剧下载器 v${VERSION}" \\`);
+  console.log(`  gh release create v${VERSION} --title "AI短剧助手 v${VERSION}" \\`);
   console.log(`    --notes-file release-notes.md dist/release/*`);
   console.log('  或补传：gh release upload v' + VERSION + ' dist/release/* --clobber');
 }

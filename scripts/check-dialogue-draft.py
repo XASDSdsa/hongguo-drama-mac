@@ -83,7 +83,7 @@ def fixture(adapter, srt: Path, first_end: float = 2.2):
 
 def main() -> int:
     adapter = load_adapter()
-    with tempfile.TemporaryDirectory(prefix="hongguo-dialogue-draft-") as directory:
+    with tempfile.TemporaryDirectory(prefix="ai-drama-dialogue-draft-") as directory:
         root = Path(directory)
         srt = root / "字幕.srt"
         for first_end in (1.2, 2.2):
@@ -242,7 +242,7 @@ def main() -> int:
             result = subprocess.run([sys.executable, str(checker), str(draft_dir)], capture_output=True, text=True)
             assert result.returncode != 0, f"accepted corrupt {name} native track"
         content_path.write_text(json.dumps(native, ensure_ascii=False), encoding="utf-8")
-        manifest_path = draft_dir / "hongguo-draft-manifest.json"
+        manifest_path = draft_dir / "draft-manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         checker_spec = importlib.util.spec_from_file_location("hongguo_check_jianying_draft", checker)
         validator = importlib.util.module_from_spec(checker_spec)

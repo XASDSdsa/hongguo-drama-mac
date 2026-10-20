@@ -66,7 +66,7 @@ const adapter = require('../src/native/openai');
   assert.equal(calls[1].url, 'https://relay.example.test/v1/images/edits');
   assert.ok(calls[1].options.body instanceof FormData);
 
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-ai-check-'));
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-drama-material-check-'));
   const audio = path.join(temp, 'audio.m4a');
   fs.writeFileSync(audio, Buffer.from('audio'));
   const transcript = await adapter.transcribeAudio(audio, {}, config);

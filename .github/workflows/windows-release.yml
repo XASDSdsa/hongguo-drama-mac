@@ -47,7 +47,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/upload"
           # 安装包必须有；zip / 便携版超过 GitHub 2 GiB 上限时在打包阶段已被跳过，这里有就带上。
           for pattern in '*-Setup.exe' '*-win-x64.zip' '*-portable.exe'; do
-            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "hongguo-downloader-*$pattern" | head -n 1)
+            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "ai-drama-assistant-*$pattern" | head -n 1)
             if [ -z "$f" ]; then
               if [ "$pattern" = '*-Setup.exe' ]; then echo "missing $pattern" >&2; exit 1; fi
               echo "skip $pattern (not built or over 2 GiB)"
@@ -55,7 +55,7 @@ jobs:
             fi
             cp "$f" "$RUNNER_TEMP/upload/"
           done
-          (cd "$RUNNER_TEMP/upload" && sha256sum * > hongguo-downloader-windows.sha256)
+          (cd "$RUNNER_TEMP/upload" && sha256sum * > ai-drama-assistant-windows.sha256)
           sizes=$(ls -l "$RUNNER_TEMP/upload" | awk 'NR>1{printf "%s %s; ", $5, $9}')
           echo "::notice title=asset sizes::$sizes"
           gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || gh release create "${{ inputs.tag }}" --repo "${{ github.repository }}" --prerelease --title "${{ inputs.tag }}" --notes "Windows build from ${GITHUB_SHA}."
@@ -246,6 +246,8 @@ jobs:
           node scripts/check-series-library.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-storyboard-reuse.cjs
+          node scripts/check-originals-folder.cjs
+          node scripts/check-app-rename.cjs
           node scripts/check-ai-network-errors.cjs
           # 三分轨草稿用打包剪映运行时的同一个 Python 环境真跑一遍（含 pyJianYingDraft），不跳过。
           JY_PY="$PWD/.cache/jianying-venv/Scripts/python.exe"
@@ -310,7 +312,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          (cd dist/release && sha256sum hongguo-downloader-* > hongguo-downloader-windows.sha256)
+          (cd dist/release && sha256sum ai-drama-assistant-* > ai-drama-assistant-windows.sha256)
           if gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "${{ inputs.tag }}" dist/release/* --repo "${{ github.repository }}" --clobber
           else

@@ -31,8 +31,13 @@ function isVideoFile(entry) {
   );
 }
 
-/** 剧文件夹顶层的视频，按集号（认不出的排最后）再按名称排序。 */
+/** 剧的原集：「原剧」子文件夹里的视频（导入的文件夹没有它时是顶层视频），按集号再按名称排序。 */
 function scanEpisodes(dir) {
+  return scanVideos(seriesInfo.originalDir(dir));
+}
+
+/** 某个文件夹里（不含子文件夹）的视频，按集号（认不出的排最后）再按名称排序。 */
+function scanVideos(dir) {
   const items = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!isVideoFile(entry)) continue;
@@ -183,6 +188,7 @@ module.exports = {
   VIDEO_EXT,
   parseEpisodeIndex,
   scanEpisodes,
+  scanVideos,
   describeFolder,
   scanLibrary,
   createFolderList,

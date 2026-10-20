@@ -633,7 +633,7 @@ def main() -> int:
     progress(94, "视频、配音、背景声、特效声、字幕和水印轨道已保存")
 
     manifest = {
-        "schema": "hongguo-jianying-draft/v1",
+        "schema": "jianying-draft/v1",
         "boundary_policy": BOUNDARY_POLICY,
         "alignment_algorithm": ALIGNMENT_ALGORITHM,
         "subtitle_policy": SUBTITLE_POLICY,
@@ -655,8 +655,8 @@ def main() -> int:
         "review_items": shots.get("review_items", []),
         "note": "草稿尚未在目标剪映版本完成打开、播放、保存、重开验收。",
     }
-    (draft_dir / "hongguo-draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"success": True, "draft_dir": str(draft_dir), "draft_info": str(draft_dir / "draft_info.json"), "manifest": str(draft_dir / "hongguo-draft-manifest.json"), "fps": fps, "duration_us": duration_us, "clip_count": len(clip_rows), "subtitle_count": len(subtitle_rows), "status": manifest["status"]}, ensure_ascii=False, indent=2))
+    (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"success": True, "draft_dir": str(draft_dir), "draft_info": str(draft_dir / "draft_info.json"), "manifest": str(draft_dir / "draft-manifest.json"), "fps": fps, "duration_us": duration_us, "clip_count": len(clip_rows), "subtitle_count": len(subtitle_rows), "status": manifest["status"]}, ensure_ascii=False, indent=2))
     return 0
 
 

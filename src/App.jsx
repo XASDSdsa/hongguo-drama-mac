@@ -3,14 +3,12 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { Settings, Play, Home, Search, Folder } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import SettingsPage from './components/Settings';
-import Player from './components/Player';
 import Browse from './components/Browse';
 import SeriesLibrary from './components/SeriesLibrary';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
   { id: 'download', label: '搜索与下载', icon: Search },
-  { id: 'player', label: '我的剧库', icon: Play },
   { id: 'library', label: '管理剧集', icon: Folder },
   { id: 'settings', label: '设置', icon: Settings },
 ];
@@ -20,7 +18,6 @@ export default function App() {
   const [visited, setVisited] = useState(['browse']);
   const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
-  const [playerTarget, setPlayerTarget] = useState(null); // 浏览页点播 -> 播放页选中
   const [pageTarget, setPageTarget] = useState(null); // 当前流程页的剧集上下文
 
   useEffect(() => {
@@ -37,15 +34,12 @@ export default function App() {
     [],
   );
 
-  // 主进程发来的导航指令（例如浏览页点「立即播放」）
+  // 主进程发来的导航指令
   useEffect(() => {
     if (!window.electronAPI.onNavigate) return undefined;
     return window.electronAPI.onNavigate((data) => {
-      if (!data || !data.page) return;
-      if (data.payload) {
-        setPlayerTarget({ ...data.payload, ts: Date.now() });
-        setPageTarget({ ...data.payload, ts: Date.now() });
-      }
+      if (!data || !data.page || !MENU.some((item) => item.id === data.page)) return;
+      if (data.payload) setPageTarget({ ...data.payload, ts: Date.now() });
       setVisited((pages) => (pages.includes(data.page) ? pages : [...pages, data.page]));
       setPage(data.page);
     });
@@ -61,8 +55,6 @@ export default function App() {
     switch (id) {
       case 'browse':
         return <Browse active={page === id} onNavigate={navigate} />;
-      case 'player':
-        return <Player active={page === id} target={playerTarget} onNavigate={navigate} />;
       case 'library':
         return <SeriesLibrary active={page === id} target={pageTarget} onNavigate={navigate} />;
       case 'settings':
@@ -85,7 +77,7 @@ export default function App() {
             <Play size={21} />
           </div>
           <div>
-            <div className="brand-text">红果短剧</div>
+            <div className="brand-text">AI短剧助手</div>
             <div className="brand-sub">每一集，都值得期待</div>
           </div>
         </div>
@@ -116,7 +108,7 @@ export default function App() {
             <span>设置</span>
           </button>
           <div className="footer-note">
-            <span>红果短剧</span>
+            <span>AI短剧助手</span>
             <span>{appInfo?.version ? `v${appInfo.version}` : ''}</span>
           </div>
         </div>
@@ -124,7 +116,7 @@ export default function App() {
       <div className="main-wrapper">
         <header className="window-toolbar">
           <span className="toolbar-location">{currentPage?.label}</span>
-          <span className="toolbar-caption">红果短剧</span>
+          <span className="toolbar-caption">AI短剧助手</span>
         </header>
         {storageError && (
           <div className="app-storage-error" role="alert">

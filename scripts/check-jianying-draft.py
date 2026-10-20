@@ -141,7 +141,7 @@ def main() -> int:
         # Jianying <= 5.9 used the legacy filename. Keep the validator able
         # to inspect old fixtures, but always prefer the native 6+ file.
         content_path = root / "draft_content.json"
-    manifest_path = root / "hongguo-draft-manifest.json"
+    manifest_path = root / "draft-manifest.json"
     meta_path = root / "draft_meta_info.json"
     for path in (content_path, manifest_path, meta_path):
         if not path.is_file():

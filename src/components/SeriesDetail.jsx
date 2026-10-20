@@ -525,6 +525,14 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
   const title = detail?.name || folder.name;
   const downloaded = episodes.length;
+  const openSeriesFolder = async () => {
+    try {
+      const res = await window.electronAPI.libraryOpenFolder(detail?.dir || folder.path);
+      if (!res?.success) setError(res?.error || '打不开这个文件夹');
+    } catch (err) {
+      setError(err?.message || '打不开这个文件夹');
+    }
+  };
   const total = folder.totalEpisodes || 0;
 
   return (
@@ -533,9 +541,18 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
         <button className="btn btn-sm" onClick={onBack}>
           <ChevronRight size={14} className="lib-back-icon" /> 返回剧集列表
         </button>
-        <button className="btn btn-sm" onClick={open} disabled={loading} title="重新读取文件夹并向来源平台核对">
-          <RefreshCw size={14} className={loading ? 'spin' : ''} /> 刷新
-        </button>
+        <div className="lib-crumb-actions">
+          <button className="btn btn-sm" onClick={open} disabled={loading} title="重新读取文件夹并向来源平台核对">
+            <RefreshCw size={14} className={loading ? 'spin' : ''} /> 刷新
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={openSeriesFolder}
+            title="在访达 / 资源管理器里打开这部剧的文件夹（原剧、去重成品、发布素材都在里面）"
+          >
+            <Folder size={14} /> 打开剧集文件夹
+          </button>
+        </div>
       </div>
 
       <header className="lib-detail-head">

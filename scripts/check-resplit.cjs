@@ -369,7 +369,7 @@ const plan = (sources, split = {}, overrides = {}) =>
           // 锐化量随机落在 0 附近时会被跳过，调色（eq/hue）每集都有。
           assert.match(calls[1], /eq=brightness=.*hue=h=/, '第二步：统一加去重特效');
           assert.doesNotMatch(calls[1], /concat/);
-          assert.match(calls[1], /\.hongguo-quchong-pre-.*\.mkv/, '第二步读的是中间文件');
+          assert.match(calls[1], /\.ai-drama-quchong-pre-.*\.mkv/, '第二步读的是中间文件');
         },
       );
 

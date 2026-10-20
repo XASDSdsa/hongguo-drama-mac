@@ -40,14 +40,6 @@ function describeProxy(settings) {
   return { on: true, text: '跟随系统 / 环境变量代理' };
 }
 
-const OUTPUT_DIRS = [
-  {
-    key: 'merge_output_dir',
-    label: '整剧合并输出目录',
-    hint: '在「我的剧库」里把整部剧合并成一个视频时，保存到这里。',
-  },
-];
-
 function SettingsPage({ active = true }) {
   const [settings, setSettings] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -316,7 +308,7 @@ function SettingsPage({ active = true }) {
               </button>
             </div>
             <p className="settings-hint">
-              每部剧会在这里建一个以剧名命名的文件夹，视频保存在里面；去重成品、剪映草稿也放在这部剧自己的文件夹里。
+              每部剧会在这里建一个以剧名命名的文件夹：下载的原集、封面、简介放在里面的「原剧」文件夹；去重成品、视频提示词、发布素材放在外层。
             </p>
           </div>
           <div className="settings-group">
@@ -344,26 +336,6 @@ function SettingsPage({ active = true }) {
               。每集保留独立集号，避免同名覆盖。
             </p>
           </div>
-          {OUTPUT_DIRS.map(({ key, label, hint }) => (
-            <div className="settings-group" key={key}>
-              <label className="settings-label">{label}</label>
-              <div className="folder-row">
-                <input
-                  type="text"
-                  className="input-field"
-                  aria-label={label}
-                  value={settings[key] || ''}
-                  onChange={(e) => update(key, e.target.value)}
-                  placeholder="未选择：用到时会提示先选择"
-                />
-                <button className="btn btn-outline" onClick={() => selectFolder(key)}>
-                  <Folder size={16} />
-                  选择文件夹
-                </button>
-              </div>
-              <p className="settings-hint">{hint}</p>
-            </div>
-          ))}
         </section>
 
         <section className="settings-section" aria-label="下载与网络">

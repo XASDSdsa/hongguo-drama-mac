@@ -8,7 +8,7 @@ const path = require('node:path');
 const { run } = require('../src/native/video-structure/io');
 
 (async () => {
-  const name = process.platform === 'win32' ? 'hongguo-jianying.exe' : 'hongguo-jianying';
+  const name = process.platform === 'win32' ? 'jianying-runtime.exe' : 'jianying-runtime';
   const exe = path.join(__dirname, '..', 'build', 'jianying', `${process.platform}-${process.arch}`, name);
   if (!fs.existsSync(exe)) {
     console.log(`SKIP 没有构建好的剪映运行时：${exe}`);

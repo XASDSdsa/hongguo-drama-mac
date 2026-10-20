@@ -238,9 +238,11 @@ const COPY = {
       delay = 0;
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
-        ['封面.png', '退婚之后_第001集.mp4'].sort(),
+        ['原剧'],
         'rewriting only offers candidates: nothing is written until you save',
       );
+      // 原集和原封面在「原剧」里，外层只放成品。
+      assert.deepEqual(fs.readdirSync(path.join(dir, '原剧')).sort(), ['封面.png', '退婚之后_第001集.mp4'].sort());
       const drafts = await handlers['publish-state']({}, dir);
       assert.equal(drafts.result.title, '', 'no name chosen yet');
       assert.equal(drafts.original.title, '退婚之后', 'the original name is shown apart from the saved one');
@@ -263,7 +265,7 @@ const COPY = {
       await runTask('poster');
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
-        ['封面.png', '发布剧名.txt', '发布海报.jpg', '发布简介.txt', '退婚之后_第001集.mp4'].sort(),
+        ['原剧', '发布剧名.txt', '发布海报.jpg', '发布简介.txt'].sort(),
         'only results land in the series folder',
       );
       const stages = new Set(

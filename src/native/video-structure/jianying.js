@@ -29,7 +29,7 @@ async function createJianyingDraft(ctx, options) {
     await run(executable, [checkScript, draftPath], { signal: ctx.signal, cwd: ctx.projectDir, killProcessTree: true });
   }
   const controlFiles = [];
-  for (const fileName of ['draft_info.json', 'draft_meta_info.json', 'hongguo-draft-manifest.json']) {
+  for (const fileName of ['draft_info.json', 'draft_meta_info.json', 'draft-manifest.json']) {
     const file = path.join(draftPath, fileName);
     requireThat((await fs.stat(file)).isFile(), `剪映草稿缺少 ${fileName}`);
     controlFiles.push({ path: file, sha256: await sha256(file, ctx.signal) });

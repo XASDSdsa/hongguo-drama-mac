@@ -1,7 +1,7 @@
 {
-  "name": "hongguo-downloader",
+  "name": "ai-drama-assistant",
   "version": "1.1.41",
-  "description": "红果短剧全集批量下载器（Windows / Apple Silicon Mac）",
+  "description": "AI短剧助手：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
   "scripts": {
@@ -70,7 +70,7 @@
   },
   "build": {
     "appId": "io.github.jackotom.hongguo-drama-mac",
-    "productName": "红果短剧",
+    "productName": "AI短剧助手",
     "directories": {
       "output": "dist"
     },
@@ -169,7 +169,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "红果短剧下载器",
+      "shortcutName": "AI短剧助手",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "mac": {
@@ -263,7 +263,7 @@
         "Contents/Resources/faster-whisper/hongguo-transcribe",
         "Contents/Resources/video-structure/worker/hongguo-structure",
         "Contents/Resources/video-structure/bin/sherpa-onnx-offline-source-separation",
-        "Contents/Resources/jianying/hongguo-jianying"
+        "Contents/Resources/jianying/jianying-runtime"
       ]
     },
     "extraResources": [

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Download, Film, Play, RefreshCw } from './icons';
+import { Check, Download, Film, RefreshCw } from './icons';
 import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 import './SeriesEpisodePanel.css';
 
@@ -44,7 +44,6 @@ export default function SeriesEpisodePanel({
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [playing, setPlaying] = useState(false);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [range, setRange] = useState('');
@@ -53,7 +52,6 @@ export default function SeriesEpisodePanel({
   const lifecycle = useRef(0);
   const readRequest = useRef(0);
   const busy = useRef(false);
-  const playBusy = useRef(false);
   const current = useRef({ seriesId, active });
   current.current = { seriesId, active };
 
@@ -86,10 +84,8 @@ export default function SeriesEpisodePanel({
 
   useEffect(() => {
     busy.current = false;
-    playBusy.current = false;
     setSubmitting(false);
     setUpdating(false);
-    setPlaying(false);
     return () => {
       lifecycle.current++;
       readRequest.current++;
@@ -189,27 +185,6 @@ export default function SeriesEpisodePanel({
       if (isCurrent(token)) {
         busy.current = false;
         setSubmitting(false);
-      }
-    }
-  };
-
-  const play = async () => {
-    if (!active || playBusy.current) return;
-    const first =
-      episodes.find((ep) => ep.status === 'completed' && !ep.locked) || episodes.find((ep) => !ep.locked && ep.vid);
-    if (!first) return;
-    const token = lifecycle.current;
-    playBusy.current = true;
-    setPlaying(true);
-    try {
-      const result = await window.electronAPI.playSeries({ seriesId, vidIndex: first.vid_index });
-      if (isCurrent(token) && !result?.success) onNotify?.(result?.error || '打开播放器失败', 'error');
-    } catch (err) {
-      if (isCurrent(token)) onNotify?.(`打开播放器失败：${err.message}`, 'error');
-    } finally {
-      if (isCurrent(token)) {
-        playBusy.current = false;
-        setPlaying(false);
       }
     }
   };
@@ -352,14 +327,6 @@ export default function SeriesEpisodePanel({
             })}
           </div>
           <div className="sep-actions">
-            <button
-              className="btn btn-outline"
-              disabled={!active || playing || !episodes.some((ep) => !ep.locked && ep.vid)}
-              onClick={play}
-            >
-              <Play size={15} />
-              {playing ? '正在打开…' : '立即播放'}
-            </button>
             <span>已下载及队列中的集数自动跳过</span>
             <button className="btn btn-primary" disabled={disabled || !selected.size} onClick={downloadSelected}>
               <Download size={15} />

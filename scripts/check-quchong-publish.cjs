@@ -47,19 +47,19 @@ const quchong = require('../src/native/quchong');
 
     // 3) 清理中断留下的临时文件：只删超过时限的，正在写的保留；不碰别的文件。
     const old = Date.now() / 1000 - 3 * 3600;
-    const stale = ['.hongguo-quchong-1.mp4', '.hongguo-quchong-pre-2.mkv'];
+    const stale = ['.ai-drama-quchong-1.mp4', '.ai-drama-quchong-pre-2.mkv'];
     for (const name of stale) {
       fs.writeFileSync(path.join(dir, name), 'x');
       fs.utimesSync(path.join(dir, name), old, old);
     }
-    fs.mkdirSync(path.join(dir, '.hongguo-quchong-sep-3'));
-    fs.writeFileSync(path.join(dir, '.hongguo-quchong-sep-3', 'audio.wav'), 'x');
-    fs.utimesSync(path.join(dir, '.hongguo-quchong-sep-3'), old, old);
-    fs.writeFileSync(path.join(dir, '.hongguo-quchong-live.mp4'), 'still writing');
+    fs.mkdirSync(path.join(dir, '.ai-drama-quchong-sep-3'));
+    fs.writeFileSync(path.join(dir, '.ai-drama-quchong-sep-3', 'audio.wav'), 'x');
+    fs.utimesSync(path.join(dir, '.ai-drama-quchong-sep-3'), old, old);
+    fs.writeFileSync(path.join(dir, '.ai-drama-quchong-live.mp4'), 'still writing');
     const removed = await quchong.sweepStaleTemps(dir);
     assert.equal(removed, 3);
-    for (const name of [...stale, '.hongguo-quchong-sep-3']) assert.equal(fs.existsSync(path.join(dir, name)), false);
-    assert.equal(fs.existsSync(path.join(dir, '.hongguo-quchong-live.mp4')), true, '正在写的临时文件不能删');
+    for (const name of [...stale, '.ai-drama-quchong-sep-3']) assert.equal(fs.existsSync(path.join(dir, name)), false);
+    assert.equal(fs.existsSync(path.join(dir, '.ai-drama-quchong-live.mp4')), true, '正在写的临时文件不能删');
     assert.equal(fs.existsSync(path.join(dir, '剧_第001集.mp4')), true, '成品不能删');
     assert.equal(await quchong.sweepStaleTemps(path.join(dir, 'missing')), 0);
     console.log('PASS outputs never overwrite, work without hard links, and stale temp files are swept');

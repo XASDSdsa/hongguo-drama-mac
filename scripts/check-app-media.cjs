@@ -122,7 +122,9 @@ function load(url, mode = 'ok', key = contentKey) {
     await h.context.executeHongguoDownload(task);
     assert.equal(task.status, 'completed');
     assert.deepEqual(fs.readFileSync(task.savePath), clearBytes);
-    assert.deepEqual(fs.readdirSync(h.dir), ['final.mp4']);
+    // 原集下进剧文件夹里的「原剧」，外层没有中间文件。
+    assert.deepEqual(fs.readdirSync(h.dir), ['原剧']);
+    assert.deepEqual(fs.readdirSync(path.join(h.dir, '原剧')), ['final.mp4']);
   });
   await check('cancel during native decryption kills child and removes partial output', async () => {
     const h = load(url, 'wait');

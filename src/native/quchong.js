@@ -649,7 +649,7 @@ async function publishOutput(tmp, dst) {
 }
 
 /**
- * 删掉文件夹里上次中断（崩溃、断电、强制退出）留下的临时文件：.hongguo-quchong-*.mp4 / -pre-*.mkv / -sep-* 目录。
+ * 删掉文件夹里上次中断（崩溃、断电、强制退出）留下的临时文件：.ai-drama-quchong-*.mp4 / -pre-*.mkv / -sep-* 目录。
  * 只删超过 maxAgeMs 没动过的，正在写的临时文件一直在更新修改时间，不会被误删。
  */
 async function sweepStaleTemps(dir, maxAgeMs = 2 * 60 * 60 * 1000) {
@@ -661,7 +661,7 @@ async function sweepStaleTemps(dir, maxAgeMs = 2 * 60 * 60 * 1000) {
   }
   let removed = 0;
   for (const name of entries) {
-    if (!name.startsWith('.hongguo-quchong-')) continue;
+    if (!name.startsWith('.ai-drama-quchong-')) continue;
     const full = path.join(dir, name);
     try {
       const stat = await fsp.stat(full);
@@ -702,7 +702,7 @@ async function renderSeparately({
   onLog,
   onStage,
 }) {
-  const work = path.join(path.dirname(output), `.hongguo-quchong-sep-${randomUUID()}`);
+  const work = path.join(path.dirname(output), `.ai-drama-quchong-sep-${randomUUID()}`);
   await fsp.mkdir(work, { recursive: true });
   const quiet = (args) =>
     runProcess(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', ...args], 0, null, signal);
@@ -825,7 +825,7 @@ async function encodeOne({
     if (!music.has_audio) throw new Error(`BGM 没有可用音频轨：${bgm}`);
   }
   await fsp.mkdir(path.dirname(dst), { recursive: true });
-  const tmp = path.join(path.dirname(dst), `.hongguo-quchong-${randomUUID()}.mp4`);
+  const tmp = path.join(path.dirname(dst), `.ai-drama-quchong-${randomUUID()}.mp4`);
   let rolled;
   let holdingSession = false;
   try {
@@ -1114,7 +1114,7 @@ async function runJob(args) {
   const first = probed.get(parts[0].src);
   const mergeStart = Date.now();
   await fsp.mkdir(path.dirname(dst), { recursive: true });
-  const middle = path.join(path.dirname(dst), `.hongguo-quchong-pre-${randomUUID()}.mkv`);
+  const middle = path.join(path.dirname(dst), `.ai-drama-quchong-pre-${randomUUID()}.mkv`);
   try {
     const command = buildPrepareCommand({
       segments: parts,

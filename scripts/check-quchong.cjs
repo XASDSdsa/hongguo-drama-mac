@@ -235,7 +235,7 @@ async function main() {
   assert.deepEqual(quchong.encoderArgs('nvenc', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_nvenc']);
   assert.deepEqual(quchong.encoderArgs('amf', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_amf']);
   assert.deepEqual(quchong.encoderArgs('qsv', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_qsv']);
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hongguo-quchong-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-drama-quchong-'));
   try {
     const src = path.join(dir, 'source.mp4');
     const bgm = path.join(dir, 'bgm.m4a');
@@ -524,7 +524,7 @@ async function main() {
     } catch (error) {
       if (!/取消|退出码/.test(error.message)) throw error;
     }
-    const leftovers = (await fs.readdir(dir)).filter((name) => name.startsWith('.hongguo-quchong-'));
+    const leftovers = (await fs.readdir(dir)).filter((name) => name.startsWith('.ai-drama-quchong-'));
     if (leftovers.length) throw new Error(`取消后留下临时文件：${leftovers.join(', ')}`);
     console.log('quchong check passed');
   } finally {

@@ -8,7 +8,7 @@ const path = require('node:path');
 const { transcribeAudio, checkWhisper, cleanTranscript } = require('../src/native/whisper');
 
 (async () => {
-  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'hongguo-whisper-check-'));
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-whisper-check-'));
   try {
     const model = path.join(root, 'ggml-tiny.bin');
     await fsp.writeFile(model, Buffer.alloc(4096, 1));

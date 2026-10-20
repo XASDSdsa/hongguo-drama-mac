@@ -43,7 +43,7 @@ function run(command, args) {
 try {
   if (!['darwin-arm64', 'win32-x64'].includes(target))
     throw new Error(`Unsupported Jianying runtime target: ${target}`);
-  const executableName = process.platform === 'win32' ? 'hongguo-jianying.exe' : 'hongguo-jianying';
+  const executableName = process.platform === 'win32' ? 'jianying-runtime.exe' : 'jianying-runtime';
   const output = path.join(root, 'build', 'jianying', target);
   const manifestPath = path.join(output, 'manifest.json');
   if (!process.argv.includes('--force') && fs.existsSync(manifestPath)) {

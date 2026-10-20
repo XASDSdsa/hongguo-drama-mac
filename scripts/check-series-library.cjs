@@ -255,6 +255,11 @@ async function check(name, fn) {
     assert.equal(series.source, '红果');
     assert.match(series.coverUrl, /^hongguo-local:\/\//, 'the cover file in the folder is preferred');
     assert.equal(series.hasSynopsis, true);
+    // 下载目录里的剧：原集、封面、简介自动挪进「原剧」，外层只留成品。
+    for (const name of ['同名剧_第001集.mp4', '同名剧_第002集.mp4', '封面.jpg', '简介.txt']) {
+      assert.ok(fs.existsSync(path.join(root, '同名剧', '原剧', name)), `${name} moved into 原剧`);
+      assert.ok(!fs.existsSync(path.join(root, '同名剧', name)), `${name} no longer outside`);
+    }
 
     const imported = await handlers['library-import']({});
     assert.equal(imported.success, true);
@@ -272,6 +277,21 @@ async function check(name, fn) {
       ],
     );
     assert.equal(detail.outputDir, path.join(series.path, '去重'));
+    assert.ok(detail.episodes.every((item) => path.dirname(item.path) === path.join(series.path, '原剧')));
+    // 导入的文件夹不动：原集还在顶层。
+    const importedDetail = await handlers['library-episodes']({}, path.join(tmp, 'imported', '外来剧'));
+    assert.equal(importedDetail.episodes.length, 1);
+    assert.ok(
+      fs.existsSync(path.join(tmp, 'imported', '外来剧', '外来剧_第001集.mp4')),
+      'imported folders are never moved',
+    );
+    assert.ok(!fs.existsSync(path.join(tmp, 'imported', '外来剧', '原剧')));
+    // 外层的文件（旧位置）不再算这部剧的原集。
+    const oldPlace = await handlers['library-dedup'](
+      {},
+      { dir: series.path, mode: 'episode', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+    );
+    assert.match(oldPlace.error, /不在这部剧/);
     assert.equal((await handlers['library-episodes']({}, path.join(tmp, 'elsewhere'))).success, false);
 
     const missingInput = await handlers['library-dedup']({}, { dir: series.path, files: [] });
@@ -292,7 +312,7 @@ async function check(name, fn) {
     // 没选定新剧名不能开始：成品要用新剧名命名
     const noTitle = await handlers['library-dedup'](
       {},
-      { dir: series.path, mode: 'episode', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+      { dir: series.path, mode: 'episode', files: [path.join(series.path, '原剧', '同名剧_第002集.mp4')] },
     );
     assert.match(noTitle.error, /选定新剧名/);
     context.libraryReleaseTitle = () => '新剧名';
@@ -301,7 +321,7 @@ async function check(name, fn) {
       {
         dir: series.path,
         mode: 'episode',
-        files: [path.join(series.path, '同名剧_第002集.mp4')],
+        files: [path.join(series.path, '原剧', '同名剧_第002集.mp4')],
       },
     );
     assert.equal(started.success, true, started.error);
@@ -311,7 +331,7 @@ async function check(name, fn) {
     // 同一部剧同一时间只跑一批
     const twice = await handlers['library-dedup'](
       {},
-      { dir: series.path, mode: 'episode', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+      { dir: series.path, mode: 'episode', files: [path.join(series.path, '原剧', '同名剧_第002集.mp4')] },
     );
     assert.match(twice.error, /正在处理/);
     vm.runInContext('for (const b of quchongBatches.values()) b.finished = true', context);
@@ -322,7 +342,7 @@ async function check(name, fn) {
     );
     const whileDrafting = await handlers['library-dedup'](
       {},
-      { dir: series.path, mode: 'resplit', files: [path.join(series.path, '同名剧_第002集.mp4')] },
+      { dir: series.path, mode: 'resplit', files: [path.join(series.path, '原剧', '同名剧_第002集.mp4')] },
     );
     assert.match(whileDrafting.error, /剪映草稿正在生成/);
     vm.runInContext('libraryDraftJobs.clear()', context);
@@ -466,7 +486,8 @@ async function check(name, fn) {
       haveFfmpeg = false;
     }
     if (haveFfmpeg) {
-      const real = path.join(root, '真剧');
+      const realDir = path.join(root, '真剧');
+      const real = path.join(realDir, '原剧');
       fs.mkdirSync(real, { recursive: true });
       for (const n of [1, 2]) {
         require('node:child_process').execFileSync('ffmpeg', [
@@ -498,7 +519,7 @@ async function check(name, fn) {
       const split = await handlers['library-dedup'](
         {},
         {
-          dir: real,
+          dir: realDir,
           files: [path.join(real, '真剧_第002集.mp4'), path.join(real, '真剧_第001集.mp4')],
           split: { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5, start_number: 3 },
           opts: { speed_min: 1.03, speed_max: 1.2 },
@@ -511,7 +532,7 @@ async function check(name, fn) {
       const estimate = await handlers['library-estimate'](
         {},
         {
-          dir: real,
+          dir: realDir,
           files: [path.join(real, '真剧_第001集.mp4'), path.join(real, '真剧_第002集.mp4')],
           split: { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5, start_number: 3 },
           opts: { speed_min: 1.03, speed_max: 1.2 },
@@ -524,7 +545,7 @@ async function check(name, fn) {
       assert.equal(estimate.startNumber, 3);
       assert.ok(estimate.totalSeconds > 0 && estimate.count >= 1 && estimate.minCount <= estimate.count);
       assert.ok(estimate.maxCount >= estimate.count);
-      assert.equal((await handlers['library-estimate']({}, { dir: real, files: [] })).success, false);
+      assert.equal((await handlers['library-estimate']({}, { dir: realDir, files: [] })).success, false);
       const tasks = vm
         .runInContext('[...quchongBatches.values()].flatMap((b) => b.tasks)', context)
         .filter((item) => item.segments);
@@ -533,7 +554,7 @@ async function check(name, fn) {
         tasks.map((item) => path.basename(item.dst)),
         tasks.map((_, i) => `真剧_第${String(i + 3).padStart(3, '0')}集.mp4`),
       );
-      assert.ok(tasks.every((item) => path.dirname(item.dst) === path.join(real, '去重')));
+      assert.ok(tasks.every((item) => path.dirname(item.dst) === path.join(realDir, '去重')));
       assert.ok(
         tasks.every((item) => item.segments.every((segment) => segment.speed >= 1.03 && segment.speed <= 1.2)),
         '每段都带着自己所属原集的倍数',
@@ -561,7 +582,7 @@ async function check(name, fn) {
   await check('main: failed downloads carry a reason (missing resource vs network) and the task to retry', async () => {
     const root = path.join(tmp, 'fail-dl');
     const dir = path.join(root, '失败剧');
-    for (const n of [1, 2]) touch(path.join(dir, `失败剧_第00${n}集.mp4`));
+    for (const n of [1, 2]) touch(path.join(dir, '原剧', `失败剧_第00${n}集.mp4`));
     const registry = [
       {
         series_id: '77',
@@ -604,11 +625,11 @@ async function check(name, fn) {
     assert.ok(!byIndex.has(7) || byIndex.get(7).state === 'notDownloaded');
 
     // 「开始处理」的提醒直接写下载失败的原因，而不是只说“下载失败”。
-    touch(path.join(dir, '失败剧_第004集.mp4'));
-    touch(path.join(dir, '失败剧_第005集.mp4'));
+    touch(path.join(dir, '原剧', '失败剧_第004集.mp4'));
+    touch(path.join(dir, '原剧', '失败剧_第005集.mp4'));
     const asked = await handlers['library-dedup'](
       {},
-      { dir, files: [1, 2, 4].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+      { dir, files: [1, 2, 4].map((n) => path.join(dir, '原剧', `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
     );
     assert.equal(asked.needsDecision, true);
     assert.equal(asked.kind, 'download');
@@ -618,14 +639,14 @@ async function check(name, fn) {
     assert.match(reason.detail, /第 3 集未开放/);
     const askedNetwork = await handlers['library-dedup'](
       {},
-      { dir, files: [4, 5].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+      { dir, files: [4, 5].map((n) => path.join(dir, '原剧', `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
     );
     assert.equal(askedNetwork.success, false);
     assert.ok(!askedNetwork.needsDecision);
     assert.match(askedNetwork.error, /从第一集开始连续处理/, '重新拆分不能跳着选：只能整部或前 N 集');
     const skipFirst = await handlers['library-dedup'](
       {},
-      { dir, files: [2, 4].map((n) => path.join(dir, `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
+      { dir, files: [2, 4].map((n) => path.join(dir, '原剧', `失败剧_第00${n}集.mp4`)), split: {}, opts: {} },
     );
     assert.match(skipFirst.error, /从第一集开始连续处理/, 'a selection that skips the first episode is rejected');
   });
@@ -634,8 +655,8 @@ async function check(name, fn) {
     await check('main: missing episodes — platform gaps splice, undownloaded gaps need a decision', async () => {
       const root = path.join(tmp, 'gap-dl');
       const dir = path.join(root, '缺集剧');
-      fs.mkdirSync(dir, { recursive: true });
-      for (const n of [1, 2, 5]) realEpisode(path.join(dir, `缺集剧_第00${n}集.mp4`));
+      fs.mkdirSync(path.join(dir, '原剧'), { recursive: true });
+      for (const n of [1, 2, 5]) realEpisode(path.join(dir, '原剧', `缺集剧_第00${n}集.mp4`));
       const registry = [
         {
           series_id: '9',
@@ -653,7 +674,7 @@ async function check(name, fn) {
       const { context, handlers, events } = makeMain(root, path.join(tmp, 'ud-gap'), registry);
       const split = { min_len: 5, max_len: 12, head_trim: 0.5, tail_trim: 0.5 };
       const opts = { speed_min: 1.03, speed_max: 1.2 };
-      const pick = (...numbers) => numbers.map((n) => path.join(dir, `缺集剧_第00${n}集.mp4`));
+      const pick = (...numbers) => numbers.map((n) => path.join(dir, '原剧', `缺集剧_第00${n}集.mp4`));
 
       const detail = await handlers['library-episodes']({}, dir);
       deq(
@@ -702,7 +723,7 @@ async function check(name, fn) {
       const downloaded = [];
       context.enqueueEpisodes = async ({ episodes }) => {
         downloaded.push(...episodes.map((episode) => episode.vid_index));
-        const file = path.join(dir, '缺集剧_第003集.mp4');
+        const file = path.join(dir, '原剧', '缺集剧_第003集.mp4');
         realEpisode(file);
         vm.runInContext(
           `downloadTasks.push({ status: 'completed', savePath: ${JSON.stringify(file)}, hongguoInfo: { vid: 'v3', series_id: '9', vid_index: 3 } })`,
@@ -746,8 +767,8 @@ async function check(name, fn) {
       async () => {
         const root = path.join(tmp, 'run-log');
         const dir = path.join(root, '跑批剧');
-        fs.mkdirSync(dir, { recursive: true });
-        for (const n of [1, 2]) realEpisode(path.join(dir, `跑批剧_第00${n}集.mp4`));
+        fs.mkdirSync(path.join(dir, '原剧'), { recursive: true });
+        for (const n of [1, 2]) realEpisode(path.join(dir, '原剧', `跑批剧_第00${n}集.mp4`));
         const { context, handlers, events } = makeMain(root, path.join(tmp, 'ud-run'), []);
         // 这个测试要真的跑：把测试夹具里停掉的队列泵换回真实的。
         context.pumpAllQuchongBatches = vm.runInContext(
@@ -759,7 +780,7 @@ async function check(name, fn) {
           {
             dir,
             mode: 'episode',
-            files: [1, 2].map((n) => path.join(dir, `跑批剧_第00${n}集.mp4`)),
+            files: [1, 2].map((n) => path.join(dir, '原剧', `跑批剧_第00${n}集.mp4`)),
             opts: { speed_min: 1.03, speed_max: 1.2, jobs: 2 },
           },
         );

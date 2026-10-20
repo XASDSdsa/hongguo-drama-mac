@@ -49,12 +49,12 @@ if sys.platform == "win32":
         a.scripts,
         [],
         exclude_binaries=True,
-        name="hongguo-jianying",
+        name="jianying-runtime",
         console=True,
         strip=False,
         upx=False,
     )
-    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="hongguo-jianying")
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="jianying-runtime")
 else:
     exe = EXE(
         pyz,
@@ -62,7 +62,7 @@ else:
         a.binaries,
         a.datas,
         [],
-        name="hongguo-jianying",
+        name="jianying-runtime",
         console=True,
         strip=False,
         upx=False,

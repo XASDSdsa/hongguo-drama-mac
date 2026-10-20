@@ -239,7 +239,7 @@ async function transcribeAudio(audioPath, options = {}, settings = {}) {
   const result = resolveWhisper(settings);
   if (!result.available) throw unavailableError(result);
   if (!fileUsable(audioPath, false, result.config.platform)) throw new Error('待转写音频不存在或为空');
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hongguo-whisper-'));
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-whisper-'));
   const outputPrefix = path.join(tempDir, 'transcript');
   const args = [
     '-m',

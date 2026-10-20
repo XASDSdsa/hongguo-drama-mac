@@ -6,7 +6,7 @@ function verifyBundle(root, platform, arch) {
   // 两个发布平台都必须带上剪映运行时：用户电脑上没有 Python，缺了它就生成不了剪映草稿。
   if (!['darwin', 'win32'].includes(platform)) return null;
   const target = `${platform}-${arch}`;
-  const executableName = platform === 'win32' ? 'hongguo-jianying.exe' : 'hongguo-jianying';
+  const executableName = platform === 'win32' ? 'jianying-runtime.exe' : 'jianying-runtime';
   const bundle = path.join(root, 'build', 'jianying', target);
   const manifestPath = path.join(bundle, 'manifest.json');
   if (!fs.existsSync(manifestPath))

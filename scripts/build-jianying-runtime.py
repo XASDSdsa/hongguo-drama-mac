@@ -1,6 +1,6 @@
 """Freeze the Jianying draft adapter and its Python dependencies for macOS.
 
-The generated ``hongguo-jianying`` executable accepts the same arguments as
+The generated ``jianying-runtime`` executable accepts the same arguments as
 ``python SCRIPT.py ...``.  It embeds CPython, pyJianYingDraft, pymediainfo and
 imageio, so an installed app does not need Python, pip, or a package download.
 """
@@ -97,8 +97,8 @@ def main() -> None:
     # macOS: one self-contained file.  Windows: a folder (exe + _internal).  A one-file exe on
     # Windows unpacks itself to %TEMP% on every start (slow, often blocked by antivirus) and its
     # real worker is a second process that is orphaned when only the parent is killed.
-    executable_name = "hongguo-jianying.exe" if windows else "hongguo-jianying"
-    frozen = (dist / "hongguo-jianying" / executable_name) if windows else (dist / "hongguo-jianying")
+    executable_name = "jianying-runtime.exe" if windows else "jianying-runtime"
+    frozen = (dist / "jianying-runtime" / executable_name) if windows else (dist / "jianying-runtime")
     subprocess.run(
         [
             sys.executable,

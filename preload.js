@@ -9,7 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 红果解析与下载
   hongguoResolve: (input) => ipcRenderer.invoke('hongguo-resolve', input),
   hongguoDownloadBatch: (payload) => ipcRenderer.invoke('hongguo-download-batch', payload),
-  downloadSeriesEpisodes: (seriesId, indices) => ipcRenderer.invoke('download-series-episodes', seriesId, indices),
 
   // 搜索（内嵌浏览器嗅探）
   searchSeries: (keyword, options) => ipcRenderer.invoke('search-series', keyword, options),
@@ -22,38 +21,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   searchWindowShow: (visible, sourceUrl) => ipcRenderer.invoke('search-window-show', visible, sourceUrl),
   getSeriesList: () => ipcRenderer.invoke('get-series-list'),
-  removeSeries: (seriesId) => ipcRenderer.invoke('remove-series', seriesId),
-  purgeEmptySeries: () => ipcRenderer.invoke('purge-empty-series'),
-  restoreDismissedSeries: () => ipcRenderer.invoke('restore-dismissed-series'),
-  dismissedCount: () => ipcRenderer.invoke('dismissed-count'),
 
   // 在线播放（内存缓存 + 自定义流协议，不落盘）
-  prepareOnlinePlay: (payload) => ipcRenderer.invoke('prepare-online-play', payload),
-  releaseOnlinePlay: (payload) => ipcRenderer.invoke('release-online-play', payload),
-  onlineCacheStatus: () => ipcRenderer.invoke('online-cache-status'),
-  clearOnlineCache: () => ipcRenderer.invoke('clear-online-cache'),
-  onOnlinePlayProgress: (cb) => {
-    const listener = (_e, data) => cb(data);
-    ipcRenderer.on('online-play-progress', listener);
-    return () => ipcRenderer.removeListener('online-play-progress', listener);
-  },
 
   // 兼容模式（HEVC -> H.264 转码，解决「黑屏有声」）
-  transcodeForPlayback: (payload) => ipcRenderer.invoke('transcode-for-playback', payload),
-  cancelTranscodeForPlayback: (payload) => ipcRenderer.invoke('cancel-transcode-for-playback', payload),
-  compatCacheStatus: () => ipcRenderer.invoke('compat-cache-status'),
-  clearCompatCache: () => ipcRenderer.invoke('clear-compat-cache'),
   decodeCapability: () => ipcRenderer.invoke('decode-capability'),
-  onTranscodeProgress: (cb) => {
-    const listener = (_e, data) => cb(data);
-    ipcRenderer.on('transcode-progress', listener);
-    return () => ipcRenderer.removeListener('transcode-progress', listener);
-  },
 
   // 浏览（分类页）
   browseCategories: () => ipcRenderer.invoke('browse-categories'),
   browseList: (options) => ipcRenderer.invoke('browse-list', options),
-  playSeries: (payload) => ipcRenderer.invoke('play-series', payload),
   onNavigate: (cb) => {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('navigate', listener);
@@ -115,13 +91,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('ai-material-progress', listener);
     return () => ipcRenderer.removeListener('ai-material-progress', listener);
   },
-  savePlaybackPosition: (seriesId, vidIndex, currentTime) =>
-    ipcRenderer.invoke('save-playback-position', seriesId, vidIndex, currentTime),
-  getPlaybackPosition: (seriesId) => ipcRenderer.invoke('get-playback-position', seriesId),
 
   // 一键合并
   getFfmpegStatus: () => ipcRenderer.invoke('get-ffmpeg-status'),
-  mergeSeries: (seriesId, outputName, options) => ipcRenderer.invoke('merge-series', seriesId, outputName, options),
   cancelMerge: (id) => ipcRenderer.invoke('cancel-merge', id),
   getMergeTasks: () => ipcRenderer.invoke('get-merge-tasks'),
   deleteMergeTask: (id) => ipcRenderer.invoke('delete-merge-task', id),
@@ -134,16 +106,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('merge-task-added', listener);
     return () => ipcRenderer.removeListener('merge-task-added', listener);
-  },
-  onMergeCompleted: (cb) => {
-    const listener = (_e, data) => cb(data);
-    ipcRenderer.on('merge-completed', listener);
-    return () => ipcRenderer.removeListener('merge-completed', listener);
-  },
-  onMergeFailed: (cb) => {
-    const listener = (_e, data) => cb(data);
-    ipcRenderer.on('merge-failed', listener);
-    return () => ipcRenderer.removeListener('merge-failed', listener);
   },
 
   // 设置
@@ -168,10 +130,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件清理
   deleteTaskWithFiles: (taskId, deleteFiles) => ipcRenderer.invoke('delete-task', taskId, { deleteFiles }),
   deleteTasksWithFiles: (taskIds, deleteFiles) => ipcRenderer.invoke('delete-tasks', taskIds, { deleteFiles }),
-  deleteSeriesFiles: (seriesId, options) => ipcRenderer.invoke('delete-series-files', seriesId, options),
-  deleteEpisodeFile: (seriesId, vidIndex) => ipcRenderer.invoke('delete-episode-file', seriesId, vidIndex),
-  getStorageUsage: () => ipcRenderer.invoke('get-storage-usage'),
-  deleteAllDownloaded: () => ipcRenderer.invoke('delete-all-downloaded'),
   stopDownload: (taskId) => ipcRenderer.invoke('stop-download', taskId),
   retryTask: (taskId) => ipcRenderer.invoke('retry-task', taskId),
   retryTasks: (taskIds) => ipcRenderer.invoke('retry-tasks', taskIds),

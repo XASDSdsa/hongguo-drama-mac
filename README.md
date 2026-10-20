@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="build/icon.png" alt="红果短剧 Mac 应用图标" width="112" height="112">
+  <img src="build/icon.png" alt="AI短剧助手 应用图标" width="112" height="112">
 </p>
 
-<h1 align="center">红果短剧 · Mac 短剧播放器与下载器</h1>
+<h1 align="center">AI短剧助手</h1>
 
 <p align="center">
   在 Mac 上发现短剧、按集下载、接着观看，把已下载的分集合并为一个视频。
@@ -23,7 +23,7 @@
   <a href="#安装与开始使用">安装说明</a>
 </p>
 
-**红果短剧**是一款面向 Apple Silicon 的开源 Mac 短剧播放器与下载器。支持红果、西饭与河马来源的剧名搜索、选集下载和本地剧库，红果与西饭还提供分类浏览；播放进度、下载队列、视频去重与剪映草稿都在同一个桌面应用里管理。
+**AI短剧助手**是一款面向 Apple Silicon 的开源 Mac 短剧播放器与下载器。支持红果、西饭与河马来源的剧名搜索、选集下载和本地剧库，红果与西饭还提供分类浏览；播放进度、下载队列、视频去重与剪映草稿都在同一个桌面应用里管理。
 
 这是社区维护的修改版本，**不是红果或西饭官方客户端，也未获平台官方背书**。Apple 公证是发行包的安全检查，不代表 App Store 审核或内容授权。
 
@@ -36,7 +36,7 @@
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
 1. 打开 [最新版本下载页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/latest)。Windows 下载 `hongguo-downloader-1.1.30-Setup.exe`，免安装用同版本的 `portable.exe` 或 `win-x64.zip`。Mac 下载 `hongguo-downloader-1.1.30-mac-arm64.dmg`。解压或安装后即可使用，不需要另装 Python。
-2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
+2. 打开 DMG，把「AI短剧助手」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
 **v1.1.30 的 Mac 构建使用 ad-hoc 签名，未进行 Apple 公证。** 首次打开时请按 macOS 提示确认来源；发行页提供应用源码、FFmpeg/x264 对应源码及 DMG 的 SHA256 校验文件，方便核对下载文件。

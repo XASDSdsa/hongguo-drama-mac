@@ -6,6 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { cleanSynopsis } = require('./synopsis');
 
+// 原剧（下载的原集、原封面、原简介）放在剧文件夹下的「原剧」子文件夹；成品（去重、草稿、发布素材）在外面。
+// 用户自己导入的文件夹没有「原剧」子文件夹时，原集就是文件夹顶层的视频。
+const ORIGINAL_DIR = '原剧';
 const COVER_BASENAME = '封面';
 const SYNOPSIS_FILENAME = '简介.txt';
 const MAX_COVER_BYTES = 15 * 1024 * 1024;
@@ -34,24 +37,48 @@ function sniffImageExtension(buffer) {
   return '';
 }
 
+/** 这部剧的原剧放在哪：有「原剧」子文件夹就是它，否则是剧文件夹本身（导入的文件夹）。 */
+function originalDir(dir) {
+  const sub = path.join(dir, ORIGINAL_DIR);
+  try {
+    if (fs.statSync(sub).isDirectory()) return sub;
+  } catch (_) {}
+  return dir;
+}
+
+/** 一个原集文件属于哪个剧文件夹：在「原剧」里就往上一层。 */
+function seriesDirOf(file) {
+  const parent = path.dirname(path.resolve(String(file)));
+  return path.basename(parent) === ORIGINAL_DIR ? path.dirname(parent) : parent;
+}
+
+/** 先看「原剧」子文件夹，再看剧文件夹本身。 */
+function lookIn(dir) {
+  const original = originalDir(dir);
+  return original === dir ? [dir] : [original, dir];
+}
+
 /** 剧文件夹里已有的封面（封面.jpg/.png/.webp 之一），没有返回 null。 */
 function findCover(dir) {
-  for (const ext of COVER_EXTENSIONS) {
-    const file = path.join(dir, COVER_BASENAME + ext);
-    try {
-      if (fs.statSync(file).isFile()) return file;
-    } catch (_) {}
+  for (const base of lookIn(dir)) {
+    for (const ext of COVER_EXTENSIONS) {
+      const file = path.join(base, COVER_BASENAME + ext);
+      try {
+        if (fs.statSync(file).isFile()) return file;
+      } catch (_) {}
+    }
   }
   return null;
 }
 
 function findSynopsisFile(dir) {
-  const file = path.join(dir, SYNOPSIS_FILENAME);
-  try {
-    return fs.statSync(file).isFile() ? file : null;
-  } catch (_) {
-    return null;
+  for (const base of lookIn(dir)) {
+    const file = path.join(base, SYNOPSIS_FILENAME);
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch (_) {}
   }
+  return null;
 }
 
 /** 读剧文件夹里的简介文本；没有或读失败返回空字符串。 */
@@ -141,6 +168,10 @@ function pickFolderName({ title, seriesId, owners }) {
 }
 
 module.exports = {
+  ORIGINAL_DIR,
+  originalDir,
+  seriesDirOf,
+  COVER_EXTENSIONS,
   COVER_BASENAME,
   SYNOPSIS_FILENAME,
   sourceKey,

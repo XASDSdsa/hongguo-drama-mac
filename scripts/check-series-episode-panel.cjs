@@ -377,22 +377,6 @@ const selected = (ui) =>
     assert.equal(ui.notices.length, 0);
     assert.equal(ui.writes(), before);
   });
-  await test('play prefers a downloaded episode and does not close the page', async () => {
-    let sent;
-    const ui = mount({
-      getSeriesEpisodes: async () => response([episode(1), episode(2, 'completed')]),
-      playSeries: async (payload) => {
-        sent = payload;
-        return { success: true };
-      },
-    });
-    await ui.flush();
-    await ui.button('立即播放').props.onClick();
-    await ui.flush();
-    assert.equal(sent.vidIndex, 2);
-    assert.ok(ui.episode(1));
-    ui.unmount();
-  });
   console.log(`Series episode panel: ${passed} passed, ${failed} failed`);
   process.exitCode = failed ? 1 : 0;
 })();

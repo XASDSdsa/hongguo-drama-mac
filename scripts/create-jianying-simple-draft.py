@@ -36,7 +36,7 @@ def _load_base():
 base = _load_base()
 draft = base.draft
 TOLERANCE = base.TOLERANCE
-SCHEMA = "hongguo-jianying-draft/simple-v2"
+SCHEMA = "jianying-draft/simple-v2"
 TRACK_VIDEO = "视频"
 TRACK_AUDIO = "音频"
 TRACK_TEXT = "文案"
@@ -260,12 +260,12 @@ def main() -> int:
             "text": {"name": TRACK_TEXT, "cue_count": len(texts), "segments": texts},
         },
     }
-    (draft_dir / "hongguo-draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({
         "success": True,
         "draft_dir": str(draft_dir),
         "draft_info": str(draft_dir / "draft_info.json"),
-        "manifest": str(draft_dir / "hongguo-draft-manifest.json"),
+        "manifest": str(draft_dir / "draft-manifest.json"),
         "fps": fps,
         "duration_us": duration_us,
         "clip_count": len(shots),

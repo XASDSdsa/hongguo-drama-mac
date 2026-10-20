@@ -217,7 +217,7 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     assert.equal(task.status, 'completed', task.error);
     assert.equal(lookups, 2, 'second attempt asked for a new link');
     assert.equal(invalidated, 1, 'the stale cached link was dropped');
-    assert.equal(fs.readFileSync(path.join(root, 'gone.mp4'), 'utf8'), '0123456789');
+    assert.equal(fs.readFileSync(path.join(root, '原剧', 'gone.mp4'), 'utf8'), '0123456789');
   });
   await check('a link that keeps failing ends as failed with the retry count, not as missing', async () => {
     let lookups = 0;
@@ -290,7 +290,7 @@ function load(fetchPlayUrlSingle, overrides = {}) {
     await sleep(80);
     assert.equal(lookups, 2);
     assert.equal(h.run('downloadTasks[0].status'), 'completed');
-    assert.equal(fs.readFileSync(path.join(root, 'retry.mp4'), 'utf8'), '0123456789');
+    assert.equal(fs.readFileSync(path.join(root, '原剧', 'retry.mp4'), 'utf8'), '0123456789');
   });
   await check('extra: enqueue reuses failed task instead of competing destination writers', async () => {
     const h = hload(() => new Promise(() => {}));

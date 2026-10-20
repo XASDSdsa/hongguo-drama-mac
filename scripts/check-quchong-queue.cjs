@@ -10,7 +10,7 @@ const sourcePath = path.resolve(__dirname, '../main.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const req = createRequire(sourcePath);
 const native = req('./src/native/quchong');
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-quchong-queue-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-drama-quchong-queue-'));
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 let serial = 0;
