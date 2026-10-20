@@ -241,6 +241,12 @@ input::placeholder {
   font-size: 12px;
   color: var(--text-secondary);
 }
+.toolbar-back {
+  -webkit-app-region: no-drag;
+}
+.toolbar-back-icon {
+  transform: rotate(180deg);
+}
 .toolbar-caption {
   color: var(--text-tertiary);
   font-size: 11px;

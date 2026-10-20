@@ -166,6 +166,17 @@ async function check(name, fn) {
     assert.equal(first.hasSynopsis, false);
   });
 
+  await check('a series whose download just started (empty 原剧, nothing downloaded yet) is listed at once', () => {
+    const root = path.join(tmp, 'root-new');
+    fs.mkdirSync(path.join(root, '刚点下载的剧', '原剧'), { recursive: true });
+    fs.mkdirSync(path.join(root, '随便一个空文件夹'), { recursive: true });
+    const folders = lib.scanLibrary(root, []);
+    assert.deepEqual(
+      folders.map((item) => [item.name, item.videoCount]),
+      [['刚点下载的剧', 0]],
+    );
+  });
+
   await check('imported folder list is remembered and removing it never touches the folder', () => {
     const file = path.join(tmp, 'state', 'library-folders.json');
     const list = lib.createFolderList(file);

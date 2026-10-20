@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesLibrary.css';
 import { Film, FolderPlus, RefreshCw, X } from './icons';
 import Pager from './Pager';
@@ -37,7 +37,7 @@ function cardStatus(item) {
 }
 
 /** 管理剧集：剧列表（搜索、分页）。点一部剧进入它的子页面，不是弹窗。 */
-export default function SeriesLibrary({ active = true, onNavigate, target = null }) {
+export default function SeriesLibrary({ active = true, onNavigate, target = null, onBackChange }) {
   const [folders, setFolders] = useState([]);
   const [root, setRoot] = useState('');
   const [loading, setLoading] = useState(false);
@@ -49,21 +49,57 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
     LIST_PAGE_SIZES.includes(readView().listPageSize) ? readView().listPageSize : 24,
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    const result = await window.electronAPI.libraryList();
-    if (result?.success) {
-      setFolders(result.folders);
-      setRoot(result.root);
-    } else setError(result?.error || '读取失败');
-    setLoading(false);
+  // quiet：后台自动刷新时不转圈、不清掉错误提示，免得列表一闪一闪。
+  const load = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) {
+      setLoading(true);
+      setError('');
+    }
+    try {
+      const result = await window.electronAPI.libraryList();
+      if (result?.success) {
+        setFolders(result.folders);
+        setRoot(result.root);
+      } else if (!quiet) setError(result?.error || '读取失败');
+    } finally {
+      if (!quiet) setLoading(false);
+    }
   }, []);
 
   // 每次回到这个页面都重新扫描磁盘：下载完新集、用户手动增删文件后列表要是最新的。
   useEffect(() => {
     if (active) load();
   }, [active, load]);
+
+  // 停在列表页时：新加了下载、下完一集、下载失败或暂停，都马上重读一次（合并 1 秒内的多次事件），
+  // 刚点了下载的剧不用退出再进来才出现，卡片上的集数也跟着涨。
+  const reloadTimer = useRef(null);
+  useEffect(() => {
+    if (!active || current) return undefined;
+    const api = window.electronAPI || {};
+    const soon = () => {
+      clearTimeout(reloadTimer.current);
+      reloadTimer.current = setTimeout(() => load({ quiet: true }), 1000);
+    };
+    const offs = [
+      api.onDownloadTaskAdded?.(soon),
+      api.onDownloadCompleted?.(soon),
+      api.onDownloadFailed?.(soon),
+      api.onDownloadStopped?.(soon),
+      api.onDownloadQueueChanged?.(soon),
+    ];
+    return () => {
+      offs.forEach((off) => off?.());
+      clearTimeout(reloadTimer.current);
+    };
+  }, [active, current, load]);
+
+  // 打开了某部剧：窗口顶栏左边显示「返回剧集列表」。
+  const closeDetail = useCallback(() => setCurrent(null), []);
+  useEffect(() => {
+    onBackChange?.(current ? closeDetail : null);
+  }, [current, closeDetail, onBackChange]);
+  useEffect(() => () => onBackChange?.(null), [onBackChange]);
 
   // 从别的页面带着剧编号跳过来：直接打开那部剧。
   useEffect(() => {
@@ -113,7 +149,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
   }, [page, currentPage]);
 
   if (current) {
-    return <SeriesDetail key={current.path} folder={current} active={active} onBack={() => setCurrent(null)} />;
+    return <SeriesDetail key={current.path} folder={current} active={active} />;
   }
 
   return (
@@ -130,7 +166,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
           <button className="btn" onClick={importFolder}>
             <FolderPlus size={14} /> 导入已有剧
           </button>
-          <button className="btn" onClick={load} disabled={loading}>
+          <button className="btn" onClick={() => load()} disabled={loading}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} /> 刷新
           </button>
         </div>

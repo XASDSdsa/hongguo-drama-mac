@@ -71,7 +71,14 @@ function describeFolder(dir) {
     newest = Math.max(newest, episode.mtime);
   }
   const cover = seriesInfo.findCover(dir);
-  if (!videos && !cover) return null;
+  // 刚点了下载、第一集和封面都还没下好时也要列出来：软件开始下载时就建好了「原剧」文件夹。
+  if (!videos && !cover) {
+    let started = false;
+    try {
+      started = fs.statSync(path.join(dir, seriesInfo.ORIGINAL_DIR)).isDirectory();
+    } catch (_) {}
+    if (!started) return null;
+  }
   if (!newest) {
     try {
       newest = fs.statSync(dir).mtimeMs;

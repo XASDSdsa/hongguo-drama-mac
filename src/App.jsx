@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
-import { Settings, Play, Home, Search, Folder } from './components/icons';
+import { Settings, Play, Home, Search, Folder, ChevronRight } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import SettingsPage from './components/Settings';
 import Browse from './components/Browse';
@@ -19,6 +19,9 @@ export default function App() {
   const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
   const [pageTarget, setPageTarget] = useState(null); // 当前流程页的剧集上下文
+  // 管理剧集里打开了某部剧时，顶栏左边换成「返回剧集列表」（不再单独占页面里的一行）。
+  const [libraryBack, setLibraryBack] = useState(null);
+  const changeLibraryBack = useCallback((back) => setLibraryBack(() => back), []);
 
   useEffect(() => {
     window.electronAPI.getAppInfo().then((info) => {
@@ -58,7 +61,14 @@ export default function App() {
       case 'browse':
         return <Browse active={page === id} onNavigate={navigate} />;
       case 'library':
-        return <SeriesLibrary active={page === id} target={pageTarget} onNavigate={navigate} />;
+        return (
+          <SeriesLibrary
+            active={page === id}
+            target={pageTarget}
+            onNavigate={navigate}
+            onBackChange={changeLibraryBack}
+          />
+        );
       case 'settings':
         return <SettingsPage active={page === id} />;
       case 'download':
@@ -117,7 +127,13 @@ export default function App() {
       </aside>
       <div className="main-wrapper">
         <header className="window-toolbar">
-          <span className="toolbar-location">{currentPage?.label}</span>
+          {page === 'library' && libraryBack ? (
+            <button className="btn btn-sm toolbar-back" onClick={libraryBack}>
+              <ChevronRight size={14} className="toolbar-back-icon" /> 返回剧集列表
+            </button>
+          ) : (
+            <span className="toolbar-location">{currentPage?.label}</span>
+          )}
           <span className="toolbar-caption">AI短剧助手</span>
         </header>
         {storageError && (

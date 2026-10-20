@@ -75,6 +75,14 @@ function mount(file, api, props = {}) {
     );
     return module.exports;
   };
+  const loadModule = (name) => {
+    const module = { exports: {} };
+    vm.runInNewContext(
+      transformSync(fs.readFileSync(`${__dirname}/${name}`, 'utf8'), { loader: 'js', format: 'cjs' }).code,
+      { module, exports: module.exports },
+    );
+    return module.exports;
+  };
   const context = {
     module: { exports: {} },
     exports: {},
@@ -87,7 +95,11 @@ function mount(file, api, props = {}) {
             ? loadHelper()
             : name === './downloadSeries.mjs'
               ? require('./downloadSeries.mjs')
-              : {},
+              : name === './pagination'
+                ? loadModule('pagination.js')
+                : name === './useLiveData'
+                  ? () => [null, () => {}]
+                  : {},
     window,
     document: { querySelector: () => null },
     navigator: {},
@@ -726,6 +738,58 @@ function mount(file, api, props = {}) {
     assert.equal(ui.find((n) => n.props['aria-label'] === '下载目录').props.value, '/new');
     assert.ok(!ui.text().includes('已保存'));
     ui.unmount();
+  });
+  await test('library list picks up a series as soon as its download starts; back button lives in the top bar', async () => {
+    const series = { name: '新剧', path: '/root/新剧', videoCount: 0, totalEpisodes: 80, source: '红果' };
+    let listed = [];
+    let lists = 0;
+    let added = null;
+    const backs = [];
+    const ui = mount(
+      'SeriesLibrary',
+      {
+        libraryList: async () => {
+          lists += 1;
+          return { success: true, root: '/root', folders: listed };
+        },
+        onDownloadTaskAdded: (cb) => {
+          added = cb;
+          return () => {
+            added = null;
+          };
+        },
+      },
+      { active: true, onBackChange: (back) => backs.push(back) },
+    );
+    await ui.flush();
+    assert.ok(ui.text().includes('还没有剧'));
+    assert.equal(lists, 1);
+    // 停在列表页时在别处点了下载：不用退出再进来，1 秒内自动重读。
+    listed = [series];
+    assert.equal(typeof added, 'function', 'the list listens for new downloads');
+    added({ id: 't1' });
+    added({ id: 't2' });
+    ui.advanceTimers(1000);
+    await ui.flush();
+    assert.equal(lists, 2, 'several events in a row cause one re-read');
+    assert.ok(ui.text().includes('新剧'), 'the new series shows up right away');
+    // 打开这部剧：顶栏拿到「返回剧集列表」；点它回到列表，顶栏恢复。
+    assert.equal(backs.at(-1), null);
+    ui.find((n) => n.props.className === 'lib-card').props.onClick();
+    await ui.flush();
+    const back = backs.at(-1);
+    assert.equal(typeof back, 'function', 'the top bar gets a back action');
+    assert.equal(added, null, 'no list re-reads while a series is open');
+    back();
+    await ui.flush();
+    assert.equal(backs.at(-1), null, 'back on the list: the top bar shows the page name again');
+    assert.ok(ui.text().includes('新剧'));
+    ui.unmount();
+    // App 顶栏：打开了剧才显示返回按钮，页面里不再单独放一行。
+    const app = fs.readFileSync(`${__dirname}/../App.jsx`, 'utf8');
+    assert.match(app, /page === 'library' && libraryBack \?/);
+    const detailSource = fs.readFileSync(`${__dirname}/SeriesDetail.jsx`, 'utf8');
+    assert.ok(!detailSource.includes('/> 返回剧集列表') && !/onBack/.test(detailSource), 'no back button inside the page');
   });
   process.exitCode = failures ? 1 : 0;
 })();

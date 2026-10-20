@@ -7007,6 +7007,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
     fs.mkdirSync(originalsDir, { recursive: true });
   } catch (_) {}
   rememberSeriesFolder(seriesId, downloadDir);
+  folderRecordsCache = null; // 新剧文件夹马上出现在「管理剧集」和总任务里，不等 30 秒的缓存过期
   // 封面和简介跟着下载一起存进「原剧」；不等它完成，也不让它影响下载。
   void writeSeriesInfoFiles(seriesId, originalsDir, cover || (episodes[0] && episodes[0].cover));
 

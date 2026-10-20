@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
-import { Check, ChevronRight, Folder, RefreshCw } from './icons';
+import { Check, Folder, RefreshCw } from './icons';
 import DedupParams, { rangeProblems } from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
@@ -162,7 +162,7 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
 }
 
 /** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、AI 发布素材、要做的处理（去重、剪映草稿）和进度日志。 */
-export default function SeriesDetail({ folder, active = true, onBack }) {
+export default function SeriesDetail({ folder, active = true }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -537,10 +537,8 @@ export default function SeriesDetail({ folder, active = true, onBack }) {
 
   return (
     <div className="lib-container lib-detail" data-active={active}>
+      {/* 「返回剧集列表」在窗口顶栏左边（App 里），这里只放这部剧的操作。 */}
       <div className="lib-crumb">
-        <button className="btn btn-sm" onClick={onBack}>
-          <ChevronRight size={14} className="lib-back-icon" /> 返回剧集列表
-        </button>
         <div className="lib-crumb-actions">
           <button className="btn btn-sm" onClick={open} disabled={loading} title="重新读取文件夹并向来源平台核对">
             <RefreshCw size={14} className={loading ? 'spin' : ''} /> 刷新
