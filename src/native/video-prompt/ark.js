@@ -11,7 +11,9 @@ const path = require('node:path');
 
 const DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024; // 方舟文件接口的单文件上限
-const REQUEST_TIMEOUT_MS = 180000;
+const REQUEST_TIMEOUT_MS = 180000; // 上传、查状态、删除
+// 看视频回答一次可能要好几分钟（模型边看边想，答案又长）；以前 3 分钟一到就自己掐断，看着像方舟超时。
+const ASK_TIMEOUT_MS = 10 * 60 * 1000;
 const PROCESS_TIMEOUT_MS = 10 * 60 * 1000;
 const READY_STATES = new Set(['processed', 'ready', 'active', 'completed']);
 const FAILED_STATES = new Set(['failed', 'error', 'expired']);
@@ -50,16 +52,23 @@ function createArkClient({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   pollMs = 2000,
   processTimeoutMs = PROCESS_TIMEOUT_MS,
+  askTimeoutMs = ASK_TIMEOUT_MS,
 } = {}) {
   const base = String(baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const headers = { Authorization: `Bearer ${apiKey}` };
 
-  async function request(url, init, signal) {
+  async function request(url, init, signal, timeoutMs = REQUEST_TIMEOUT_MS) {
     let response;
     try {
-      response = await fetchImpl(url, { ...init, headers: { ...headers, ...(init?.headers || {}) }, signal: withTimeout(signal) });
+      response = await fetchImpl(url, {
+        ...init,
+        headers: { ...headers, ...(init?.headers || {}) },
+        signal: withTimeout(signal, timeoutMs),
+      });
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (error?.name === 'TimeoutError')
+        throw new Error(`方舟 ${Math.round(timeoutMs / 60000)} 分钟没有回应（网络慢或方舟繁忙），稍后重试`);
       throw new Error(`方舟请求失败：${redact(error?.message || error, apiKey)}`);
     }
     if (!response.ok) {
@@ -118,6 +127,7 @@ function createArkClient({
         }),
       },
       signal,
+      askTimeoutMs,
     );
     const answer = extractText(data).trim();
     if (!answer) throw new Error('方舟没有返回文字');
@@ -147,4 +157,4 @@ function createArkClient({
   return { uploadVideo, waitProcessed, ask, removeFile, askAboutVideo };
 }
 
-module.exports = { createArkClient, extractText, redact, DEFAULT_BASE_URL, MAX_UPLOAD_BYTES };
+module.exports = { createArkClient, extractText, redact, DEFAULT_BASE_URL, MAX_UPLOAD_BYTES, ASK_TIMEOUT_MS };

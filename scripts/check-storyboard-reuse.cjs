@@ -77,6 +77,7 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   // 只把真正去调方舟的那一步换成假的；软件里组织这一步的代码（deriveLibraryPrompts）照常跑，
   // 以前这里整个换掉了，结果它里面调用了一个不存在的函数也没测出来。
   const promptCalls = [];
+  let promptGate = null;
   const { context, logs } = makeMain(
     path.join(tmp, 'root'),
     path.join(tmp, 'ud'),
@@ -88,6 +89,7 @@ function makeMain(root, userData, storeExtra, modules = {}) {
       './src/native/video-prompt/derive': {
         deriveEpisodePrompts: async (args) => {
           promptCalls.push(args);
+          if (promptGate) await promptGate.promise;
           return { segments: 3, failed: 0, file: path.join(args.outDir, 'x.json') };
         },
       },
@@ -203,6 +205,38 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   await draft({ prompts: true });
   assert.ok(pipelineStarts > beforeBroken, 'broken saved results are ignored');
   console.log('PASS broken saved results: falls back quietly');
+
+  // 7. 分镜工程图在后台等方舟时，同一路马上接着做下一集的草稿；整个任务等分镜工程图做完才结束。
+  const dir2 = path.join(tmp, '剧二');
+  const files2 = [1, 2].map((n) => path.join(dir2, '去重', `剧二_第00${n}集.mp4`));
+  for (const f of files2) {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, Buffer.alloc(3000 + files2.indexOf(f), 3));
+  }
+  context.draftLanesAllowed = () => 1; // 一次只做一集，看第二集会不会被第一集的分镜工程图挡住
+  let release;
+  promptGate = { promise: new Promise((resolve) => (release = resolve)) };
+  const callsBefore = promptCalls.length;
+  const startsBefore = pipelineStarts;
+  const started2 = await context.startLibraryDrafts({ dir: dir2, files: files2, mode: 'simple', scope: { numbers: [1, 2] }, prompts: true });
+  assert.equal(started2.success, true, JSON.stringify(started2));
+  const job2 = vm.runInContext('libraryDraftJobs', context).get(path.resolve(dir2));
+  const until = async (check, what) => {
+    const deadline = Date.now() + 10000;
+    while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(check(), what);
+  };
+  await until(() => job2.done === 2, 'both drafts are made while the storyboards still wait for Ark');
+  assert.equal(pipelineStarts - startsBefore, 2);
+  assert.equal(job2.status, 'running', 'the job is not finished while storyboards are still being made');
+  assert.match(context.libraryDraftSnapshot(job2).message, /分镜工程图还剩 \d 集/);
+  assert.ok(promptCalls.length - callsBefore >= 1);
+  release();
+  promptGate = null;
+  await until(() => job2.status !== 'running', 'the job ends after the storyboards');
+  assert.equal(job2.status, 'completed');
+  assert.equal(promptCalls.length - callsBefore, 2, 'both episodes got a storyboard');
+  console.log('PASS storyboards run in the background: the next draft does not wait for Ark, the job waits for them');
 })().catch((error) => {
   console.error(error);
   process.exit(1);

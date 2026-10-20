@@ -271,7 +271,8 @@ async function main() {
   // ---- 接线：做剪映草稿时才反推，设置和界面都有对应入口 ----
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(main, /prompts: draft\.prompts === true/, '草稿支线任务带上 prompts 开关');
-  assert.match(main, /if \(item\.prompts && results\) await deriveLibraryPrompts\(job, file, item, results\)/, '拆解完成后才反推');
+  assert.match(main, /if \(item\.prompts && results\) queueLibraryPrompts\(job, file, item, results\)/, '拆解完成后才反推（后台排队，不占草稿车道）');
+  assert.match(main, /await waitLibraryPrompts\(job\)/, '整个草稿任务等分镜工程图做完才结束');
   assert.match(main, /withPrompts \? videoPromptProblem\(\) : ''/, '没填方舟 Key 或模型名就不开始');
   assert.match(main, /path\.join\(job\.dir, '视频提示词'\)/, '成果放在剧文件夹的「视频提示词」里');
   assert.match(main, /ark_video_model: ''/, '模型名没有默认值');
@@ -303,6 +304,29 @@ async function main() {
   for (const key of ['ark_base_url', 'ark_api_key', 'ark_video_model', 'video_prompt_max_seconds']) assert.ok(settingsUi.includes(`'${key}'`), `设置页要保存 ${key}`);
 
   await fsp.rm(dir, { recursive: true, force: true });
+  // 看视频提问可以等 10 分钟（以前 3 分钟就自己掐断）；上传等普通请求仍是 3 分钟；超时说中文。
+  {
+    const seen = [];
+    const hanging = (url, init) => {
+      const timedOut = init.signal.aborted;
+      seen.push([url.replace(/^.*\/api\/v3/, ''), timedOut]);
+      return new Promise((_, reject) =>
+        init.signal.addEventListener('abort', () => reject(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }))),
+      );
+    };
+    const slow = createArkClient({ apiKey: 'k', model: 'm', fetchImpl: hanging, askTimeoutMs: 30 });
+    const started = Date.now();
+    const keepAlive = setInterval(() => {}, 1000); // AbortSignal.timeout 的计时器不拦着进程退出
+    await assert.rejects(() => slow.ask('file-1', 'x').finally(() => clearInterval(keepAlive)), (error) => {
+      assert.match(error.message, /方舟 0 分钟没有回应|方舟 \d+ 分钟没有回应/);
+      assert.ok(!/aborted due to timeout/.test(error.message), 'the message is in Chinese');
+      return true;
+    });
+    assert.ok(Date.now() - started >= 25, 'ask waits for its own (longer) timeout');
+    assert.equal(require('../src/native/video-prompt/ark').ASK_TIMEOUT_MS, 10 * 60 * 1000);
+    const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/native/video-prompt/ark.js'), 'utf8');
+    assert.match(source, /const REQUEST_TIMEOUT_MS = 180000;/, 'uploads and status checks keep the 3-minute limit');
+  }
   console.log('video prompt checks passed');
 }
 

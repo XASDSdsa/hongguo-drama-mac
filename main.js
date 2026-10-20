@@ -4267,7 +4267,8 @@ function normalizeDraftMode(value) {
 }
 
 function draftCurrentText(job) {
-  return [...job.active.values()].map((item) => item.label).join('、');
+  const drafting = [...job.active.values()].map((item) => item.label);
+  return (drafting.length ? drafting : [...(job.promptActive?.values() || [])].map((item) => item.label)).join('、');
 }
 /** 正在做的各集进度之和（每集 0–100），界面用「已完成集数 + 这个和 / 100」算总进度条。 */
 function draftProgressPercent(job) {
@@ -4276,7 +4277,10 @@ function draftProgressPercent(job) {
 function draftMessage(job) {
   const items = [...job.active.values()];
   if (items.length === 1) return items[0].message;
-  return items.length ? `同时做 ${items.length} 集` : job.waitingReason || '';
+  if (items.length) return `同时做 ${items.length} 集`;
+  const prompts = (job.promptActive?.size || 0) + (job.promptQueue?.length || 0);
+  if (prompts) return `草稿已做完，分镜工程图还剩 ${prompts} 集（在等方舟看视频）`;
+  return job.waitingReason || '';
 }
 
 function libraryDraftSnapshot(job) {
@@ -4648,6 +4652,49 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
   }
 }
 
+// ===== 分镜工程图（视频提示词）后台排队 =====
+// 以前每集草稿做完还要原地等方舟看完视频才放下一集，一等就是好几分钟，后面的集一直排着。
+// 现在交给这个队列：最多同时 2 集在问方舟（再多容易被限流），整个草稿任务等它们都做完才算结束；停止时一起停。
+const PROMPT_PARALLEL = 2;
+
+function queueLibraryPrompts(job, file, item, data) {
+  job.promptQueue ||= [];
+  job.promptActive ||= new Map();
+  job.promptTasks ||= new Set();
+  const entry = {
+    label: item.label || path.basename(file, path.extname(file)),
+    projectId: item.projectId,
+    mode: item.mode,
+    message: '排队反推视频提示词',
+    detail: '',
+    stageStartedAt: Date.now(),
+  };
+  job.promptQueue.push({ file, entry, data });
+  pumpLibraryPrompts(job);
+}
+
+function pumpLibraryPrompts(job) {
+  while (!job.cancelled && job.promptQueue?.length && job.promptActive.size < PROMPT_PARALLEL) {
+    const { file, entry, data } = job.promptQueue.shift();
+    job.promptActive.set(entry.label, entry);
+    const task = deriveLibraryPrompts(job, file, entry, data)
+      .catch(() => {}) // 停止时会抛「已停止」；其余错误 deriveLibraryPrompts 自己写了日志
+      .finally(() => {
+        job.promptActive.delete(entry.label);
+        job.promptTasks.delete(task);
+        libraryDraftEmit(job);
+        pumpLibraryPrompts(job);
+      });
+    job.promptTasks.add(task);
+  }
+  if (job.cancelled && job.promptQueue) job.promptQueue.length = 0;
+}
+
+/** 等这个草稿任务排进去的分镜工程图全部做完（包括做的过程中新排进来的）。 */
+async function waitLibraryPrompts(job) {
+  while (job.promptTasks?.size) await Promise.allSettled([...job.promptTasks]);
+}
+
 async function generateLibraryDraft(job, file, item) {
   const pipeline = getReconstructionPipeline();
   const label = path.basename(file, path.extname(file));
@@ -4666,8 +4713,7 @@ async function generateLibraryDraft(job, file, item) {
         `剪映草稿：${label} 已有草稿，沿用它的 ${saved.alignment.shots.length} 个分镜，只补做分镜工程图（不重新分析）`,
         'side',
       );
-      await deriveLibraryPrompts(job, file, item, saved);
-      if (job.cancelled) throw Object.assign(new Error('已停止'), { stopped: true });
+      queueLibraryPrompts(job, file, item, saved);
       return saved.draftPath;
     }
   }
@@ -4694,7 +4740,8 @@ async function generateLibraryDraft(job, file, item) {
           'side',
         );
     }
-    if (item.prompts && results) await deriveLibraryPrompts(job, file, item, results);
+    // 分镜工程图在后台做（只等方舟、几乎不占电脑），这一路马上接着做下一集的草稿。
+    if (item.prompts && results) queueLibraryPrompts(job, file, item, results);
     // 拆解结果是缓存复用的：以前生成的草稿和这次要的分轨方式不一样时，只重做最后一步。
     const manifestOf = (draftPath) => {
       try {
@@ -4853,6 +4900,7 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
   (async () => {
     do {
       await Promise.all(Array.from({ length: job.lanes }, (_, index) => runLane(index)));
+      await waitLibraryPrompts(job); // 草稿都做完了，分镜工程图还在问方舟：等它们做完
     } while (job.queue.length && !job.cancelled); // 车道都退出之后又有新的集排进来：接着做
     job.status = job.cancelled ? 'stopped' : job.failed ? 'failed' : 'completed';
     job.active.clear();
