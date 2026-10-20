@@ -596,3 +596,8 @@
   margin-left: auto;
   align-self: flex-start;
 }
+.settings-subhead {
+  margin: 22px 0 4px;
+  font-size: 14px;
+  font-weight: 650;
+}

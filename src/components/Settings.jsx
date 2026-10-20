@@ -53,6 +53,8 @@ function SettingsPage({ active = true }) {
   const [loadError, setLoadError] = useState('');
   const [aiTest, setAiTest] = useState(null);
   const [aiTesting, setAiTesting] = useState(false);
+  const [copyTest, setCopyTest] = useState(null);
+  const [copyTesting, setCopyTesting] = useState(false);
   const [arkTest, setArkTest] = useState(null);
   const [arkTesting, setArkTesting] = useState(false);
   const [encoderCheck, setEncoderCheck] = useState(null); // { busy } | { result } | { error }
@@ -135,6 +137,25 @@ function SettingsPage({ active = true }) {
     }
   };
 
+  // 用表单里当前填的「文案改写」设置测一次（不需要先保存）。
+  const testCopy = async () => {
+    setCopyTesting(true);
+    setCopyTest(null);
+    try {
+      setCopyTest(
+        await window.electronAPI.testAiText({
+          ai_base_url: settings.ai_copy_base_url || 'https://api.deepseek.com',
+          ai_api_key: settings.ai_copy_api_key,
+          ai_text_model: settings.ai_copy_model || 'deepseek-flash',
+        }),
+      );
+    } catch (error) {
+      setCopyTest({ success: false, error: error.message || '测试失败' });
+    } finally {
+      setCopyTesting(false);
+    }
+  };
+
   // 用表单里当前填的方舟设置，在这台电脑上发一段 3 秒的测试视频（不需要先保存）。
   const testArk = async () => {
     setArkTesting(true);
@@ -183,6 +204,9 @@ function SettingsPage({ active = true }) {
         'ai_image_api_key',
         'ai_image_model',
         'ai_text_model',
+        'ai_copy_base_url',
+        'ai_copy_api_key',
+        'ai_copy_model',
         'ark_base_url',
         'ark_api_key',
         'ark_video_model',
@@ -688,6 +712,60 @@ function SettingsPage({ active = true }) {
             {aiTest && (
               <span className={`settings-hint ${aiTest.success ? '' : 'alert-error'}`} role="status">
                 {aiTest.success ? `连通正常（${aiTest.model}，${aiTest.elapsed} ms）` : aiTest.error}
+              </span>
+            )}
+          </div>
+
+          <h4 className="settings-subhead">文案改写（可选，如 DeepSeek）</h4>
+          <p className="settings-hint">
+            改写剧名、简介和构思海报画面用这里的模型；Key 留空就和上面的文本模型共用。
+            检查海报底图要能看图，仍用上面的文本模型。任何 OpenAI 兼容接口都可以。
+          </p>
+          <div className="ai-settings-grid">
+            <label className="ai-field ai-field-wide">
+              <span>接口地址</span>
+              <input
+                className="input-field"
+                aria-label="文案改写接口地址"
+                value={settings.ai_copy_base_url || ''}
+                onChange={(e) => update('ai_copy_base_url', e.target.value)}
+                placeholder="https://api.deepseek.com"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field ai-field-wide">
+              <span>API Key</span>
+              <input
+                className="input-field"
+                type="password"
+                autoComplete="off"
+                aria-label="文案改写 API Key"
+                value={settings.ai_copy_api_key || ''}
+                onChange={(e) => update('ai_copy_api_key', e.target.value)}
+                placeholder="留空 = 和上面的文本模型共用"
+                spellCheck={false}
+              />
+            </label>
+            <label className="ai-field">
+              <span>模型</span>
+              <input
+                className="input-field"
+                aria-label="文案改写模型"
+                value={settings.ai_copy_model || ''}
+                onChange={(e) => update('ai_copy_model', e.target.value)}
+                placeholder="deepseek-flash"
+                spellCheck={false}
+              />
+              <em>DeepSeek 可填 deepseek-flash（快、便宜）或 deepseek-v4-pro。</em>
+            </label>
+          </div>
+          <div className="preset-row">
+            <button className="btn btn-outline btn-sm" onClick={testCopy} disabled={copyTesting || !settings.ai_copy_api_key}>
+              {copyTesting ? '正在测试…' : '测试文案连接'}
+            </button>
+            {copyTest && (
+              <span className={`settings-hint ${copyTest.success ? '' : 'alert-error'}`} role="status">
+                {copyTest.success ? `连通正常（${copyTest.model}，${copyTest.elapsed} ms）` : copyTest.error}
               </span>
             )}
           </div>

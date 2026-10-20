@@ -268,6 +268,10 @@ function getDefaultSettings() {
     ai_image_api_key: '',
     ai_image_model: openai.DEFAULT_IMAGE_MODEL,
     ai_text_model: openai.DEFAULT_TEXT_MODEL,
+    // 文案改写（剧名、简介、海报画面描述）可以单独用 DeepSeek 等 OpenAI 兼容文本模型；Key 留空就和上面的文本模型共用。
+    ai_copy_base_url: 'https://api.deepseek.com',
+    ai_copy_api_key: '',
+    ai_copy_model: 'deepseek-flash',
     // 本地 whisper.cpp 是默认转写引擎。OpenAI 只有在用户明确选择
     // openai 或 whisper.cpp+openai-fallback 时才会调用。
     ai_transcription_engine: 'whisper.cpp',
@@ -4085,6 +4089,7 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
             outputDir: context.dir,
             workDir: context.workDir,
             config: settings,
+            copyConfig: copyWritingConfig(settings),
             openai,
             renderer,
             signal: controller.signal,
@@ -7456,8 +7461,26 @@ function aiConcurrency() {
 
 function aiRedact(error) {
   const settings = getCurrentSettings();
-  // 文本和作图可能是两把不同的 Key，错误信息里两把都要抹掉。
-  return openai.redactError(openai.redactError(error, settings.ai_api_key), settings.ai_image_api_key);
+  // 文本、作图、文案改写可能是三把不同的 Key，错误信息里都要抹掉。
+  return openai.redactError(
+    openai.redactError(openai.redactError(error, settings.ai_api_key), settings.ai_image_api_key),
+    settings.ai_copy_api_key,
+  );
+}
+
+/**
+ * 改写剧名、简介、构思海报画面用的文本模型：设置里填了「文案改写」的 Key（如 DeepSeek）就走它，
+ * 否则 null（和通用文本模型共用）。检查海报底图要能看图，仍走通用文本模型。
+ */
+function copyWritingConfig(settings) {
+  const apiKey = String(settings.ai_copy_api_key || '').trim();
+  if (!apiKey) return null;
+  return {
+    ...settings,
+    ai_base_url: String(settings.ai_copy_base_url || '').trim() || 'https://api.deepseek.com',
+    ai_api_key: apiKey,
+    ai_text_model: String(settings.ai_copy_model || '').trim() || 'deepseek-flash',
+  };
 }
 
 function aiInputFingerprint(filePath) {

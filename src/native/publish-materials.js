@@ -394,6 +394,7 @@ async function makeTitles({
   outputDir,
   workDir,
   config,
+  copyConfig,
   openai,
   signal,
   onProgress,
@@ -404,7 +405,8 @@ async function makeTitles({
   let found = null;
   let lastError = null;
   for (let attempt = 1; attempt <= TITLE_ATTEMPTS && !found; attempt += 1) {
-    const raw = await openai.chatJson(messages, { signal }, config);
+    // 文案改写可以单独走 DeepSeek 等文本模型（设置里的「文案改写」），没填就用通用文本模型。
+    const raw = await openai.chatJson(messages, { signal }, copyConfig || config);
     try {
       found = normalizeTitles(raw, { title, synopsis });
     } catch (error) {
@@ -434,6 +436,7 @@ async function makeSynopsis({
   outputDir,
   workDir,
   config,
+  copyConfig,
   openai,
   signal,
   onProgress,
@@ -446,7 +449,7 @@ async function makeSynopsis({
   let problems = [];
   let names = [];
   for (let attempt = 1; attempt <= SYNOPSIS_ATTEMPTS; attempt += 1) {
-    const raw = await openai.chatJson(messages, { signal }, config);
+    const raw = await openai.chatJson(messages, { signal }, copyConfig || config);
     names = [...new Set([...names, ...synopsisNames(raw)])];
     next = normalizeSynopsis(raw);
     problems = synopsisProblems(next, { original: synopsis, title, names });
@@ -487,6 +490,7 @@ async function makePoster({
   outputDir,
   workDir,
   config,
+  copyConfig,
   openai,
   renderer,
   signal,
@@ -506,7 +510,7 @@ async function makePoster({
   const sceneRaw = await openai.chatJson(
     buildSceneMessages({ title: chosen.title, synopsis: textOf(paths.synopsis).trim() || synopsis }),
     { signal },
-    config,
+    copyConfig || config,
   );
   state.copy.scene = clip(sceneRaw?.scene, 300);
   if (!state.copy.scene) throw new Error('模型没有给出海报画面，请重试');

@@ -265,6 +265,33 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.match(seen[1], /这一版不合格：现在 101 个字.*用了原简介里的人名：宋语棠（.*说法相同：「宋语棠是宋家流落在外的真千金」/);
     });
 
+    await check('copywriting can use its own model (e.g. DeepSeek); the poster check stays on the vision model', async () => {
+      const used = [];
+      const routed = {
+        ...openai,
+        chatJson: async (messages, options, cfg) => {
+          const vision = Array.isArray(messages.at(-1)?.content);
+          used.push(`${vision ? 'inspect' : 'copy'}:${cfg.ai_text_model}`);
+          return openai.chatJson(messages, options, cfg);
+        },
+      };
+      const copyConfig = { ...config, ai_text_model: 'deepseek-flash' };
+      await full({
+        title: '退婚之后',
+        synopsis: '她被退婚，家族羞辱，随后一切发生了反转。',
+        source: '红果',
+        coverPath: cover,
+        ...dirs('copy-model'),
+        config,
+        copyConfig,
+        openai: routed,
+        renderer,
+      });
+      assert.ok(used.filter((u) => u.startsWith('copy:')).length >= 3, used.join(','));
+      assert.ok(used.filter((u) => u.startsWith('copy:')).every((u) => u === 'copy:deepseek-flash'), used.join(','));
+      assert.ok(used.some((u) => u === 'inspect:gpt-6.1-sol'), used.join(','));
+    });
+
     await check('titles: the prompt lists the original keywords; all-bad candidates are retried with the reason', async () => {
       const replies = [
         { titles: ['当家主母归来', '主母的反击'], genre: '古风', style: 'fire', tagline: '开局即反转' },
