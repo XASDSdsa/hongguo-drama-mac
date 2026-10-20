@@ -138,9 +138,11 @@ function makeMain(root, userData, registry, storeExtra = {}) {
 
   const three = await run({ lanes: 3 });
   assert.ok(three.peak >= 2 && three.peak <= 3, `up to three at once, saw ${three.peak}`);
+  // Windows / Linux：8 线程分给 3 集，每集 2 线程；Mac 每集至少 4 线程（能效核慢，见 draft-capacity.js）。
+  const perLane = process.platform === 'darwin' ? 4 : 2;
   assert.ok(
-    three.threads.every((n) => n === 2),
-    'the 8-thread budget is shared: 2 each for 3 lanes',
+    three.threads.every((n) => n === perLane),
+    `the 8-thread budget is shared: ${perLane} each for 3 lanes, saw ${three.threads.join(',')}`,
   );
   console.log('PASS three lanes share the thread budget');
 
