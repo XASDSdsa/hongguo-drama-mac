@@ -1,4 +1,4 @@
-name: probe tag rule
+name: create v1.2.1 release page
 on: push
 permissions:
   contents: write
@@ -6,17 +6,24 @@ jobs:
   release:
     if: "!contains(github.event.head_commit.message, '[pages]')"
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R: ${{ github.repository }}
+      SHA: e2babe4882c8a4889f4e68f6463abbfd49357e55
     steps:
       - uses: actions/checkout@v4
       - shell: bash {0}
         run: |
-          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 3 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
+          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 4 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
+          set -o pipefail
+          git config user.name github-actions; git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch -q origin perf/structure-speed main
-          for c in 18be767df314acb73ab3bc93d5ad3f952e395739 a2bcfe7 3035f89 e2babe4882c8a4889f4e68f6463abbfd49357e55 origin/main; do
-            sha=$(git rev-parse "$c"); t="probe-tagtest-${sha:0:7}"
-            if out=$(git push origin "$sha:refs/tags/$t" 2>&1); then
-              note notice "ok $c" "$out"; git push -q origin ":refs/tags/$t" || note warning "delete $t failed" x
-            else
-              note warning "rejected $c" "$out"
-            fi
-          done
+          # 1.2.1 的软件代码原样不动，只把 .github/workflows 换成 main 分支的（GitHub 不允许打包机给改过 workflow 的提交打标签）。
+          git read-tree "$SHA"
+          git rm -rq --cached .github/workflows
+          for f in $(git ls-tree --name-only origin/main .github/workflows/); do git update-index --add --cacheinfo "100644,$(git rev-parse origin/main:$f),$f"; done
+          tree=$(git write-tree)
+          x=$(git commit-tree "$tree" -p "$SHA" -m "AI短剧助手 1.2.1 发布标签（软件代码同 ${SHA:0:7}，workflow 文件同 main）")
+          note notice "release commit" "$x $(git diff --stat $SHA $x | tail -1)"
+          out=$(git push origin "$x:refs/tags/v1.2.1" 2>&1) && note notice tag-ok "$out" || { note error tag "$out"; exit 1; }
+          out=$(gh release create v1.2.1 -R "$R" --verify-tag --prerelease --title "AI短剧助手 1.2.1" --notes "AI短剧助手 1.2.1（软件代码 ${SHA}）。" 2>&1) && note notice create-ok "$out" || { note error create "$out"; exit 1; }
