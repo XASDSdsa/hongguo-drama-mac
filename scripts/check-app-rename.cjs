@@ -20,7 +20,8 @@ assert.match(read('index.html'), /<title>AI短剧助手<\/title>/);
 assert.match(read('main.js'), /const APP_TITLE = 'AI短剧助手';/);
 const app = read('src/App.jsx');
 assert.ok(!app.includes('红果短剧'), 'the sidebar and toolbar show the new name');
-assert.equal((app.match(/AI短剧助手/g) || []).length, 3);
+assert.ok((app.match(/AI短剧助手/g) || []).length >= 3, 'sidebar, footer and toolbar show the new name');
+assert.match(app, /document\.title = `AI短剧助手 v\$\{info\.version\}`/, 'the window title shows the version');
 for (const file of ['NOTICE', 'THIRD-PARTY-NOTICES.md']) assert.match(read(file), /本软件（AI短剧助手）/);
 // 用户能看到的文件 / 进程名：草稿说明文件、处理中的临时文件、剪映运行时进程。
 for (const file of [

@@ -121,7 +121,7 @@
 
 ### FFmpeg 的准确对应源码
 
-Windows 包使用 **FFmpeg 9.0.2-aidrama-nvenc11.1**，固定 nv-codec-headers n11.1.5.3（NVIDIA 驱动 471.41 起可用），并保留 NVENC、AMF、QSV 和 CPU 编码器。该构建和完整对应源码包（`ffmpeg-9.0.2-nvenc11.1-win-x64.zip` / `-source.tar.xz`）随安装包放在[发行页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.41-breath-on-shot)，准确 SHA256 位于 `build/ffmpeg/WINDOWS-BUILD.json`；构建脚本是 `scripts/build-ffmpeg-source-win.sh`。包内附带实际构建报告及依赖许可，静态链接依赖已包含，使用时无需安装 MSYS2。
+Windows 包使用 **FFmpeg 9.0.2-aidrama-nvenc11.1**，固定 nv-codec-headers n11.1.5.3（NVIDIA 驱动 471.41 起可用），并保留 NVENC、AMF、QSV 和 CPU 编码器。该构建和完整对应源码包（`ffmpeg-9.0.2-nvenc11.1-win-x64.zip` / `-source.tar.xz`）随安装包放在[发行页](https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.2.0)，准确 SHA256 位于 `build/ffmpeg/WINDOWS-BUILD.json`；构建脚本是 `scripts/build-ffmpeg-source-win.sh`。包内附带实际构建报告及依赖许可，静态链接依赖已包含，使用时无需安装 MSYS2。
 
 Mac 包内置的 FFmpeg / FFprobe 基于 **FFmpeg 9.0.2** 与 **x264 `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`** 的未修改源码编译。此构建为 **GPLv3-or-later**，仅静态链接 x264，保留 VideoToolbox，未启用 `nonfree`；动态依赖仅为 macOS 系统库，不依赖使用者的 Homebrew 环境。
 

@@ -12,7 +12,7 @@ const archive = Buffer.from('compatible archive');
 const manifest = {
   version: '9.0.2',
   buildVersion: '9.0.2-aidrama-nvenc11.1',
-  url: 'https://github.com/XASDSdsa/hongguo-drama-mac/releases/download/v1.1.41-breath-on-shot/ffmpeg-9.0.2-nvenc11.1-win-x64.zip',
+  url: 'https://github.com/XASDSdsa/hongguo-drama-mac/releases/download/v1.2.0/ffmpeg-9.0.2-nvenc11.1-win-x64.zip',
   sha256: hash(archive),
   binaries: Object.fromEntries(Object.entries(binaries).map(([name, data]) => [name, hash(data)])),
 };

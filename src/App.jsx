@@ -23,6 +23,8 @@ export default function App() {
   useEffect(() => {
     window.electronAPI.getAppInfo().then((info) => {
       setAppInfo(info);
+      // 窗口标题（也显示在任务栏）带上版本号，一眼看出装的是哪一版。
+      if (info?.version) document.title = `AI短剧助手 v${info.version}`;
     });
   }, []);
 

@@ -32,7 +32,7 @@ Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 | 来源 | 本仓库 `scripts/build-ffmpeg-source-win.sh`，固定源码构建 |
 | 构建参数 | 含 `--enable-gpl --enable-version3 --enable-libx264 --enable-libvpl --enable-nvenc --enable-amf` |
 | **许可证** | **GNU General Public License v3.0 or later** |
-| 完整对应源码 | 发布页里的 ffmpeg-9.0.2-nvenc11.1-win-x64-source.tar.xz（https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.41-breath-on-shot） |
+| 完整对应源码 | 发布页里的 ffmpeg-9.0.2-nvenc11.1-win-x64-source.tar.xz（https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.2.0） |
 
 用途：视频去重、分片拼接及「兼容模式」格式转码
 （解决部分电脑无法硬件解码 HEVC 导致的「黑屏有声」）。
