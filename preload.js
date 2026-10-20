@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // 应用信息 / 官网链接
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+  encoderCheck: () => ipcRenderer.invoke('encoder-check'),
   openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
 

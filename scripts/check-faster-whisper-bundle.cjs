@@ -17,7 +17,7 @@ function verifyBundle(root, platform, arch) {
   if (platform === 'darwin' && (!manifest.minimumMacOS || Number(manifest.minimumMacOS) > 13))
     throw new Error('字幕引擎尚未通过 macOS 13 兼容性检查，请重新构建');
   const files = [
-    platform === 'win32' ? 'hongguo-transcribe.exe' : 'hongguo-transcribe',
+    platform === 'win32' ? 'transcribe-worker.exe' : 'transcribe-worker',
     'models/tiny/model.bin',
     'models/tiny/config.json',
     'models/tiny/tokenizer.json',

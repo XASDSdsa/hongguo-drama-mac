@@ -87,6 +87,9 @@ jobs:
           run_check node scripts/check-quchong-sources.cjs
           run_check node scripts/check-dedup-defaults.cjs
           run_check node scripts/check-resplit.cjs
+          run_check node scripts/check-dedup-timestamps.cjs
+          run_check node scripts/check-separation-ascii.cjs
+          run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
           run_check node scripts/check-encoder-retry.cjs
           run_check npm run check:subtitles
           run_check python scripts/check-subtitle-alignment.py

@@ -27,7 +27,7 @@ function verifyBundle(root, platform, arch) {
     throw Error('结构化运行时尚未通过 macOS 13 兼容性检查');
   const exe = platform === 'win32' ? '.exe' : '';
   for (const f of [
-    'worker/hongguo-structure' + exe,
+    'worker/structure-worker' + exe,
     'bin/sherpa-onnx-offline-source-separation' + exe,
     'models/transnetv2.pth',
     'models/UVR-MDX-NET-Inst_HQ_3.onnx',

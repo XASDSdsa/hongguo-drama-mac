@@ -211,6 +211,9 @@ jobs:
           run_check node scripts/check-quchong-sources.cjs
           run_check node scripts/check-dedup-defaults.cjs
           run_check node scripts/check-resplit.cjs
+          run_check node scripts/check-dedup-timestamps.cjs
+          run_check node scripts/check-separation-ascii.cjs
+          run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
 
       - name: Build local whisper.cpp and prepare tiny model
         shell: bash

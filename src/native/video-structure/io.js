@@ -148,10 +148,29 @@ function run(exe, args, { signal, onLine, onStderrLine, cwd, onProgress, duratio
       signal?.removeEventListener('abort', stop);
       if (signal?.aborted) reject(Object.assign(new Error('任务已停止'), { code: 'ABORT_ERR' }));
       else if (lineError) reject(lineError);
-      else if (code !== 0) reject(new Error(`${path.basename(exe)} 退出码 ${code}：${stderr}`));
+      else if (code !== 0) reject(toolError(exe, code, stderr));
       else resolve({ stdout, stderr });
     });
   });
+}
+/**
+ * 工具失败时把最后几行（真正的报错一般在最后）放在最前面：日志只显示开头一段，
+ * 以前开头是工具回显的整条命令，真正的原因被截掉了。完整输出接在后面，排查时还能看到。
+ * Windows 上的 -1 会显示成 4294967295，换回 -1。
+ */
+function toolError(exe, code, stderr = '') {
+  const signed = Number.isInteger(code) && code > 0x7fffffff ? code - 0x100000000 : code;
+  const lines = String(stderr)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const tail = lines.slice(-3).join(' | ');
+  const error = new Error(
+    `${path.basename(exe)} 退出码 ${signed}：${tail || '没有输出'}${lines.length > 3 ? `\n完整输出：\n${String(stderr).slice(-6000)}` : ''}`,
+  );
+  error.exitCode = signed;
+  error.stderr = String(stderr);
+  return error;
 }
 async function probe(ffprobe, input, args = [], options = {}) {
   const result = await run(ffprobe, ['-v', 'error', ...args, '-of', 'json', input], { signal: options.signal });
@@ -160,4 +179,13 @@ async function probe(ffprobe, input, args = [], options = {}) {
 function blocked(message) {
   return Object.assign(new Error(message), { code: 'DEPENDENCY_MISSING' });
 }
-module.exports = { json, atomicJson, sha256, run, probe, blocked, renameRetry };
+module.exports = {
+  toolError,
+  json,
+  atomicJson,
+  sha256,
+  run,
+  probe,
+  blocked,
+  renameRetry,
+};

@@ -367,6 +367,51 @@ exec ffmpeg "\${args[@]}"
   });
 
   await check(
+    'a failed GPU test says why (old driver, missing driver, encoder busy) instead of just "failed"',
+    async () => {
+      // 假的 FFmpeg：试 NVENC 时照真实驱动太旧的样子在 stderr 里报错并退出。
+      const file = path.join(tmp, 'probe-old-driver');
+      fs.writeFileSync(
+        file,
+        [
+          '#!/bin/bash',
+          'if echo "$*" | grep -q h264_nvenc; then',
+          '  echo "[h264_nvenc @ 0x1] Driver does not support the required nvenc API version. Required: 12.2 Found: 12.1" >&2',
+          '  echo "[h264_nvenc @ 0x1] The minimum required Nvidia driver for nvenc is 551.76 or newer" >&2',
+          '  echo "[vost#0:0/h264_nvenc @ 0x2] Error while opening encoder" >&2',
+          '  exit 1',
+          'fi',
+          'exit 0',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      quchong.setWindowsAdapters(['NVIDIA GeForce RTX 4060']);
+      assert.equal(await quchong.resolveWorkingEncoder('auto', file, 'win32'), 'cpu');
+      const note = quchong.encoderFailureNote(file);
+      assert.match(note, /NVIDIA 显卡编码用不了/);
+      assert.match(note, /驱动太旧/);
+      assert.match(note, /551\.76/);
+      assert.match(note, /只支持 NVENC 12\.1，需要 12\.2/);
+      // 设置页的检测：不看缓存，逐个试，并说明原因。
+      const checked = await quchong.checkEncoders(file, 'win32');
+      assert.equal(checked.picked, 'cpu');
+      assert.equal(checked.results.length, 1);
+      assert.equal(checked.results[0].ok, false);
+      assert.match(checked.results[0].reason, /驱动太旧/);
+      quchong.setWindowsAdapters([]);
+
+      const explain = (text) => quchong.explainEncoderFailure('nvenc', text);
+      assert.match(explain('Cannot load nvcuda.dll'), /没有找到可用的 NVIDIA 显卡驱动/);
+      assert.match(explain('[h264_nvenc] OpenEncodeSessionEx failed: out of memory (10)'), /被占满.*ToDesk/);
+      assert.match(explain('[h264_nvenc] No capable devices found'), /不支持硬件编码/);
+      assert.match(explain("Unknown encoder 'h264_nvenc'"), /没有这个编码器/);
+      assert.match(quchong.explainEncoderFailure('nvenc', '', true), /20 秒/);
+      assert.match(explain('something odd happened'), /FFmpeg 报错：something odd happened/);
+    },
+  );
+
+  await check(
     'the [aac] Qavg summary line at the end of any failure is not mistaken for an audio failure',
     async () => {
       const fake = fakeFfmpeg(

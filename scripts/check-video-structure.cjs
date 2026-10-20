@@ -412,7 +412,7 @@ async function scheduler(temp) {
   const rt = path.join(temp, 'runtime'),
     exe = process.platform === 'win32' ? '.exe' : '';
   for (const name of [
-    'worker/hongguo-structure' + exe,
+    'worker/structure-worker' + exe,
     'bin/sherpa-onnx-offline-source-separation' + exe,
     'models/transnetv2.pth',
     'models/UVR-MDX-NET-Inst_HQ_3.onnx',
@@ -426,7 +426,7 @@ async function scheduler(temp) {
     await fs.writeFile(f, 'fixture');
   }
   for (const name of [
-    'hongguo-transcribe' + exe,
+    'transcribe-worker' + exe,
     ...['model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'].map((file) => 'models/tiny/' + file),
   ]) {
     const f = path.join(rt, 'faster-whisper', name);

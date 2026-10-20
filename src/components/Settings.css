@@ -538,6 +538,22 @@
 .settings-field-wide {
   grid-column: 1 / -1;
 }
+.settings-field > em.settings-error {
+  color: var(--danger);
+}
+.encoder-check-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.encoder-check-list .is-ok b {
+  color: var(--success);
+}
+.encoder-check-list .is-bad b {
+  color: var(--danger);
+}
 .settings-advanced {
   padding-top: 16px;
   border-top: 1px solid var(--border-muted);

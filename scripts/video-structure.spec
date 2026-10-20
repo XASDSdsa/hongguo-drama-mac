@@ -10,5 +10,5 @@ a = Analysis([str(root / 'src/native/video-structure/runner.py')],
     excludes=['tensorflow', 'keras', 'tensorboard', 'IPython', 'matplotlib', 'pandas', 'scipy', 'onnx', 'onnxmltools'],
     noarchive=False)
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='hongguo-structure', console=True, strip=False, upx=False)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='hongguo-structure')
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='structure-worker', console=True, strip=False, upx=False)
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='structure-worker')

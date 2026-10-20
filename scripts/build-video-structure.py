@@ -20,8 +20,8 @@ def main():
     subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--distpath',str(cache/'dist'/target),'--workpath',str(cache/'work'/target),str(ROOT/'scripts/video-structure.spec')],cwd=ROOT,check=True)
     worker=out/'worker'
     if worker.exists(): shutil.rmtree(worker)
-    shutil.copytree(cache/'dist'/target/'hongguo-structure',worker,symlinks=True)
-    executable=worker/('hongguo-structure.exe' if sys.platform=='win32' else 'hongguo-structure')
+    shutil.copytree(cache/'dist'/target/'structure-worker',worker,symlinks=True)
+    executable=worker/('structure-worker.exe' if sys.platform=='win32' else 'structure-worker')
     env={**os.environ,'PATH':str(Path(os.environ['SystemRoot'])/'System32') if sys.platform=='win32' else '/usr/bin:/bin','PYTHONNOUSERSITE':'1'}
     env.pop('PYTHONHOME',None);env.pop('PYTHONPATH',None)
     minimum_macos = runpy.run_path(str(ROOT/'scripts/build-faster-whisper.py'))['check_macos_compatibility'](out) if sys.platform == 'darwin' else None

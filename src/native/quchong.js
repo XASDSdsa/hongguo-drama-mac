@@ -165,6 +165,40 @@ function resolveEncoder(requested, platform = process.platform) {
 const encoderProbes = new Map();
 const ADAPTER_PATTERN = { nvenc: /nvidia/i, qsv: /(intel|uhd|iris|arc)/i, amf: /(amd|radeon)/i };
 
+const ENCODER_LABEL = { nvenc: 'NVIDIA 显卡', qsv: 'Intel 核显', amf: 'AMD 显卡', cpu: 'CPU' };
+
+/**
+ * 把显卡试编失败时 FFmpeg 的报错翻成一句能照着做的话。
+ * 最常见的是驱动太旧：自带的 FFmpeg 用 NVENC 12.2，需要 NVIDIA 驱动 551.76 或更新。
+ */
+function explainEncoderFailure(name, stderr = '', timedOut = false) {
+  const text = String(stderr || '');
+  if (timedOut) return '试编 20 秒还没有结果（显卡可能正忙），稍后会再试';
+  const api = text.match(/required nvenc API version\.\s*Required:\s*([\d.]+)\s*Found:\s*([\d.]+)/i);
+  if (api || /minimum required Nvidia driver/i.test(text)) {
+    const minimum = (text.match(/driver for nvenc is ([\d.]+)/i) || [])[1] || '551.76';
+    return `NVIDIA 显卡驱动太旧${api ? `（现在的驱动只支持 NVENC ${api[2]}，需要 ${api[1]}）` : ''}：请到 NVIDIA 官网下载安装 ${minimum} 或更新的驱动，装完重启电脑`;
+  }
+  if (/nvcuda\.dll|nvEncodeAPI64\.dll|libcuda|libnvidia-encode|Could not dynamically load CUDA/i.test(text))
+    return '没有找到可用的 NVIDIA 显卡驱动：请安装 NVIDIA 官方驱动（不要只用 Windows 自带的显示驱动），装完重启电脑';
+  if (/out of memory|incompatible client key|OpenEncodeSessionEx failed/i.test(text))
+    return '显卡编码通道被占满或显存不够：远程控制、直播、录屏软件（如 ToDesk、向日葵、OBS）也会占用显卡编码，关掉它们或在里面改成软件编码后再试';
+  if (/No capable devices found|No NVENC capable devices|unsupported device|Device type mismatch/i.test(text))
+    return `这块显卡不支持硬件编码，或${ENCODER_LABEL[name] || '显卡'}被设置成了不可用`;
+  if (/amfrt64\.dll|AMF.*(failed|not found)|DLL .* failed to open/i.test(text))
+    return '没有找到 AMD 显卡驱动：请安装 AMD 官方驱动';
+  if (/MFX|qsv|Error creating a MFX session|Device creation failed/i.test(text))
+    return 'Intel 核显编码用不了（核显没开、型号不支持或驱动太旧）';
+  if (/Unknown encoder|Encoder not found/i.test(text)) return '软件自带的 FFmpeg 里没有这个编码器';
+  const last = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
+  return last ? `FFmpeg 报错：${last.slice(0, 200)}` : '试编失败，FFmpeg 没有给出原因';
+}
+
+/** 用 1 帧黑画面试一次编码器：能用返回 { ok: true }，不能用带上看得懂的原因。 */
 function probeEncoder(ffmpegPath, name) {
   return new Promise((resolve) => {
     execFile(
@@ -186,10 +220,28 @@ function probeEncoder(ffmpegPath, name) {
         'null',
         '-',
       ],
-      { windowsHide: true, timeout: 20000 },
-      (error) => resolve(!error),
+      { windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024 },
+      (error, _stdout, stderr) => {
+        if (!error) return resolve({ ok: true, reason: '' });
+        const timedOut = !!error.killed || error.signal === 'SIGTERM';
+        resolve({
+          ok: false,
+          reason: explainEncoderFailure(name, `${stderr || ''}\n${error.message || ''}`, timedOut),
+          raw: String(stderr || '').slice(-2000),
+        });
+      },
     );
   });
+}
+
+/** 这台电脑上可以试的显卡编码器：先按显卡名字排，认不出显卡时三种都试。 */
+function candidateEncoders(picked) {
+  const matched = ['nvenc', 'qsv', 'amf'].filter((name) => ADAPTER_PATTERN[name].test(windowsAdapters));
+  return [
+    ...new Set(
+      [picked, ...(matched.length ? matched : [])].filter((name) => name && name !== 'cpu' && name !== 'auto'),
+    ),
+  ];
 }
 
 async function resolveWorkingEncoder(requested, ffmpegPath, platform = process.platform) {
@@ -198,21 +250,56 @@ async function resolveWorkingEncoder(requested, ffmpegPath, platform = process.p
   // 首选显卡编码试编成功就一直用；退到别的编码器时只记 10 分钟（可能只是当时显卡正忙），之后再试一次首选。
   const cached = encoderProbes.get(ffmpegPath);
   if (cached && !(cached.fallback && Date.now() - cached.at > 10 * 60 * 1000)) return cached.promise;
-  const entry = { at: Date.now(), fallback: false, promise: null };
+  const entry = { at: Date.now(), fallback: false, promise: null, failures: [] };
   entry.promise = (async () => {
-    const order = [
-      ...new Set([picked, ...['nvenc', 'qsv', 'amf'].filter((name) => ADAPTER_PATTERN[name].test(windowsAdapters))]),
-    ];
-    for (const name of order)
-      if (await probeEncoder(ffmpegPath, name)) {
+    for (const name of candidateEncoders(picked)) {
+      const result = await probeEncoder(ffmpegPath, name);
+      if (result.ok) {
         entry.fallback = name !== picked;
         return name;
       }
+      entry.failures.push({ name, reason: result.reason, raw: result.raw });
+    }
     entry.fallback = true;
     return 'cpu';
   })();
   encoderProbes.set(ffmpegPath, entry);
   return entry.promise;
+}
+
+/** 最近一次试编里，首选显卡为什么用不了（给处理日志用）。 */
+function encoderFailureNote(ffmpegPath) {
+  const entry = encoderProbes.get(ffmpegPath);
+  const first = entry?.failures?.[0];
+  return first ? `${ENCODER_LABEL[first.name] || first.name}编码用不了：${first.reason}` : '';
+}
+
+/**
+ * 设置页「检测显卡编码」：不看缓存，把这台电脑能试的显卡编码器全部试一遍，告诉用户每个能不能用、为什么。
+ * 结果同时写进缓存，之后的处理直接用。
+ */
+async function checkEncoders(ffmpegPath, platform = process.platform) {
+  if (platform !== 'win32') {
+    const name = resolveEncoder('auto', platform);
+    return { platform, adapters: '', results: [], picked: name };
+  }
+  const names = [...new Set(['nvenc', 'qsv', 'amf'].filter((name) => ADAPTER_PATTERN[name].test(windowsAdapters)))];
+  const list = names.length ? names : ['nvenc', 'qsv', 'amf'];
+  const results = [];
+  for (const name of list) {
+    const result = await probeEncoder(ffmpegPath, name);
+    results.push({ name, label: ENCODER_LABEL[name], ok: result.ok, reason: result.reason });
+  }
+  const working = results.find((item) => item.ok)?.name || 'cpu';
+  const picked = resolveEncoder('auto', platform);
+  const entry = {
+    at: Date.now(),
+    fallback: working !== picked,
+    failures: results.filter((item) => !item.ok).map(({ name, reason }) => ({ name, reason })),
+    promise: Promise.resolve(working),
+  };
+  encoderProbes.set(ffmpegPath, entry);
+  return { platform, adapters: windowsAdapters, results, picked: working };
 }
 
 function encoderArgs(name, lean, width, height) {
@@ -344,9 +431,14 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   ];
   if (audioOutput) args.push('-map', '[a]', '-shortest');
   else args.push('-an');
+  // vfr：正常的帧原样保留；时间戳和上一帧重复或倒退的帧丢掉。片源里偶尔有这种坏时间戳，
+  // 原样带进成品后，剪映草稿那一步会因为「时间戳重复或倒退」建不了时间轴。
+  // 时间刻度放细到 1/90000 秒：加速后帧比原帧率密，按原帧率的刻度算会把正常的帧也当成「重复」丢掉。
   args.push(
     '-fps_mode',
-    'passthrough',
+    'vfr',
+    '-enc_time_base:v',
+    '1:90000',
     '-pix_fmt',
     'yuv420p',
     ...encoderArgs(encoder, opts.quality === 'lean', width, height),
@@ -835,8 +927,12 @@ async function encodeOne({
     if (signal?.aborted) throw new Error('已取消');
     const firstChoice = resolveEncoder(options.encoder, process.platform);
     const encoder = await resolveWorkingEncoder(options.encoder, ffmpegPath, process.platform);
-    if (encoder !== firstChoice && firstChoice !== 'auto')
-      onLog?.(`[编码器] 这台电脑的显卡编码（${firstChoice}）试编失败，改用 ${encoder === 'cpu' ? 'CPU' : encoder}`);
+    if (encoder !== firstChoice && firstChoice !== 'auto') {
+      const why = encoderFailureNote(ffmpegPath);
+      onLog?.(
+        `[编码器] ${why || `${ENCODER_LABEL[firstChoice] || firstChoice}编码试编失败`}。这一批改用 ${ENCODER_LABEL[encoder] || encoder} 编码（成品一样，只是慢一些）`,
+      );
+    }
     const build = (audioMode, output = tmp) =>
       buildCommand({
         src: inputs[0],
@@ -1069,7 +1165,20 @@ function buildPrepareCommand({ segments, media, dst }) {
   ];
   if (media.has_audio) args.push('-map', '[a]');
   // 中间文件只给下一步读：用最快的预设和很低的 crf（几乎无损），换时间；文件大一点没关系，用完就删。
-  args.push('-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '14', '-pix_fmt', 'yuv420p');
+  args.push(
+    '-fps_mode',
+    'vfr',
+    '-enc_time_base:v',
+    '1:90000',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-crf',
+    '14',
+    '-pix_fmt',
+    'yuv420p',
+  );
   if (media.has_audio) args.push('-c:a', 'pcm_s16le');
   args.push('-progress', 'pipe:1', '-nostats', dst);
   const duration = segments.reduce((sum, segment) => sum + segment.duration / (segment.speed ?? 1), 0);
@@ -1164,6 +1273,9 @@ module.exports = {
   detectEncoder,
   resolveEncoder,
   resolveWorkingEncoder,
+  checkEncoders,
+  explainEncoderFailure,
+  encoderFailureNote,
   setWindowsAdapters,
   encoderArgs,
   buildCommand,

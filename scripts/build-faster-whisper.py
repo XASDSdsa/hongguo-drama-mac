@@ -71,7 +71,7 @@ def main():
     subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                     '--distpath', str(cache / 'dist' / target), '--workpath', str(cache / 'work' / target),
                     str(ROOT / 'scripts/faster-whisper.spec')], cwd=ROOT, check=True)
-    frozen = cache / 'dist' / target / 'hongguo-transcribe'
+    frozen = cache / 'dist' / target / 'transcribe-worker'
     minimum_macos = check_macos_compatibility(frozen) if sys.platform == 'darwin' else None
     if output.exists():
         shutil.rmtree(output)
@@ -97,7 +97,7 @@ def main():
     if python_license.is_file():
         shutil.copyfile(python_license, licenses / 'Python-LICENSE.txt')
     (licenses / 'versions.json').write_text(json.dumps(versions, indent=2), encoding='utf8')
-    executable = output / ('hongguo-transcribe.exe' if sys.platform == 'win32' else 'hongguo-transcribe')
+    executable = output / ('transcribe-worker.exe' if sys.platform == 'win32' else 'transcribe-worker')
     env = {**os.environ, 'HF_HUB_OFFLINE': '1', 'HF_HUB_DISABLE_TELEMETRY': '1', 'TRANSFORMERS_OFFLINE': '1', 'PYTHONNOUSERSITE': '1'}
     # No python/ffmpeg on PATH and no existing model cache are needed by this executable.
     env['PATH'] = str(Path(os.environ['SystemRoot']) / 'System32') if sys.platform == 'win32' else '/usr/bin:/bin'

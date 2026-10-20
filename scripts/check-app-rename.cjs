@@ -30,9 +30,16 @@ for (const file of [
   'scripts/create-jianying-simple-draft.py',
   'scripts/jianying-runtime.spec',
   'scripts/build-jianying-runtime.py',
+  'scripts/video-structure.spec',
+  'scripts/faster-whisper.spec',
+  'src/native/video-structure/runtime.js',
+  'src/native/faster-whisper.js',
 ]) {
   const text = read(file);
-  assert.ok(!/hongguo-draft-manifest|\.hongguo-quchong|hongguo-jianying\b/.test(text), `${file} has no old file names`);
+  assert.ok(
+    !/hongguo-draft-manifest|\.hongguo-quchong|hongguo-jianying\b|hongguo-structure|hongguo-transcribe/.test(text),
+    `${file} has no old file names`,
+  );
 }
 // 打包和发布脚本里不再有旧的产物名。
 for (const file of [

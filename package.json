@@ -260,8 +260,8 @@
         "Contents/Resources/bin/ffmpeg",
         "Contents/Resources/bin/ffprobe",
         "Contents/Resources/bin/whisper-cli",
-        "Contents/Resources/faster-whisper/hongguo-transcribe",
-        "Contents/Resources/video-structure/worker/hongguo-structure",
+        "Contents/Resources/faster-whisper/transcribe-worker",
+        "Contents/Resources/video-structure/worker/structure-worker",
         "Contents/Resources/video-structure/bin/sherpa-onnx-offline-source-separation",
         "Contents/Resources/jianying/jianying-runtime"
       ]

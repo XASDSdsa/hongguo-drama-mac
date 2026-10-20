@@ -412,6 +412,23 @@ function getCurrentSettings() {
 }
 
 /** 去重实际用的编码器：以「设置」为准，不用界面里缓存的旧值。 */
+/** 设置页「检测显卡编码」：把这台电脑能用的显卡编码器都试一遍，告诉用户哪个能用、不能用的原因。 */
+let encoderCheckRunning = null;
+ipcMain.handle('encoder-check', async () => {
+  try {
+    const ffmpegPath = resolveFfmpeg('ffmpeg');
+    if (!ffmpegPath) return { success: false, error: '没有找到软件自带的 FFmpeg' };
+    // 连点只跑一次。
+    encoderCheckRunning ||= quchong.checkEncoders(ffmpegPath).finally(() => {
+      encoderCheckRunning = null;
+    });
+    const result = await encoderCheckRunning;
+    return { success: true, ...result, setting: getCurrentSettings().quchong_encoder === 'cpu' ? 'cpu' : 'auto' };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
 function dedupEncoder() {
   return getCurrentSettings().quchong_encoder === 'cpu' ? 'cpu' : quchong.DEFAULTS.encoder;
 }
@@ -2964,7 +2981,14 @@ function pumpQuchongBatch(batch) {
           // 排队等显卡、重试、降级、换编码器这几类提示也写进这部剧的处理日志：
           // 进度停在 0% 时，用户能看到它在等什么，而不是以为卡死了。
           const notice = String(line).match(/^\[(排队|重试|降级|编码器)\]\s*(.+)$/);
-          if (notice) logQuchongTask(batch, task, notice[1] === '排队' ? 'info' : 'warn', notice[2].slice(0, 300));
+          if (notice?.[1] === '编码器') {
+            // 换编码器是整批的事：同一批只说一次（带上原因），不在每一集后面重复。
+            if (!batch.encoderNoted) {
+              batch.encoderNoted = true;
+              libLog(batch.libraryDir, 'warn', notice[2].slice(0, 400));
+            }
+          } else if (notice)
+            logQuchongTask(batch, task, notice[1] === '排队' ? 'info' : 'warn', notice[2].slice(0, 300));
         },
       })
       .then((result) => {

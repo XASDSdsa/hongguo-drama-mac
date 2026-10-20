@@ -15,7 +15,7 @@ function runtime(settings = {}) {
       ? path.join(settings.resourcesPath, 'video-structure')
       : path.join(root, 'build/video-structure', `${platform}-${arch}`));
   const exe = platform === 'win32' ? '.exe' : '';
-  const bundled = path.join(home, 'worker', `hongguo-structure${exe}`);
+  const bundled = path.join(home, 'worker', `structure-worker${exe}`);
   const interpreters = [
     path.join(root, '.cache/video-structure', 'venv-' + platform + '-' + arch),
     path.join(root, '.cache/video-structure/venv'),

@@ -62,7 +62,7 @@ function resolveBundledRuntime(settings = {}) {
       ),
     );
   for (const root of roots.filter(Boolean)) {
-    const command = path.join(root, platform === 'win32' ? 'hongguo-transcribe.exe' : 'hongguo-transcribe');
+    const command = path.join(root, platform === 'win32' ? 'transcribe-worker.exe' : 'transcribe-worker');
     const modelPath = path.join(root, 'models/tiny');
     if (
       usableFile(command) &&

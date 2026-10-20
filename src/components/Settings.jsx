@@ -53,6 +53,7 @@ function SettingsPage({ active = true }) {
   const [loadError, setLoadError] = useState('');
   const [aiTest, setAiTest] = useState(null);
   const [aiTesting, setAiTesting] = useState(false);
+  const [encoderCheck, setEncoderCheck] = useState(null); // { busy } | { result } | { error }
   const testVersion = useRef(0);
   const savingRef = useRef(false);
   const savedTimer = useRef(null);
@@ -90,6 +91,18 @@ function SettingsPage({ active = true }) {
     setSaved(false);
     setDirty(true);
     setSaveError('');
+  };
+
+  const isWindows = /Win/.test((typeof navigator !== 'undefined' && navigator.platform) || '');
+  const runEncoderCheck = async () => {
+    if (encoderCheck?.busy) return;
+    setEncoderCheck({ busy: true });
+    try {
+      const res = await window.electronAPI.encoderCheck();
+      setEncoderCheck(res?.success ? { result: res } : { error: res?.error || '检测失败' });
+    } catch (err) {
+      setEncoderCheck({ error: err?.message || '检测失败' });
+    }
   };
 
   const selectFolder = async (key = 'root') => {
@@ -420,8 +433,43 @@ function SettingsPage({ active = true }) {
                 <option value="auto">自动（有显卡就用显卡加速）</option>
                 <option value="cpu">只用 CPU（显卡编码出错时选这个）</option>
               </select>
-              <em>显卡驱动太旧或显卡编码报错时，改成「只用 CPU」再处理；速度慢一些，但哪台电脑都能跑。</em>
+              <em>
+                NVIDIA 显卡需要 551.76 或更新的驱动才能加速；驱动太旧或显卡编码报错时会自动改用
+                CPU（速度慢一些，成品一样）。不确定能不能用，点下面「检测显卡编码」。
+              </em>
             </label>
+            {isWindows && (
+              <div className="settings-field">
+                <span>显卡编码检测</span>
+                <div>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={runEncoderCheck}
+                    disabled={encoderCheck?.busy}
+                    aria-label="检测显卡编码"
+                  >
+                    {encoderCheck?.busy ? '正在检测…' : '检测显卡编码'}
+                  </button>
+                </div>
+                {encoderCheck?.error && <em className="settings-error">{encoderCheck.error}</em>}
+                {encoderCheck?.result && (
+                  <ul className="encoder-check-list">
+                    {encoderCheck.result.results.length === 0 && <li>没有找到可以试的显卡，处理会用 CPU。</li>}
+                    {encoderCheck.result.results.map((item) => (
+                      <li key={item.name} className={item.ok ? 'is-ok' : 'is-bad'}>
+                        <b>
+                          {item.ok ? '✓' : '✗'} {item.label}
+                        </b>
+                        {item.ok ? '：可以用，处理时会自动用它加速' : `：${item.reason}`}
+                      </li>
+                    ))}
+                    {encoderCheck.result.setting === 'cpu' && (
+                      <li>现在设置的是「只用 CPU」，要用显卡请把上面改成「自动」并保存。</li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            )}
             <label className="settings-field">
               <span>草稿处理线程数</span>
               <input

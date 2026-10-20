@@ -32,6 +32,6 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='hongguo-transcribe',
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='transcribe-worker',
           console=True, strip=False, upx=False)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='hongguo-transcribe')
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='transcribe-worker')

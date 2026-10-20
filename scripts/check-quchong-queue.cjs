@@ -87,6 +87,7 @@ function load(initialSettings = {}) {
   const snapshots = () => copy(handlers['get-quchong-tasks']());
   return {
     dir,
+    context,
     handlers,
     events,
     jobs,
@@ -393,6 +394,34 @@ async function check(name, run) {
     quirk.jobs.get(other.sources[2]).resolve();
     await tick();
   });
+
+  await check(
+    'a switch to the CPU encoder is told once per batch, with its reason; queue notes stay per episode',
+    async () => {
+      const h = load({ quchong_jobs: 3 });
+      const lines = [];
+      h.context.libLog = (dir, level, text) => lines.push({ dir, level, text });
+      const batch = await h.start(['e1', 'e2', 'e3'], 3);
+      vm.runInContext("for (const b of quchongBatches.values()) b.libraryDir = '/剧'", h.context);
+      for (const source of batch.sources) {
+        h.jobs
+          .get(source)
+          .onLog('[编码器] NVIDIA 显卡编码用不了：NVIDIA 显卡驱动太旧。这一批改用 CPU 编码（成品一样，只是慢一些）');
+        h.jobs.get(source).onLog('[排队] 显卡编码通道都在用，排队等一路空出来');
+      }
+      const encoderLines = lines.filter((line) => /驱动太旧/.test(line.text));
+      assert.equal(encoderLines.length, 1, 'said once for the whole batch');
+      assert.equal(encoderLines[0].level, 'warn');
+      assert.doesNotMatch(encoderLines[0].text, /^e\d/, 'a batch-wide note, not tied to one episode');
+      assert.equal(
+        lines.filter((line) => /排队等一路空出来/.test(line.text)).length,
+        3,
+        'queue notes stay per episode',
+      );
+      for (const source of batch.sources) h.jobs.get(source).resolve();
+      await tick();
+    },
+  );
 
   await check('cancel stops active and queued jobs only in the requested batch', async () => {
     // 全局并发 2：无关批次先占一个槽，被取消的这一批一集在跑、一集排队。
