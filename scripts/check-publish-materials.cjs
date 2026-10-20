@@ -57,7 +57,7 @@ function png(width, height) {
 
 const GOOD_COPY = {
   synopsis:
-    '林晚重生回到被退婚的那一天，这一次她不再忍让。前未婚夫的家族步步紧逼，她却在暗中布下一盘大棋，等着对方自己踩进陷阱。',
+    '林晚重生回到被退婚的那一天，这一次她不再忍让。前未婚夫的家族步步紧逼，她却在暗中布下一盘大棋，等着对方自己踩进陷阱。可当真相慢慢浮出水面，她才惊觉那场婚约的背后，还藏着一个惊天秘密。',
   titles: [
     { title: '退婚后我嫁给了他叔叔', angle: '反转' },
     { title: '她撕了婚书转身就走', angle: '情绪' },
@@ -220,6 +220,8 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       const { result } = await run({ name: 'titles' });
       assert.ok(!result.candidates.includes('最强千金'), 'absolute wording removed');
       assert.ok(!result.candidates.includes('退婚'), 'too short removed');
+      assert.ok(!result.candidates.includes('退婚后我嫁给了他叔叔'), 'a name with a keyword of the original (退婚) is dropped');
+      assert.ok(result.candidates.every((t) => !t.includes('退婚')));
       assert.equal(new Set(result.candidates).size, result.candidates.length);
       assert.equal(result.title, result.candidates[0]);
       assert.equal(result.styleId, 'fire');
@@ -227,6 +229,59 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       const ranked = publish.rankTitles(['退婚之后', '退婚之后的我', '她回来了', '重生后我撕了婚书'], '退婚之后');
       assert.deepEqual(ranked[0], '重生后我撕了婚书');
       assert.ok(!ranked.includes('退婚之后'));
+      assert.ok(!ranked.includes('退婚之后的我'));
+    });
+
+    await check('synopsis: strictly 90–95 characters, no names or phrasing from the original; retried with the problems', async () => {
+      assert.deepEqual(publish.titleKeywords('当家主母的自我修养'), ['当家', '家主', '主母', '自我', '我修', '修养']);
+      assert.deepEqual(publish.titleKeywords('退婚之后'), ['退婚'], '虚字（之）组成的不算关键词');
+      const original = '宋语棠是宋家流落在外的真千金，因一纸婚约嫁给江家长子江慕言。丈夫江慕言因故沉睡，她以过人见识化解重重困局。';
+      const good =
+        '流落民间多年的豪门血脉，凭一纸旧约走进陌生大宅，迎接她的却是昏迷不醒的新郎和处处设防的婆家。她不哭不闹，见招拆招，硬是把一场冷遇变成翻身的机会。可那位沉睡的丈夫，真的什么都不知道吗？';
+      assert.equal(publish.countChars(good) >= 90 && publish.countChars(good) <= 95, true, String(publish.countChars(good)));
+      assert.deepEqual(publish.synopsisProblems(good, { original, names: ['宋语棠', '江慕言'] }), []);
+      const bad = '宋语棠是宋家流落在外的真千金。' + good.slice(15);
+      const problems = publish.synopsisProblems(bad, { original, names: ['宋语棠', '江慕言'] });
+      assert.ok(problems.some((p) => /人名：宋语棠/.test(p)), problems.join(' | '));
+      assert.ok(problems.some((p) => /说法相同：「宋语棠是宋家流落在外的真千金」/.test(p)), problems.join(' | '));
+      // 第一次太长还用了人名，第二次合格：照着问题重写一次就过。
+      const replies = [
+        { synopsis: bad + '多出来的字多出来的字', names: ['宋语棠', '江慕言'] },
+        { synopsis: good, names: [] },
+      ];
+      const seen = [];
+      const fakeOpenai = {
+        chatJson: async (messages) => {
+          seen.push(messages.map((m) => m.content).join('\n'));
+          return replies.shift();
+        },
+      };
+      const d = dirs('strict-synopsis');
+      const out = await publish.generate({ task: 'synopsis', title: '当家主母的自我修养', synopsis: original, ...d, config, openai: fakeOpenai, renderer });
+      assert.equal(out.proposedSynopsis, good);
+      assert.equal(seen.length, 2);
+      assert.match(seen[0], /严格 90–95 个字/);
+      assert.match(seen[0], /严禁出现原简介、原剧名里的任何人名/);
+      assert.match(seen[1], /这一版不合格：现在 101 个字.*用了原简介里的人名：宋语棠（.*说法相同：「宋语棠是宋家流落在外的真千金」/);
+    });
+
+    await check('titles: the prompt lists the original keywords; all-bad candidates are retried with the reason', async () => {
+      const replies = [
+        { titles: ['当家主母归来', '主母的反击'], genre: '古风', style: 'fire', tagline: '开局即反转' },
+        { titles: ['豪门长媳掌家记', '她把婆家管服了'], genre: '古风', style: 'fire', tagline: '开局即反转' },
+      ];
+      const seen = [];
+      const fakeOpenai = {
+        chatJson: async (messages) => {
+          seen.push(messages.map((m) => m.content).join('\n'));
+          return replies.shift();
+        },
+      };
+      const d = dirs('strict-title');
+      const out = await publish.generate({ task: 'titles', title: '当家主母的自我修养', ...d, config, openai: fakeOpenai, renderer });
+      assert.deepEqual(out.candidates.sort(), ['她把婆家管服了', '豪门长媳掌家记'].sort());
+      assert.match(seen[0], /这些词一个都不能有：当家、家主、主母、自我、我修、修养/);
+      assert.match(seen[1], /这些剧名都不合格：不能出现原剧名里的关键词/);
     });
 
     await check('the work file with the unlabeled art stays in the private dir, not the series folder', async () => {
@@ -327,7 +382,7 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt']);
       assert.match(savedSynopsis.synopsis, /重生回到被退婚/);
       assert.equal(savedSynopsis.proposedSynopsis, '', 'saved: no pending draft left');
-      assert.throws(() => publish.saveSynopsis({ ...d, synopsis: '太短' }), /至少写 10 个字/);
+      assert.throws(() => publish.saveSynopsis({ ...d, synopsis: '太短' }), /简介现在 2 个字，要 90–95 个字/);
       const afterTitles = await publish.generate({ task: 'titles', ...base });
       assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt'], 'rewriting titles only offers candidates');
       assert.equal(afterTitles.title, '', 'no title is chosen until one is saved');
@@ -403,7 +458,7 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       const d = dirs('bad-synopsis');
       await assert.rejects(
         publish.generate({ task: 'synopsis', title: '退婚之后', ...d, config, openai, renderer }),
-        /简介太短/,
+        /改写了 4 次都没有完全合格（现在 2 个字，必须是 90–95 个字/,
       );
       assert.deepEqual(fs.readdirSync(d.outputDir), []);
       textMode = 'ok';

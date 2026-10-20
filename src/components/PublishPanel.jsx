@@ -4,6 +4,9 @@ import { RefreshCw } from './icons';
 import { isSubmitKey } from './episodeRange';
 
 /** 一项内容的状态：没有 / 已保存 / 有改动还没保存。 */
+const synopsisLength = (text) => Array.from(String(text || '').replace(/\s+/g, '')).length;
+const synopsisLengthOk = (text) => synopsisLength(text) >= 90 && synopsisLength(text) <= 95;
+
 function StatusBadge({ saved, dirty, emptyText = '还没有' }) {
   if (dirty) return <span className="pub-badge is-dirty">未保存</span>;
   if (!saved) return <span className="pub-badge is-empty">{emptyText}</span>;
@@ -250,6 +253,12 @@ export default function PublishPanel({ dir, onResult }) {
           aria-label="新简介"
           onChange={(e) => setSynopsisDraft(e.target.value)}
         />
+        {synopsisDraft.trim() && (
+          // 发布简介要 90–95 个字（汉字和标点都算，空白不算），保存时也按这个校验。
+          <p className={`pub-meta ${synopsisLengthOk(synopsisDraft) ? '' : 'is-dirty'}`}>
+            {synopsisLength(synopsisDraft)} 个字{synopsisLengthOk(synopsisDraft) ? '' : '（要 90–95 个字）'}
+          </p>
+        )}
         {synopsisDirty && result.proposedSynopsis && synopsisDraft === result.proposedSynopsis && (
           <p className="pub-meta is-dirty">这是 AI 刚写的新版本，还没保存。</p>
         )}

@@ -40,6 +40,63 @@ const HOOK_WORDS = [
 ];
 const BANNED_TITLE = /最|第一|国家级|顶级|绝对|必看/;
 
+// 简介：90–95 个字（汉字、标点都算一个字，空白不算），严格校验，不合格就让模型照着问题重写。
+const SYNOPSIS_MIN = 90;
+const SYNOPSIS_MAX = 95;
+const SYNOPSIS_ATTEMPTS = 4;
+const TITLE_ATTEMPTS = 3;
+// 和原文连着这么多个字一样，就算「沿用了原来的说法」。
+const SAME_PHRASE = 4;
+// 剧名关键词里不算数的虚字：「的自」「之后」这类不算关键词。
+const TITLE_FILLERS = new Set(Array.from('的之了与和及在是被把将着地得也都又就还'));
+
+const HAN = /\p{Script=Han}/u;
+const countChars = (text) => Array.from(String(text || '').replace(/\s+/g, '')).length;
+
+/** 原剧名里连着的两个汉字（去掉虚字）就是关键词：新剧名一个都不能有。 */
+function titleKeywords(original) {
+  const chars = Array.from(cleanTitle(original));
+  const words = [];
+  for (let i = 0; i + 1 < chars.length; i += 1) {
+    const pair = chars[i] + chars[i + 1];
+    if (!HAN.test(chars[i]) || !HAN.test(chars[i + 1])) continue;
+    if (TITLE_FILLERS.has(chars[i]) || TITLE_FILLERS.has(chars[i + 1])) continue;
+    if (!words.includes(pair)) words.push(pair);
+  }
+  return words;
+}
+
+/** 新文本里和原文连着 SAME_PHRASE 个汉字以上一样的片段（只看汉字，标点不算）。 */
+function sharedPhrases(text, original, size = SAME_PHRASE) {
+  const han = (value) => Array.from(String(value || '')).filter((ch) => HAN.test(ch)).join('');
+  const source = han(original);
+  const chars = Array.from(han(text));
+  const found = [];
+  for (let i = 0; i + size <= chars.length; i += 1) {
+    const piece = chars.slice(i, i + size).join('');
+    if (!source.includes(piece)) continue;
+    // 连着的重复合成一段，方便告诉模型改哪里。
+    let end = i + size;
+    while (end < chars.length && source.includes(chars.slice(i, end + 1).join(''))) end += 1;
+    found.push(chars.slice(i, end).join(''));
+    i = end - 1;
+  }
+  return found;
+}
+
+/** 检查一版简介，返回不合格的地方（空数组就是合格）。 */
+function synopsisProblems(text, { original = '', title = '', names = [] } = {}) {
+  const problems = [];
+  const length = countChars(text);
+  if (length < SYNOPSIS_MIN || length > SYNOPSIS_MAX)
+    problems.push(`现在 ${length} 个字，必须是 ${SYNOPSIS_MIN}–${SYNOPSIS_MAX} 个字（汉字和标点都算）`);
+  const usedNames = [...new Set(names)].filter((name) => name && String(text).includes(name));
+  if (usedNames.length) problems.push(`用了原简介里的人名：${usedNames.join('、')}（改用身份称呼）`);
+  const phrases = sharedPhrases(text, `${original}\n${title}`);
+  if (phrases.length) problems.push(`和原简介说法相同：${phrases.slice(0, 6).map((p) => `「${p}」`).join('')}（换种说法）`);
+  return problems;
+}
+
 const clip = (value, limit) =>
   Array.from(String(value || '').trim())
     .slice(0, limit)
@@ -80,7 +137,10 @@ function buildTitleMessages({ title, synopsis, source }) {
     '你是短剧发布运营，负责把短剧的剧名改写得更吸引人，同时不改变剧情事实。',
     JSON_ONLY,
     '- titles：5 个新剧名，每项 {"title":"…","angle":"悬念|反转|身份落差|情绪|金句"}。要求：3–10 个汉字（最好 5–7 个），口语化、强冲突，',
-    '  让人一眼想点开；不能与原剧名相同或只改一两个字；不要标点（可有一个“！”或“？”）；不要出现“最”“第一”“必看”等绝对化用语；不要出现真实人名。',
+    '  让人一眼想点开；不要标点（可有一个“！”或“？”）；不要出现“最”“第一”“必看”等绝对化用语；不要出现真实人名。',
+    '  必须换一种说法：意思和原剧名一致，但不能出现原剧名里的任何关键词' +
+      (titleKeywords(title).length ? `（这些词一个都不能有：${titleKeywords(title).join('、')}）` : '') +
+      '，用同义的不同说法表达。',
     '- genre：题材，一两个词（如 霸总、重生逆袭、古风、悬疑、甜宠、复仇、玄幻、都市）。',
     `- style：从下面的标题样式里选一个最贴合题材的 id：\n${describeStyles()}`,
     '- tagline：海报角标短句，4–10 个字，有钩子（如“开局即巅峰”“全集已更新”），不要标点。',
@@ -96,7 +156,12 @@ function buildSynopsisMessages({ title, synopsis, source }) {
   const system = [
     '你是短剧发布运营，负责把短剧的剧情简介改写得更吸引人，同时不改变剧情事实。',
     JSON_ONLY,
-    '- synopsis：改写后的剧情简介，120–200 字，第三人称，保留人物关系和核心冲突，用自己的话重写（不要照抄原句），不剧透结局，结尾留悬念。',
+    `- synopsis：改写后的剧情简介，严格 ${SYNOPSIS_MIN}–${SYNOPSIS_MAX} 个字（汉字和标点都算一个字），第三人称。`,
+    '  讲的还是同一个故事（人物关系、核心冲突不变），但必须完全换一种说法：',
+    '  1. 严禁出现原简介、原剧名里的任何人名，人物一律用身份称呼（如“落魄千金”“冷面总裁”“养女”）；',
+    `  2. 严禁沿用原简介的句子和说法，不能有和原简介连着 ${SAME_PHRASE} 个字一样的片段；`,
+    '  3. 不剧透结局，结尾留悬念。',
+    '- names：原简介里出现的所有人名（字符串数组，没有就给空数组）。',
   ].join('\n');
   return [
     { role: 'system', content: system },
@@ -138,11 +203,13 @@ function sharedRun(a, b, size = 3) {
 function rankTitles(candidates, original) {
   const seen = new Set();
   const scored = [];
+  const keywords = titleKeywords(original);
   (Array.isArray(candidates) ? candidates : []).forEach((item, order) => {
     const title = cleanTitle(typeof item === 'string' ? item : item?.title);
     const length = Array.from(title).length;
     if (length < TITLE_MIN || length > TITLE_MAX || BANNED_TITLE.test(title) || seen.has(title)) return;
     if (title === cleanTitle(original)) return;
+    if (keywords.some((word) => title.includes(word))) return; // 不得含原剧名的关键词
     seen.add(title);
     let score = length >= 5 && length <= 7 ? 3 : length === 4 || length === 8 ? 2 : 1;
     if (HOOK_WORDS.some((word) => title.includes(word))) score += 1;
@@ -162,9 +229,14 @@ function normalizeTitles(raw, { title, synopsis }) {
 }
 
 function normalizeSynopsis(raw) {
-  const synopsis = clip(raw?.synopsis, 600);
-  if (Array.from(synopsis).length < 30) throw new Error('模型给的简介太短，请重试');
-  return synopsis;
+  return clip(String(raw?.synopsis || '').replace(/\s+/g, ''), 600);
+}
+
+/** 模型自己列出的原简介人名，只留像人名的（2–4 个汉字）。 */
+function synopsisNames(raw) {
+  return (Array.isArray(raw?.names) ? raw.names : [])
+    .map((name) => cleanTitle(name))
+    .filter((name) => /^\p{Script=Han}{2,4}$/u.test(name));
 }
 
 // ---------- 画面 ----------
@@ -328,8 +400,26 @@ async function makeTitles({
 }) {
   if (!title) throw new Error('缺少剧名');
   onProgress?.({ stage: 'titles', message: '正在改写剧名' });
-  const raw = await openai.chatJson(buildTitleMessages({ title, synopsis, source }), { signal }, config);
-  const found = normalizeTitles(raw, { title, synopsis });
+  const messages = buildTitleMessages({ title, synopsis, source });
+  let found = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= TITLE_ATTEMPTS && !found; attempt += 1) {
+    const raw = await openai.chatJson(messages, { signal }, config);
+    try {
+      found = normalizeTitles(raw, { title, synopsis });
+    } catch (error) {
+      lastError = error;
+      // 全被刷掉了（多半是用了原剧名的词）：把问题告诉模型再写一轮。
+      messages.push(
+        { role: 'assistant', content: JSON.stringify(raw ?? {}) },
+        {
+          role: 'user',
+          content: `这些剧名都不合格：不能出现原剧名里的关键词（${titleKeywords(title).join('、') || '原剧名的词'}），长度 ${TITLE_MIN}–${TITLE_MAX} 个字。请换种说法重新给 5 个，仍只输出 JSON。`,
+        },
+      );
+    }
+  }
+  if (!found) throw lastError || new Error('模型没有给出合格的剧名，请重试');
   const state = loadState(workDir, title);
   Object.assign(state.copy, found);
   writeState(workDir, state);
@@ -350,8 +440,25 @@ async function makeSynopsis({
 }) {
   if (!title) throw new Error('缺少剧名');
   onProgress?.({ stage: 'synopsis', message: '正在改写简介' });
-  const raw = await openai.chatJson(buildSynopsisMessages({ title, synopsis, source }), { signal }, config);
-  const next = normalizeSynopsis(raw);
+  // 严格校验：字数、人名、和原文相同的说法，有一样不合格就把问题原样告诉模型重写，最多 SYNOPSIS_ATTEMPTS 次。
+  const messages = buildSynopsisMessages({ title, synopsis, source });
+  let next = '';
+  let problems = [];
+  let names = [];
+  for (let attempt = 1; attempt <= SYNOPSIS_ATTEMPTS; attempt += 1) {
+    const raw = await openai.chatJson(messages, { signal }, config);
+    names = [...new Set([...names, ...synopsisNames(raw)])];
+    next = normalizeSynopsis(raw);
+    problems = synopsisProblems(next, { original: synopsis, title, names });
+    if (!problems.length) break;
+    onProgress?.({ stage: 'synopsis', message: `简介不合格，第 ${attempt + 1} 次重写：${problems[0]}` });
+    messages.push(
+      { role: 'assistant', content: JSON.stringify({ synopsis: next, names }) },
+      { role: 'user', content: `这一版不合格：${problems.join('；')}。请按要求重写，仍只输出 JSON。` },
+    );
+  }
+  if (problems.length)
+    throw new Error(`改写了 ${SYNOPSIS_ATTEMPTS} 次都没有完全合格（${problems.join('；')}），请再点一次「重新改写」`);
   const state = loadState(workDir, title);
   // 只是 AI 写的新版本，放在「待保存」里；点「保存」才会写进简介文件。
   state.copy.synopsis = next;
@@ -362,7 +469,9 @@ async function makeSynopsis({
 /** 保存简介（AI 新写的或手改的）：写进简介文件，之后算「已保存」。 */
 function saveSynopsis({ outputDir, workDir, synopsis }) {
   const text = clip(String(synopsis ?? '').replace(/\r\n?/g, '\n'), 600).trim();
-  if (Array.from(text).length < 10) throw new Error('简介至少写 10 个字');
+  const length = countChars(text);
+  if (length < SYNOPSIS_MIN || length > SYNOPSIS_MAX)
+    throw new Error(`简介现在 ${length} 个字，要 ${SYNOPSIS_MIN}–${SYNOPSIS_MAX} 个字（汉字和标点都算）`);
   const state = loadState(workDir, '');
   state.copy.synopsis = text;
   const paths = outputPaths(outputDir);
@@ -523,6 +632,12 @@ module.exports = {
   buildArtPrompt,
   normalizeTitles,
   normalizeSynopsis,
+  synopsisProblems,
+  titleKeywords,
+  sharedPhrases,
+  countChars,
+  SYNOPSIS_MIN,
+  SYNOPSIS_MAX,
   normalizeInspection,
   rankTitles,
   cleanTitle,
