@@ -268,46 +268,52 @@ function mount(file, api, props = {}) {
     assert.ok(ui.text().includes('《A》'));
     ui.unmount();
   });
-  await test('browse categories: comic then real returns cached cards and ignores late comic', async () => {
-    const pendingComic = deferred();
-    let realCalls = 0;
-    const list = (title) => ({ success: true, results: [{ series_id: title, series_title: title }], totalPages: 1 });
+  await test('browse: hot rank is the first tab and opens by default; a slow tab never blocks another', async () => {
+    const pendingAi = deferred();
+    const calls = [];
+    const list = (title, extra = {}) => ({
+      success: true,
+      results: [{ series_id: title, series_title: title, ...extra }],
+      totalPages: 1,
+    });
     const ui = mount('Browse', {
       getSeriesList: async () => [],
       browseCategories: async () => [
+        { slug: 'hot-rank', label: '热度榜' },
         { slug: 'real-drama', label: '真人剧' },
-        { slug: 'comic', label: '漫画' },
+        { slug: 'ai-drama', label: 'AI剧' },
       ],
-      browseList: async (p) =>
-        p.category === 'comic'
-          ? pendingComic.promise
-          : p.category === 'comic-drama'
-            ? list('动态漫剧')
-            : (realCalls++, list('真人缓存')),
+      browseList: async (p) => {
+        calls.push(`${p.category}/${p.genre}`);
+        if (p.category === 'ai-drama') return pendingAi.promise;
+        if (p.category === 'real-drama') return list('真人缓存');
+        return {
+          ...list(p.genre ? `榜单-${p.genre}` : '榜一大剧', { rank: 1, heat: '8070万热度', score: '9.1', status_tags: ['新剧'] }),
+          genres: [{ slug: 'real-drama', label: '真人剧' }],
+          genreAllLabel: '总榜',
+          notice: '10月20日已更新 · 基于红果内观看/互动等综合热度排序',
+        };
+      },
     });
     await ui.flush();
-    ui.button('漫画').props.onClick();
+    assert.equal(calls[0], 'hot-rank/', 'the hot rank loads first');
+    const tabs = ui.nodes().filter((n) => n.type === 'button' && String(n.props.className).startsWith('browse-cat'));
+    const label = (n) => (typeof n === 'string' ? n : (n?.children || []).map(label).join(''));
+    assert.equal(label(tabs[0]), '热度榜');
+    assert.ok(!ui.text().includes('漫画'));
+    assert.ok(ui.text().includes('榜一大剧') && ui.text().includes('8070万热度') && ui.text().includes('评分 9.1'));
+    assert.ok(ui.text().includes('已更新'));
+    assert.ok(ui.find((n) => String(n.props.className).includes('browse-rank-badge top top-1')), 'top 3 get a coloured rank');
+    assert.ok(ui.button('总榜'));
+    ui.button('真人剧').props.onClick(); // 第一个「真人剧」是分类 tab
+    await ui.flush();
+    ui.button('AI剧').props.onClick();
     await ui.flush();
     ui.button('真人剧').props.onClick();
-    pendingComic.resolve({
-      success: true,
-      results: [],
-      unsupported: true,
-      emptyMessage: '这里是图文漫画，暂不支持视频下载；看动态漫画请切换“漫剧”。',
-    });
-    await Promise.resolve();
-    await Promise.resolve();
+    pendingAi.resolve(list('迟到的AI剧'));
     await ui.flush();
-    assert.equal(realCalls, 1, 'switching back must not queue another request behind comic');
     assert.ok(ui.text().includes('真人缓存'));
-    assert.ok(!ui.text().includes('这里是图文漫画'));
-    ui.button('漫画').props.onClick();
-    await ui.flush();
-    assert.ok(ui.text().includes('这里是图文漫画，暂不支持视频下载'));
-    assert.ok(!ui.text().includes('暂时没能加载剧集'));
-    ui.button('查看漫剧').props.onClick();
-    await ui.flush();
-    assert.ok(ui.text().includes('动态漫剧'));
+    assert.ok(!ui.text().includes('迟到的AI剧'), 'a late answer from another tab is ignored');
     ui.unmount();
   });
   await test('browse categories: timeout ends skeleton and retry rejects the old response', async () => {

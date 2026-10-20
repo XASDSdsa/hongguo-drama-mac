@@ -2397,10 +2397,10 @@ async function runSearchSniff(keyword) {
 
 // ===== 浏览：分类页（含题材筛选与分页）=====
 const BROWSE_CATEGORIES = [
+  { slug: 'hot-rank', label: '热度榜' },
   { slug: 'real-drama', label: '真人剧' },
   { slug: 'comic-drama', label: '漫剧' },
   { slug: 'ai-drama', label: 'AI剧' },
-  { slug: 'comic', label: '漫画' },
 ];
 
 ipcMain.handle('browse-categories', async () => BROWSE_CATEGORIES);

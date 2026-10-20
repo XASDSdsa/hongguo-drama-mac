@@ -120,6 +120,59 @@
   border-radius: 5px;
   z-index: 2;
 }
+.browse-rank-badge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0 0 9px 0;
+  background: #1e1d1bcc;
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  z-index: 2;
+}
+.browse-rank-badge.top {
+  min-width: 30px;
+  height: 30px;
+  font-size: 15px;
+}
+.browse-rank-badge.top-1 {
+  background: #d23b35;
+}
+.browse-rank-badge.top-2 {
+  background: #e0752c;
+}
+.browse-rank-badge.top-3 {
+  background: #d9a23a;
+}
+.browse-card-heat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+.browse-heat {
+  color: #c4372f;
+  font-weight: 600;
+}
+.browse-new {
+  color: #2d664f;
+}
+.browse-notice {
+  margin: -4px 0 14px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
 .browse-dl-badge {
   position: absolute;
   right: 8px;

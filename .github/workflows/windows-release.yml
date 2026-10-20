@@ -332,6 +332,8 @@ jobs:
         run: |
           set -e
           node scripts/check-undefined-names.cjs
+          node scripts/check-hot-rank-live.cjs
+          node scripts/check-catalog.cjs
           node scripts/check-download-series.cjs
           node scripts/check-download-errors.cjs
           node scripts/check-pagination.cjs

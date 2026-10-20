@@ -20,7 +20,8 @@ const LIST_TIMEOUT_MS = 25_000;
 function Browse({ onNavigate, active = true }) {
   const [source, setSource] = useState('hongguo');
   const [categories, setCategories] = useState([]);
-  const [category, setCategory] = useState('real-drama');
+  // 红果默认打开热度榜（分类里的第一个）。
+  const [category, setCategory] = useState('hot-rank');
   const [genre, setGenre] = useState('');
   const [page, setPage] = useState(1);
 
@@ -28,7 +29,6 @@ function Browse({ onNavigate, active = true }) {
   const [meta, setMeta] = useState({ total: 0, totalPages: 0, genres: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [unsupported, setUnsupported] = useState(false);
   const [sourceUrl, setSourceUrl] = useState('');
 
   // 详情抽屉
@@ -111,7 +111,6 @@ function Browse({ onNavigate, active = true }) {
       const request = listRequest.current;
       const key = JSON.stringify([source, cat, gen, pg]);
       const cached = pageCache.get(key);
-      setUnsupported(false);
       setError('');
       setResults(cached?.results || []);
       setMeta(cached?.meta || { total: 0, totalPages: 0, genres: [] });
@@ -137,6 +136,8 @@ function Browse({ onNavigate, active = true }) {
             total: res.total || 0,
             totalPages: res.totalPages || 0,
             genres: res.genres || [],
+            genreAllLabel: res.genreAllLabel || '',
+            notice: res.notice || '',
             hasMore: res.hasMore === true,
           },
           sourceUrl: res.sourceUrl || '',
@@ -151,7 +152,6 @@ function Browse({ onNavigate, active = true }) {
           if (pageCache.size > 24) pageCache.delete(pageCache.keys().next().value);
         } else {
           pageCache.delete(key);
-          setUnsupported(res.unsupported === true);
           setError(res.emptyMessage || '这一页没有取到内容，可重新加载或换分类。');
         }
       } catch (e) {
@@ -184,7 +184,7 @@ function Browse({ onNavigate, active = true }) {
     invalidateList();
     closeDetail();
     setSource(next);
-    setCategory('real-drama');
+    setCategory(next === 'hongguo' ? 'hot-rank' : 'real-drama');
     setGenre('');
     setPage(1);
     setResults([]);
@@ -378,7 +378,7 @@ function Browse({ onNavigate, active = true }) {
       {/* 分类 tab */}
       {source === 'hongguo' && (
         <div className="browse-cats">
-          {(categories.length ? categories : [{ slug: 'real-drama', label: '真人剧' }]).map((c) => (
+          {(categories.length ? categories : [{ slug: 'hot-rank', label: '热度榜' }]).map((c) => (
             <button
               key={c.slug}
               className={`browse-cat ${category === c.slug ? 'active' : ''}`}
@@ -394,7 +394,7 @@ function Browse({ onNavigate, active = true }) {
       {meta.genres.length > 0 && (
         <div className="browse-genres">
           <button className={`genre-chip ${genre === '' ? 'active' : ''}`} onClick={() => switchGenre('')}>
-            {source === 'xifan' ? '默认分类' : '全部'}
+            {meta.genreAllLabel || (source === 'xifan' ? '默认分类' : '全部')}
           </button>
           {meta.genres.map((g) => (
             <button
@@ -408,22 +408,18 @@ function Browse({ onNavigate, active = true }) {
         </div>
       )}
 
+      {meta.notice && !error && <p className="browse-notice">{meta.notice}</p>}
+
       {error && (
-        <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}>
+        <div className="browse-error-state" role="alert">
           <Film size={36} />
-          <h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3>
+          <h3>暂时没能加载剧集</h3>
           <p>{error}</p>
           <div className="search-empty-actions">
-            {unsupported ? (
-              <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>
-                查看漫剧
-              </button>
-            ) : (
-              <button className="btn btn-primary" onClick={() => loadList(category, genre, page, true)}>
-                <RefreshCw size={15} />
-                重新加载
-              </button>
-            )}
+            <button className="btn btn-primary" onClick={() => loadList(category, genre, page, true)}>
+              <RefreshCw size={15} />
+              重新加载
+            </button>
             <button className="btn btn-outline" onClick={() => onNavigate('download')}>
               按剧名搜索
             </button>
@@ -480,6 +476,11 @@ function Browse({ onNavigate, active = true }) {
                       <Film size={22} />
                     </div>
                   )}
+                  {item.rank > 0 && (
+                    <span className={`browse-rank-badge ${item.rank <= 3 ? `top top-${item.rank}` : ''}`}>
+                      {item.rank}
+                    </span>
+                  )}
                   {item.episode_count > 0 && <span className="browse-ep-badge">全{item.episode_count}集</span>}
                   {dl && dl.completed > 0 && (
                     <span className="browse-dl-badge">
@@ -493,6 +494,13 @@ function Browse({ onNavigate, active = true }) {
                   </div>
                 </div>
                 <div className="browse-card-title">{item.series_title}</div>
+                {(item.heat || item.score) && (
+                  <div className="browse-card-heat">
+                    {item.heat && <span className="browse-heat">{item.heat}</span>}
+                    {item.score && <span className="browse-score">评分 {item.score}</span>}
+                    {item.status_tags?.includes('新剧') && <span className="browse-new">新剧</span>}
+                  </div>
+                )}
                 {item.tags && item.tags.length > 0 && (
                   <div className="browse-card-tags">
                     {item.tags.slice(0, 2).map((t) => (
