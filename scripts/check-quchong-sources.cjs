@@ -187,9 +187,12 @@ if printf '%s\\n' "$@" | grep -qx h264_nvenc; then
     exit 1
   fi
 fi
-args=(); prev=""
+args=(); prev=""; skip=0
 for a in "$@"; do
-  if [ "$prev" = "-preset" ] && [ "$a" = "p1" ]; then args+=("ultrafast"); prev="$a"; continue; fi
+  # NVENC 才有的选项（-tune hq、-rc vbr、-spatial-aq 1）连同取值一起去掉，x264 认不得。
+  if [ $skip -eq 1 ]; then skip=0; prev="$a"; continue; fi
+  case "$a" in -tune|-rc|-spatial-aq) skip=1; prev="$a"; continue;; esac
+  if [ "$prev" = "-preset" ] && [[ "$a" == p[1-7] ]]; then args+=("ultrafast"); prev="$a"; continue; fi
   case "$a" in h264_nvenc) args+=("libx264");; -cq) args+=("-crf");; *) args+=("$a");; esac
   prev="$a"
 done

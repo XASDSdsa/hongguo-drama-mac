@@ -235,6 +235,12 @@ async function main() {
   assert.deepEqual(quchong.encoderArgs('nvenc', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_nvenc']);
   assert.deepEqual(quchong.encoderArgs('amf', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_amf']);
   assert.deepEqual(quchong.encoderArgs('qsv', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_qsv']);
+  // 显卡编码画质：NVIDIA 不再用最快最糊的 p1，平均码率不设上限，开空间自适应量化；AMD 用固定量化参数。
+  const nv = quchong.encoderArgs('nvenc', false, 1080, 1920).join(' ');
+  assert.match(nv, /-preset p4 -tune hq -rc vbr -cq 21 -b:v 0 -spatial-aq 1/);
+  assert.ok(!/-preset p1/.test(nv));
+  assert.match(quchong.encoderArgs('nvenc', true, 1080, 1920).join(' '), /-cq 24/);
+  assert.match(quchong.encoderArgs('amf', false, 1080, 1920).join(' '), /-quality balanced -rc cqp -qp_i 21 -qp_p 21 -qp_b 21/);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-drama-quchong-'));
   try {
     const src = path.join(dir, 'source.mp4');

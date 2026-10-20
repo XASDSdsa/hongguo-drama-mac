@@ -39,8 +39,10 @@ const DEFAULTS = Object.freeze({
   saturation_max: 1.2841,
   hue_min: -8.6,
   hue_max: 7.7,
-  unsharp_min: -0.86,
-  unsharp_max: 0.73,
+  // 锐化量为负其实是模糊：以前默认 -0.86 ~ 0.73，六成的集被轻微模糊，再加上裁边放大，成品明显发糊。
+  // 默认改为 0 ~ 0.5：每集仍随机不同，但都是轻微锐化，正好补回裁边放大损失的清晰度。
+  unsharp_min: 0,
+  unsharp_max: 0.5,
   rotation_max: 0,
   rgb_shift: 0,
   noise_min: 0,
@@ -303,8 +305,31 @@ async function checkEncoders(ffmpegPath, platform = process.platform) {
 }
 
 function encoderArgs(name, lean, width, height) {
-  if (name === 'nvenc') return ['-c:v', 'h264_nvenc', '-preset', 'p1', '-cq', lean ? '24' : '21'];
-  if (name === 'amf') return ['-c:v', 'h264_amf', '-quality', 'speed'];
+  // NVIDIA：以前用 p1（FFmpeg 自己标注「最快、画质最低」），成品发糊。改用 p4（FFmpeg 默认的平衡档），
+  // 打开空间自适应量化（细节多的地方多给码率），-b:v 0 明确不限平均码率，只按画质目标 -cq 编。
+  // 显卡编码速度很快，整条处理的瓶颈在前面的滤镜，换成 p4 总时间基本不变。
+  if (name === 'nvenc')
+    return [
+      '-c:v',
+      'h264_nvenc',
+      '-preset',
+      'p4',
+      '-tune',
+      'hq',
+      '-rc',
+      'vbr',
+      '-cq',
+      lean ? '24' : '21',
+      '-b:v',
+      '0',
+      '-spatial-aq',
+      '1',
+    ];
+  // AMD：以前 -quality speed 又不给画质目标，落到默认码率；改为平衡档 + 固定量化参数（和 NVIDIA 的 -cq 同一档）。
+  if (name === 'amf') {
+    const qp = lean ? '24' : '21';
+    return ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', qp, '-qp_p', qp, '-qp_b', qp];
+  }
   if (name === 'qsv') return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', lean ? '25' : '21'];
   if (name === 'videotoolbox') {
     let bitrate = Math.max(1500, Math.floor(width * height * 0.00386));

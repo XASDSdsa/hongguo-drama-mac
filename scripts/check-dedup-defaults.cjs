@@ -31,8 +31,9 @@ assert.deepEqual(
 );
 assert.deepEqual(
   [D.gamma_min, D.gamma_max, D.saturation_min, D.saturation_max, D.hue_min, D.hue_max, D.unsharp_min, D.unsharp_max],
-  [0.8781, 1.1227, 0.7982, 1.2841, -8.6, 7.7, -0.86, 0.73],
+  [0.8781, 1.1227, 0.7982, 1.2841, -8.6, 7.7, 0, 0.5],
 );
+assert.ok(D.unsharp_min >= 0, '默认不做模糊（锐化量为负就是模糊，成品会发糊）');
 for (const key of ['rotation_max', 'rgb_shift', 'noise_min', 'noise_max']) assert.equal(D[key], 0, `${key} 默认关`);
 assert.equal(D.vignette, false);
 assert.equal(D.eq_enable, false);
