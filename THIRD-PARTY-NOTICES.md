@@ -28,11 +28,11 @@ Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 | 项 | 说明 |
 |---|---|
 | 文件 | `resources/bin/ffmpeg.exe`、`resources/bin/ffprobe.exe` |
-| 版本 | FFmpeg 9.0.2-hongguo-nvenc12.2 |
+| 版本 | FFmpeg 9.0.2-aidrama-nvenc11.1 |
 | 来源 | 本仓库 `scripts/build-ffmpeg-source-win.sh`，固定源码构建 |
 | 构建参数 | 含 `--enable-gpl --enable-version3 --enable-libx264 --enable-libvpl --enable-nvenc --enable-amf` |
 | **许可证** | **GNU General Public License v3.0 or later** |
-| 完整对应源码 | https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/ffmpeg-9.0.2-nvenc12.2 |
+| 完整对应源码 | 发布页里的 ffmpeg-9.0.2-nvenc11.1-win-x64-source.tar.xz（https://github.com/XASDSdsa/hongguo-drama-mac/releases/tag/v1.1.41-breath-on-shot） |
 
 用途：视频去重、分片拼接及「兼容模式」格式转码
 （解决部分电脑无法硬件解码 HEVC 导致的「黑屏有声」）。
@@ -48,7 +48,7 @@ Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 FFmpeg 是独立的第三方程序，本软件仅通过命令行调用其公开接口，未修改其源码。
 
 静态依赖包括 x264（GPLv2-or-later）、libvpl 2.17.0（MIT）、zlib 1.3.2（zlib 许可）；
-构建时使用 nv-codec-headers n12.2.72.0（MIT）和 AMF 1.5.2 头文件（MIT）。
+构建时使用 nv-codec-headers n11.1.5.3（MIT）和 AMF 1.5.2 头文件（MIT）。
 各依赖许可证、NVENC 头文件许可、准确版本与构建配置随 Windows 程序附带。
 完整对应源码包同时包含这些依赖和准确构建脚本。libvpl 仅修正旧 MSVC shim 的条件，准确补丁也随源码包附带。未启用 nonfree，PE 导入仅包含 Windows 系统库；硬件编码使用已安装的相应显卡驱动。
 

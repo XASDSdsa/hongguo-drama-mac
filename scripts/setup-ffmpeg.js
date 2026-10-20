@@ -6,7 +6,7 @@
  *   clone 仓库后执行一次本脚本，即可把 ffmpeg.exe / ffprobe.exe 放到
  *   build/ffmpeg/，之后 `npm run build` 会通过 extraResources 打进安装包。
  *
- * Windows 工具链固定使用 WINDOWS-BUILD.json 中兼容 NVENC API 12.2 的构建。
+ * Windows 工具链固定使用 WINDOWS-BUILD.json 中按 NVENC API 11.1 编译的构建（NVIDIA 驱动 471.41 起可用）。
  * 同一 FFmpeg 版本的其他构建不能替代它；压缩包和两个程序均校验 SHA256。
  *
  * 用法：node scripts/setup-ffmpeg.js

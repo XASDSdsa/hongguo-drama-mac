@@ -169,14 +169,14 @@ const ENCODER_LABEL = { nvenc: 'NVIDIA 显卡', qsv: 'Intel 核显', amf: 'AMD �
 
 /**
  * 把显卡试编失败时 FFmpeg 的报错翻成一句能照着做的话。
- * 最常见的是驱动太旧：自带的 FFmpeg 用 NVENC 12.2，需要 NVIDIA 驱动 551.76 或更新。
+ * 最常见的是驱动太旧：自带的 FFmpeg 按 NVENC 11.1 编译，需要 NVIDIA 驱动 471.41 或更新。
  */
 function explainEncoderFailure(name, stderr = '', timedOut = false) {
   const text = String(stderr || '');
   if (timedOut) return '试编 20 秒还没有结果（显卡可能正忙），稍后会再试';
   const api = text.match(/required nvenc API version\.\s*Required:\s*([\d.]+)\s*Found:\s*([\d.]+)/i);
   if (api || /minimum required Nvidia driver/i.test(text)) {
-    const minimum = (text.match(/driver for nvenc is ([\d.]+)/i) || [])[1] || '551.76';
+    const minimum = (text.match(/driver for nvenc is ([\d.]+)/i) || [])[1] || '471.41';
     return `NVIDIA 显卡驱动太旧${api ? `（现在的驱动只支持 NVENC ${api[2]}，需要 ${api[1]}）` : ''}：请到 NVIDIA 官网下载安装 ${minimum} 或更新的驱动，装完重启电脑`;
   }
   if (/nvcuda\.dll|nvEncodeAPI64\.dll|libcuda|libnvidia-encode|Could not dynamically load CUDA/i.test(text))

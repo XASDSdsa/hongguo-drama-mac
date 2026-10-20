@@ -434,7 +434,7 @@ function SettingsPage({ active = true }) {
                 <option value="cpu">只用 CPU（显卡编码出错时选这个）</option>
               </select>
               <em>
-                NVIDIA 显卡需要 551.76 或更新的驱动才能加速；驱动太旧或显卡编码报错时会自动改用
+                NVIDIA 显卡需要 471.41（2021 年）或更新的驱动才能加速；驱动太旧或显卡编码报错时会自动改用
                 CPU（速度慢一些，成品一样）。不确定能不能用，点下面「检测显卡编码」。
               </em>
             </label>

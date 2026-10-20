@@ -196,8 +196,8 @@ jobs:
       - name: Download tested Windows FFmpeg build artifact
         uses: actions/download-artifact@v7
         with:
-          name: ffmpeg-9.0.2-nvenc12.2-win-x64
-          run-id: 38249008141
+          name: ffmpeg-9.0.2-nvenc11.1-win-x64
+          run-id: 39368793098
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/ffmpeg-compat
 
@@ -205,9 +205,9 @@ jobs:
         shell: pwsh
         run: |
           $artifactDir = Join-Path $env:RUNNER_TEMP 'ffmpeg-compat'
-          $archive = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64.zip' -File -Recurse | Select-Object -First 1
-          $source = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64-source.tar.xz' -File -Recurse | Select-Object -First 1
-          $checksums = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc12.2-win-x64.sha256' -File -Recurse | Select-Object -First 1
+          $archive = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc11.1-win-x64.zip' -File -Recurse | Select-Object -First 1
+          $source = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc11.1-win-x64-source.tar.xz' -File -Recurse | Select-Object -First 1
+          $checksums = Get-ChildItem -LiteralPath $artifactDir -Filter 'ffmpeg-9.0.2-nvenc11.1-win-x64.sha256' -File -Recurse | Select-Object -First 1
           $report = Get-ChildItem -LiteralPath $artifactDir -Filter 'BUILD-REPORT.txt' -File -Recurse | Select-Object -First 1
           if (!$archive -or !$source -or !$checksums -or !$report) { throw 'Windows FFmpeg build artifact is incomplete.' }
           $entries = Get-Content -LiteralPath $checksums.FullName
@@ -219,7 +219,7 @@ jobs:
             if ($actual -ne $expected) { throw "SHA256 mismatch: $($file.Name)" }
           }
           $reportText = Get-Content -LiteralPath $report.FullName -Raw
-          foreach ($required in @('NVENC API: 12.2', 'NVENCAPI_MAJOR_VERSION 12', 'NVENCAPI_MINOR_VERSION 2', 'h264_nvenc', 'h264_amf', 'h264_qsv')) {
+          foreach ($required in @('NVENC API: 11.1', 'NVENCAPI_MAJOR_VERSION 11', 'NVENCAPI_MINOR_VERSION 1', 'h264_nvenc', 'h264_amf', 'h264_qsv')) {
             if ($reportText -notmatch [regex]::Escape($required)) { throw "Build report does not confirm $required" }
           }
           $expanded = Join-Path $env:RUNNER_TEMP 'ffmpeg-expanded'
@@ -240,7 +240,7 @@ jobs:
           $dest = Join-Path $env:GITHUB_WORKSPACE 'build/ffmpeg'
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           $reported = (& $ffmpeg.FullName -version | Select-Object -First 1)
-          if ($reported -notmatch 'ffmpeg version 9\.0\.2-hongguo-nvenc12\.2(\s|$)') { throw "FFmpeg version is not the pinned NVENC 12.2 build: $reported" }
+          if ($reported -notmatch 'ffmpeg version 9\.0\.2-aidrama-nvenc11\.1(\s|$)') { throw "FFmpeg version is not the pinned NVENC 11.1 build: $reported" }
           Copy-Item -LiteralPath $ffmpeg.FullName -Destination (Join-Path $dest 'ffmpeg.exe') -Force
           Copy-Item -LiteralPath $ffprobe.FullName -Destination (Join-Path $dest 'ffprobe.exe') -Force
           Copy-Item -LiteralPath $innerSums -Destination (Join-Path $dest 'SHA256SUMS') -Force
@@ -250,8 +250,8 @@ jobs:
           if ($sourceList) { Copy-Item -LiteralPath $sourceList.FullName -Destination (Join-Path $dest 'SOURCES.txt') -Force }
           $build = @{
             version = '9.0.2'
-            buildVersion = '9.0.2-hongguo-nvenc12.2'
-            url = 'https://github.com/XASDSdsa/hongguo-drama-mac/releases/download/ffmpeg-9.0.2-nvenc12.2/ffmpeg-9.0.2-nvenc12.2-win-x64.zip'
+            buildVersion = '9.0.2-aidrama-nvenc11.1'
+            url = 'https://github.com/XASDSdsa/hongguo-drama-mac/releases/download/v1.1.41-breath-on-shot/ffmpeg-9.0.2-nvenc11.1-win-x64.zip'
             sha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             binaries = @{
               'ffmpeg.exe' = (Get-FileHash -LiteralPath $ffmpeg.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -367,6 +367,18 @@ jobs:
 
       - name: Prepare release assets
         run: node scripts/prepare-release-assets.js
+
+      - name: Add the bundled FFmpeg and its complete source to the release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$(cygpath -u "$RUNNER_TEMP")/ffmpeg-compat"
+          # GPL：随软件分发的 FFmpeg 要同时提供完整对应源码。
+          for f in ffmpeg-9.0.2-nvenc11.1-win-x64-source.tar.xz ffmpeg-9.0.2-nvenc11.1-win-x64.zip; do
+            p=$(find "$src" -name "$f" | head -n 1)
+            [ -n "$p" ] || { echo "missing $f" >&2; exit 1; }
+            cp "$p" dist/release/
+          done
 
       - name: List build output
         shell: bash
