@@ -102,8 +102,9 @@ main{padding:0 14px 40px}
 .c1{padding:14px;min-width:0}
 .c2{padding:14px 14px 14px;border-left:1px solid var(--line);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
 .c3{padding:14px;min-width:0}
-.vbox{position:relative;aspect-ratio:570/337;background:#000;border-radius:6px;overflow:hidden}
-.vbox img.poster,.vbox video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+.vbox{position:relative;aspect-ratio:var(--ar,9/16);background:#000;border-radius:6px;overflow:hidden}
+.vbox img.poster,.vbox video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.portrait .vbox{width:min(100%,calc(460px * var(--ar,9/16)));margin:0 auto}
 .vbox video{display:none}
 .vbox.on video{display:block}
 .vbox.on img.poster{display:none}
@@ -119,9 +120,10 @@ main{padding:0 14px 40px}
 .gridhead{margin:11px 0 7px;font-size:13px;color:var(--text)}
 .gridhead small{color:var(--muted);font:11px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.04em;margin-left:6px}
 .kf{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.kf button{position:relative;aspect-ratio:280/110;border:2px solid transparent;border-radius:4px;padding:0;background:#05080e;overflow:hidden}
+.kf button{position:relative;aspect-ratio:var(--ar,9/16);border:2px solid transparent;border-radius:4px;padding:0;background:#05080e;overflow:hidden}
+.portrait .kf{grid-template-columns:repeat(4,1fr)}
 .kf button.on{border-color:var(--teal2)}
-.kf img{width:100%;height:100%;object-fit:cover;display:block}
+.kf img{width:100%;height:100%;object-fit:contain;display:block}
 .kf .none{display:flex;align-items:center;justify-content:center;height:100%;color:#3b475c;font-size:12px}
 .kf span{position:absolute;left:0;right:0;bottom:0;padding:10px 8px 3px;text-align:left;font-size:11px;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.7))}
 .kfnote{margin-top:8px;color:var(--muted);font-size:11.5px}
@@ -506,7 +508,7 @@ function renderEpisodeHtml({
 
   const headTitle = [title, episodeName || label].filter(Boolean).join(' • ');
   return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>分镜头脚本 · ${esc(headTitle)}</title><style>${CSS}</style></head><body>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>分镜头脚本 · ${esc(headTitle)}</title><style>${CSS}</style></head><body${aspectAttrs(size)}>
 <header class="top"><div class="brand" data-view="shots">分镜头脚本</div><nav><a data-view="library">素材库</a></nav><span class="sp"></span>${
     title ? `<span class="pill">▣ ${esc(title)}</span>` : ''
   }${
@@ -528,6 +530,18 @@ function renderEpisodeHtml({
 <script>${SCRIPT}</script>
 </body></html>
 `;
+}
+
+/**
+ * 视频预览和四张关键帧按原片画幅显示，整张画面都看得到、不裁切：竖屏就是竖的。
+ * （以前写死成横屏框再裁满，竖屏短剧的关键帧只剩中间一条。）读不到画幅时按竖屏 9:16。
+ */
+function aspectAttrs(size) {
+  const width = Number(size?.width);
+  const height = Number(size?.height);
+  const ok = width > 0 && height > 0;
+  const portrait = ok ? height > width : true;
+  return `${portrait ? ' class="portrait"' : ''} style="--ar:${ok ? `${width}/${height}` : '9/16'}"`;
 }
 
 /** 读 JPEG 头里的宽高（用来得到原片画幅，不需要 ffprobe）。 */

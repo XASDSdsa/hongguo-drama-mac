@@ -395,6 +395,34 @@ async function main() {
     });
     assert.equal(asks, 1);
   }
+  // 分镜工程图页面按原片画幅显示：竖屏就是竖的、整张画面都在，不再写死横屏框再裁掉两边。
+  {
+    const { renderEpisodeHtml } = require('../src/native/video-prompt/html');
+    const page = (size) =>
+      renderEpisodeHtml({
+        title: '新剧',
+        label: '新剧_第001集',
+        duration: 6,
+        maxSeconds: 15,
+        library: { style: '', characters: [], scenes: [{ id: 'S1', name: '客厅', desc: '夜' }], props: [] },
+        segments: [{ index: 1, start: 0, end: 6, dur: 6, rows: [{ no: 1, start: 0, end: 6, dur: 6, dialogue: [] }], prompt: 'x', shotLines: ['x'] }],
+        frames: {},
+        thumbs: {},
+        videoRel: '',
+        size,
+        generatedAt: new Date(0),
+        allText: '',
+      });
+    const portrait = page({ width: 720, height: 1280 });
+    assert.match(portrait, /<body class="portrait" style="--ar:720\/1280">/);
+    const landscape = page({ width: 1920, height: 1080 });
+    assert.match(landscape, /<body style="--ar:1920\/1080">/);
+    assert.match(page(null), /<body class="portrait" style="--ar:9\/16">/, '读不到画幅时按竖屏');
+    assert.ok(!/aspect-ratio:(570\/337|280\/110)/.test(portrait), '不再写死横屏框');
+    assert.match(portrait, /\.kf img\{[^}]*object-fit:contain/, '关键帧整张显示，不裁切');
+    assert.match(portrait, /\.vbox img\.poster,\.vbox video\{[^}]*object-fit:contain/);
+    assert.match(portrait, /\.portrait \.kf\{grid-template-columns:repeat\(4,1fr\)\}/, '竖屏四张关键帧排一行');
+  }
   console.log('video prompt checks passed');
 }
 
