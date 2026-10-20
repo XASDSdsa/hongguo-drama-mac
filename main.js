@@ -4608,7 +4608,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
   libraryDraftEmit(job);
   try {
     const result = await deriveEpisodePrompts({
-      ffmpeg: getFfmpegPath(),
+      ffmpeg: resolveFfmpeg('ffmpeg'),
       inputPath: file,
       label,
       alignment,

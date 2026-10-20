@@ -135,6 +135,7 @@ jobs:
 
       - name: Run macOS-safe checks
         run: |
+          node scripts/check-undefined-names.cjs
           node scripts/check-download-series.cjs
           node scripts/check-download-errors.cjs
           node scripts/check-pagination.cjs
@@ -218,12 +219,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="v1.2.0"
+          tag="v$(node -p "require('./package.json').version")"
           if [ "$tag" = "v1.1.30" ]; then
             echo "refusing to publish onto the official v1.1.30 release" >&2
             exit 1
           fi
-          notes="Apple Silicon DMG from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Package version 1.2.0. The 2026-10-13 v1.1.30 release and its assets are left unchanged."
+          notes="Apple Silicon DMG from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Package version ${tag#v}. The 2026-10-13 v1.1.30 release and its assets are left unchanged."
           if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$tag" dist/release/* --repo "${{ github.repository }}" --clobber
           else
@@ -238,5 +239,5 @@ jobs:
       - name: Keep a workflow artifact copy
         uses: actions/upload-artifact@v6
         with:
-          name: ai-drama-assistant-${{ github.event_name == 'push' && 'v1.2.0' || inputs.tag || github.sha }}-macos
+          name: ai-drama-assistant-${{ inputs.tag || github.sha }}-macos
           path: dist/release/*

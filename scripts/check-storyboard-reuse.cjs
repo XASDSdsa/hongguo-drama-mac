@@ -8,7 +8,7 @@ const assert = require('node:assert/strict'),
 const { EventEmitter } = require('node:events'),
   { createRequire } = require('node:module');
 
-function makeMain(root, userData, storeExtra) {
+function makeMain(root, userData, storeExtra, modules = {}) {
   fs.mkdirSync(userData, { recursive: true });
   const file = path.resolve(__dirname, '../main.js'),
     req = createRequire(file),
@@ -32,7 +32,7 @@ function makeMain(root, userData, storeExtra) {
         ? electron
         : n === './src/store'
           ? { getSettings: () => ({ root }), saveTasks() {}, saveSeries() {}, saveSettings() {}, ...storeExtra }
-          : req(n),
+          : modules[n] || req(n),
     __dirname: path.dirname(file),
     process,
     Buffer,
@@ -74,10 +74,25 @@ function makeMain(root, userData, storeExtra) {
   const transcript = { cues: [{ start: 0.2, end: 1.9, text: '你来了' }] };
 
   const records = {};
-  const { context, logs } = makeMain(path.join(tmp, 'root'), path.join(tmp, 'ud'), {
-    getStructureProjects: () => records,
-    removeStructureProject: (id) => delete records[id],
-  });
+  // 只把真正去调方舟的那一步换成假的；软件里组织这一步的代码（deriveLibraryPrompts）照常跑，
+  // 以前这里整个换掉了，结果它里面调用了一个不存在的函数也没测出来。
+  const promptCalls = [];
+  const { context, logs } = makeMain(
+    path.join(tmp, 'root'),
+    path.join(tmp, 'ud'),
+    {
+      getStructureProjects: () => records,
+      removeStructureProject: (id) => delete records[id],
+    },
+    {
+      './src/native/video-prompt/derive': {
+        deriveEpisodePrompts: async (args) => {
+          promptCalls.push(args);
+          return { segments: 3, failed: 0, file: path.join(args.outDir, 'x.json') };
+        },
+      },
+    },
+  );
   let cleanup = true;
   context.getCurrentSettings = () => ({
     structure_threads: 4,
@@ -122,8 +137,6 @@ function makeMain(root, userData, storeExtra) {
     cancel() {},
     isActive: () => false,
   });
-  const promptCalls = [];
-  context.deriveLibraryPrompts = async (_job, _file, _item, data) => promptCalls.push(data);
 
   async function draft({ prompts, mode = 'simple' }) {
     const started = await context.startLibraryDrafts({ dir, files: [file], mode, scope: { numbers: [1] }, prompts });
@@ -155,6 +168,12 @@ function makeMain(root, userData, storeExtra) {
   assert.equal(JSON.stringify(promptCalls[0].alignment), JSON.stringify(alignment));
   assert.equal(JSON.stringify(promptCalls[0].transcript), JSON.stringify(transcript));
   assert.equal(promptCalls[0].sourceKey, 'sha-abc', 'the prompt cache key is the same as before');
+  assert.equal(promptCalls[0].ffmpeg, 'ffmpeg', 'the bundled ffmpeg is passed in');
+  assert.equal(promptCalls[0].inputPath, file);
+  assert.equal(promptCalls[0].model, 'm');
+  assert.ok(promptCalls[0].client, 'an Ark client is made');
+  assert.ok(!logs.some((line) => /视频提示词.*没有生成/.test(line)), logs.filter((l) => /视频提示词/.test(l)).join('\n'));
+  assert.ok(logs.some((line) => /视频提示词：.*已生成/.test(line)), 'the storyboard step reports success');
   assert.ok(logs.some((line) => /沿用它的 3 个分镜，只补做分镜工程图/.test(line)));
   console.log('PASS storyboard later: reuses the draft shots, no re-analysis, no second draft');
 

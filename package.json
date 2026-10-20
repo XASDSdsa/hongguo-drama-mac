@@ -1,6 +1,6 @@
 {
   "name": "ai-drama-assistant",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "AI短剧助手：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -63,6 +63,8 @@
     "concurrently": "^8.2.2",
     "electron": "44.6.0",
     "electron-builder": "26.15.3",
+    "eslint": "9.39.5",
+    "globals": "15.15.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^5.4.11",

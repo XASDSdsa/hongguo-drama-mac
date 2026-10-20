@@ -331,6 +331,7 @@ jobs:
         shell: bash
         run: |
           set -e
+          node scripts/check-undefined-names.cjs
           node scripts/check-download-series.cjs
           node scripts/check-download-errors.cjs
           node scripts/check-pagination.cjs
