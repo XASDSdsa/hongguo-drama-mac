@@ -20,7 +20,8 @@ const FAILED_STATES = new Set(['failed', 'error', 'expired']);
 
 function redact(text, apiKey) {
   let out = String(text ?? '');
-  for (const secret of [apiKey, encodeURIComponent(apiKey || '')].filter(Boolean)) out = out.split(secret).join('[已隐藏]');
+  for (const secret of [apiKey, encodeURIComponent(apiKey || '')].filter(Boolean))
+    out = out.split(secret).join('[已隐藏]');
   return out.replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]').slice(0, 500);
 }
 
@@ -42,6 +43,19 @@ function extractText(data) {
   if (typeof message === 'string') return message;
   if (Array.isArray(message)) return message.map((part) => part?.text || '').join('\n');
   return '';
+}
+
+const PHASE_TEXT = { upload: '上传', process: '方舟处理视频', answer: '回答' };
+const seconds = (ms) => `${Math.max(0, Math.round(ms / 1000))} 秒`;
+
+/** 「上传 3 秒，方舟处理视频 2 秒，回答 95 秒」；给了 stuck 时写成「卡在回答（等了 600 秒）；上传 3 秒…」。 */
+function describePhases(timings = {}, stuck = '') {
+  const parts = Object.keys(PHASE_TEXT)
+    .filter((name) => name !== stuck && Number.isFinite(timings[name]))
+    .map((name) => `${PHASE_TEXT[name]} ${seconds(timings[name])}`);
+  if (!stuck) return parts.join('，');
+  const head = `卡在「${PHASE_TEXT[stuck]}」这一步（等了 ${seconds(timings[stuck] || 0)}）`;
+  return parts.length ? `${head}；之前${parts.join('，')}` : head;
 }
 
 function createArkClient({
@@ -143,18 +157,51 @@ function createArkClient({
     }
   }
 
-  /** 上传一个视频，等它可用，对它提问；无论成败都清理。 */
-  async function askAboutVideo(filePath, text, { fps, signal } = {}) {
-    const id = await uploadVideo(filePath, { fps, signal });
+  /**
+   * 上传一个视频，等它可用，对它提问；无论成败都清理。
+   * 诊断：每一步花了多久交给 onTimings（毫秒：upload / process / answer）；失败时报错里写明卡在哪一步、前面几步各用了多久。
+   */
+  async function askAboutVideo(filePath, text, { fps, signal, onTimings } = {}) {
+    const timings = {};
+    let phase = 'upload';
+    let mark = Date.now();
+    const done = (name) => {
+      timings[name] = Date.now() - mark;
+      mark = Date.now();
+    };
+    let id = null;
     try {
+      id = await uploadVideo(filePath, { fps, signal });
+      done('upload');
+      phase = 'process';
       await waitProcessed(id, { signal });
-      return await ask(id, text, { signal });
+      done('process');
+      phase = 'answer';
+      const answer = await ask(id, text, { signal });
+      done('answer');
+      onTimings?.(timings);
+      return answer;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      timings[phase] = Date.now() - mark;
+      const wrapped = new Error(`${error?.message || error}（${describePhases(timings, phase)}）`);
+      wrapped.timings = timings;
+      wrapped.phase = phase;
+      throw wrapped;
     } finally {
-      await removeFile(id);
+      if (id) await removeFile(id);
     }
   }
 
   return { uploadVideo, waitProcessed, ask, removeFile, askAboutVideo };
 }
 
-module.exports = { createArkClient, extractText, redact, DEFAULT_BASE_URL, MAX_UPLOAD_BYTES, ASK_TIMEOUT_MS };
+module.exports = {
+  createArkClient,
+  extractText,
+  redact,
+  describePhases,
+  DEFAULT_BASE_URL,
+  MAX_UPLOAD_BYTES,
+  ASK_TIMEOUT_MS,
+};

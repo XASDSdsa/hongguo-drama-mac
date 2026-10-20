@@ -22,6 +22,7 @@ const {
   renderEpisodeFile,
 } = require('./compose');
 const { renderEpisodeHtml, keyframeTimes, jpegSize } = require('./html');
+const { describePhases } = require('./ark');
 
 const ATTEMPTS = 3;
 
@@ -163,7 +164,7 @@ async function deriveEpisodePrompts({
         signal,
       );
       cache.library = await withRetries(
-        async () => normalizeLibrary(parseJsonLoose(await client.askAboutVideo(proxy, libraryInstruction({ duration, rows }), { fps, signal })), duration),
+        async () => normalizeLibrary(parseJsonLoose(await client.askAboutVideo(proxy, libraryInstruction({ duration, rows }), { fps, signal, onTimings: (t) => log('info', `素材库：方舟用时 ${describePhases(t)}`) })), duration),
         { signal, sleep, label: '素材库', log },
       );
       await saveCache();
@@ -211,7 +212,11 @@ async function deriveEpisodePrompts({
         const shots = await withRetries(
           async (_attempt, lastError) => {
             const hint = lastError ? `\n\n上一次的问题：${lastError.message}。请严格按格式重新回答。` : '';
-            const answer = await client.askAboutVideo(clip, segmentInstruction({ segment, library }) + hint, { fps, signal });
+            const answer = await client.askAboutVideo(clip, segmentInstruction({ segment, library }) + hint, {
+              fps,
+              signal,
+              onTimings: (t) => log('info', `第 ${segment.index} 段：方舟用时 ${describePhases(t)}`),
+            });
             return normalizeSegmentResult(parseJsonLoose(answer), segment, library);
           },
           { signal, sleep, label: `第 ${segment.index} 段`, log },

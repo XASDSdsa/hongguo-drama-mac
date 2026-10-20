@@ -53,6 +53,8 @@ function SettingsPage({ active = true }) {
   const [loadError, setLoadError] = useState('');
   const [aiTest, setAiTest] = useState(null);
   const [aiTesting, setAiTesting] = useState(false);
+  const [arkTest, setArkTest] = useState(null);
+  const [arkTesting, setArkTesting] = useState(false);
   const [encoderCheck, setEncoderCheck] = useState(null); // { busy } | { result } | { error }
   const testVersion = useRef(0);
   const savingRef = useRef(false);
@@ -130,6 +132,25 @@ function SettingsPage({ active = true }) {
       setAiTest({ success: false, error: error.message || '测试失败' });
     } finally {
       setAiTesting(false);
+    }
+  };
+
+  // 用表单里当前填的方舟设置，在这台电脑上发一段 3 秒的测试视频（不需要先保存）。
+  const testArk = async () => {
+    setArkTesting(true);
+    setArkTest(null);
+    try {
+      setArkTest(
+        await window.electronAPI.arkTest({
+          ark_base_url: settings.ark_base_url,
+          ark_api_key: settings.ark_api_key,
+          ark_video_model: settings.ark_video_model,
+        }),
+      );
+    } catch (error) {
+      setArkTest({ success: false, error: error.message || '测试失败' });
+    } finally {
+      setArkTesting(false);
     }
   };
 
@@ -731,6 +752,21 @@ function SettingsPage({ active = true }) {
               <em>相邻分镜合并成一段，不会把单个分镜切开；Seedance 2.5 单次最长 30 秒。</em>
             </label>
           </div>
+          <div className="preset-row">
+            <button className="btn btn-outline btn-sm" onClick={testArk} disabled={arkTesting}>
+              {arkTesting ? '正在测试…（最长等 10 分钟）' : '测试方舟视频理解'}
+            </button>
+            {arkTest && (
+              <span className={`settings-hint ${arkTest.success ? '' : 'alert-error'}`} role="status">
+                {arkTest.success
+                  ? `连通正常（${arkTest.model}）：${arkTest.summary}。模型回答：${arkTest.answer}`
+                  : arkTest.error}
+              </span>
+            )}
+          </div>
+          <p className="settings-hint">
+            用这台电脑和网络发一段 3 秒的测试视频，走和分镜工程图一样的流程，看上传、方舟处理、回答各要多久。
+          </p>
         </section>
 
         <div className="settings-footer" role="group" aria-label="保存设置">

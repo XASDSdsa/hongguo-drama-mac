@@ -327,6 +327,45 @@ async function main() {
     const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/native/video-prompt/ark.js'), 'utf8');
     assert.match(source, /const REQUEST_TIMEOUT_MS = 180000;/, 'uploads and status checks keep the 3-minute limit');
   }
+  // 诊断：每次问方舟都报上传 / 处理 / 回答各用多久；失败时写明卡在哪一步。
+  {
+    const { describePhases } = require('../src/native/video-prompt/ark');
+    const fsx = require('node:fs');
+    const osx = require('node:os');
+    const pathx = require('node:path');
+    const clip = pathx.join(fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'ark-phase-')), 'c.mp4');
+    fsx.writeFileSync(clip, Buffer.alloc(1024));
+    const reply = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+    let answerFails = false;
+    const phased = async (url, init) => {
+      if (init.method === 'POST' && url.endsWith('/files')) return reply({ id: 'f1' });
+      if (init.method === 'GET') return reply({ status: 'processed' });
+      if (init.method === 'DELETE') return reply({});
+      if (answerFails) throw Object.assign(new Error('socket hang up'), { name: 'Error' });
+      return reply({ output_text: '画面里有彩条' });
+    };
+    const client2 = createArkClient({ apiKey: 'ark-key-1234', model: 'm', fetchImpl: phased, sleep: async () => {}, pollMs: 0 });
+    let got = null;
+    assert.equal(await client2.askAboutVideo(clip, 'x', { onTimings: (t) => (got = t) }), '画面里有彩条');
+    assert.deepEqual(Object.keys(got), ['upload', 'process', 'answer']);
+    assert.match(describePhases(got), /^上传 \d+ 秒，方舟处理视频 \d+ 秒，回答 \d+ 秒$/);
+    answerFails = true;
+    await assert.rejects(
+      () => client2.askAboutVideo(clip, 'x'),
+      (error) => {
+        assert.match(error.message, /socket hang up（卡在「回答」这一步（等了 \d+ 秒）；之前上传 \d+ 秒，方舟处理视频 \d+ 秒）/);
+        assert.equal(error.phase, 'answer');
+        return true;
+      },
+    );
+    assert.equal(describePhases({ upload: 3000 }, 'process'), '卡在「方舟处理视频」这一步（等了 0 秒）；之前上传 3 秒');
+    const mainSource = fsx.readFileSync(pathx.join(__dirname, '..', 'main.js'), 'utf8');
+    assert.match(mainSource, /ipcMain\.handle\('ark-test'/, '设置页可以测试方舟视频理解');
+    assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'preload.js'), 'utf8'), /arkTest: \(draft\) => ipcRenderer\.invoke\('ark-test', draft\)/);
+    assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'src/components/Settings.jsx'), 'utf8'), /测试方舟视频理解/);
+    const deriveSource = fsx.readFileSync(pathx.join(__dirname, '..', 'src/native/video-prompt/derive.js'), 'utf8');
+    assert.equal((deriveSource.match(/onTimings:/g) || []).length, 2, '素材库和每一段都写用时');
+  }
   console.log('video prompt checks passed');
 }
 

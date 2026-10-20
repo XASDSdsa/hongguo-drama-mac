@@ -3966,6 +3966,82 @@ ipcMain.handle('test-ai-text', async (_event, draft = {}) => {
   }
 });
 
+/**
+ * 设置页「测试方舟视频理解」：用表单里当前填的地址、Key、模型（不用先保存），在这台电脑上现做一段 3 秒的测试视频，
+ * 走和分镜工程图完全一样的流程（上传 → 等方舟处理 → 带视频提问），报告每一步用了多久和模型的回答。
+ */
+ipcMain.handle('ark-test', async (_event, draft = {}) => {
+  const settings = { ...getCurrentSettings(), ...draft };
+  const apiKey = String(settings.ark_api_key || '').trim();
+  const model = String(settings.ark_video_model || '').trim();
+  if (!apiKey) return { success: false, error: '请先填方舟 API Key' };
+  if (!model) return { success: false, error: '请先填视频理解模型名' };
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-ark-test-'));
+  const clip = path.join(dir, 'ark-test.mp4');
+  try {
+    await new Promise((resolve, reject) => {
+      require('child_process').execFile(
+        resolveFfmpeg('ffmpeg'),
+        [
+          '-v',
+          'error',
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc2=size=480x270:rate=12:duration=3',
+          '-f',
+          'lavfi',
+          '-i',
+          'sine=frequency=440:duration=3',
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-shortest',
+          '-movflags',
+          '+faststart',
+          clip,
+        ],
+        { windowsHide: true, timeout: 60000 },
+        (error, _stdout, stderr) =>
+          error ? reject(new Error(`做测试视频失败：${String(stderr || error.message).slice(-200)}`)) : resolve(),
+      );
+    });
+    const client = arkVideo.createArkClient({
+      baseUrl: String(settings.ark_base_url || '').trim() || arkVideo.DEFAULT_BASE_URL,
+      apiKey,
+      model,
+    });
+    let timings = {};
+    const started = Date.now();
+    const answer = await client.askAboutVideo(clip, '这是一段测试视频。用一句话说说画面里有什么。', {
+      fps: 2,
+      onTimings: (t) => (timings = t),
+    });
+    return {
+      success: true,
+      model,
+      elapsed: Date.now() - started,
+      timings,
+      summary: arkVideo.describePhases(timings),
+      answer: String(answer).replace(/\s+/g, ' ').slice(0, 120),
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: arkVideo.redact(error?.message || String(error), apiKey),
+      timings: error?.timings || null,
+    };
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 ipcMain.handle('publish-state', (_event, dir) => {
   try {
     const context = publishContext(dir);
