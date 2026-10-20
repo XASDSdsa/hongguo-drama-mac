@@ -120,7 +120,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/upload"
           # 安装包必须有；zip / 便携版超过 GitHub 2 GiB 上限时在打包阶段已被跳过，这里有就带上。
-          for pattern in '*-Setup.exe' '*-win-x64.zip' '*-portable.exe'; do
+          for pattern in '*-Setup.exe' '*-win-x64.zip'; do
             f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "ai-drama-assistant-*$pattern" | head -n 1)
             if [ -z "$f" ]; then
               if [ "$pattern" = '*-Setup.exe' ]; then echo "missing $pattern" >&2; exit 1; fi
@@ -288,6 +288,8 @@ jobs:
           run_check node scripts/check-dedup-timestamps.cjs
           run_check node scripts/check-separation-ascii.cjs
           run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
+          # 端到端：原剧 → 重新拆分去重 → 分析 → 三分轨 / 多分轨剪映草稿，中文剧名和文件夹，全用打包进软件的组件。
+          run_check env REQUIRE_E2E=1 node scripts/check-draft-e2e.cjs
 
       - name: Build local whisper.cpp and prepare tiny model
         shell: bash
@@ -356,14 +358,32 @@ jobs:
           fi
           exit $code
 
-      - name: Build portable executable
-        run: npx electron-builder --win portable --x64 --publish never
-
+      # 不再出便携版：它每次打开都要先把几个 GB 解压到临时文件夹（再被杀毒软件逐个扫描），要等好几分钟。
       - name: Build unpacked directory and zip
         shell: bash
         run: |
           npx electron-builder --win --dir --x64 --publish never
           node scripts/make-zip.js
+
+      - name: Measure how fast the installed app opens
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=$(find dist/win-unpacked -maxdepth 1 -iname '*.exe' ! -iname '*uninstall*' | head -n 1)
+          [ -n "$exe" ] || { echo "no app exe in dist/win-unpacked" >&2; exit 1; }
+          for run in 1 2; do
+            out="$RUNNER_TEMP/startup-$run.json"
+            rm -f "$out"
+            AI_DRAMA_STARTUP_PROBE="$(cygpath -w "$out")" "$exe" > "$RUNNER_TEMP/startup-$run.log" 2>&1 &
+            pid=$!
+            for i in $(seq 1 120); do [ -s "$out" ] && break; sleep 1; done
+            wait "$pid" || true
+            [ -s "$out" ] || { echo "the app did not open within 120 s (run $run)" >&2; cat "$RUNNER_TEMP/startup-$run.log" >&2 || true; exit 1; }
+            echo "run $run: $(cat "$out")"
+            echo "::notice title=startup run $run (ms since process start)::$(cat "$out")"
+          done
+          # 第二次（系统已缓存文件）打开到页面加载完必须在 15 秒内；本机实测不到 1 秒。
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!(r.pageLoaded<15000)){console.error('opening took', r.pageLoaded, 'ms'); process.exit(1)}" "$(cygpath -w "$RUNNER_TEMP/startup-2.json")"
 
       - name: Prepare release assets
         run: node scripts/prepare-release-assets.js

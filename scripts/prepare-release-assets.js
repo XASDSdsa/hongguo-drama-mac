@@ -28,7 +28,6 @@ const SLUG = pkg.name; // ai-drama-assistant
 const MAP = [
   { from: `${PRODUCT}-${VERSION}-win-x64.zip`, to: `${SLUG}-${VERSION}-win-x64.zip`, desc: '绿色版 zip（推荐）' },
   { from: `${PRODUCT}-Setup-${VERSION}.exe`, to: `${SLUG}-${VERSION}-Setup.exe`, desc: 'NSIS 安装包' },
-  { from: `${PRODUCT}-${VERSION}-便携版.exe`, to: `${SLUG}-${VERSION}-portable.exe`, desc: '便携单文件' },
 ];
 
 function findInDist(name) {
@@ -73,7 +72,7 @@ function main() {
   if (missing.length) {
     console.log('\n未找到以下本地产物，请先打包：');
     missing.forEach((m) => console.log('  ' + m));
-    console.log('  可执行：npm run build && npm run build:zip && npm run build:portable');
+    console.log('  可执行：npm run build && npm run build:zip');
   }
 
   console.log('\n下一步（示例）：');

@@ -54,6 +54,12 @@ for (const file of [
 assert.ok(!app.includes('我的剧库') && !app.includes('Player'), 'the playback page is gone');
 assert.ok(!fs.existsSync(path.join(root, 'src/components/Player.jsx')));
 assert.ok(!/playSeries|prepareOnlinePlay|transcodeForPlayback/.test(read('preload.js')));
+// 不出便携版（每次打开都要先解压几个 GB，很慢）；打包时量一下装好的软件打开要多久。
+const winflow = read('.github/workflows/windows-release.yml');
+assert.ok(!/electron-builder --win portable/.test(winflow), 'no portable build');
+assert.ok(!/portable/.test(read('scripts/prepare-release-assets.js')), 'no portable release asset');
+assert.match(winflow, /AI_DRAMA_STARTUP_PROBE/, 'the Windows build measures how fast the app opens');
+assert.match(read('.github/workflows/mac-release.yml'), /AI_DRAMA_STARTUP_PROBE/);
 console.log('PASS the new name is used everywhere a user can see it; the player page is gone');
 
 // 2. 数据目录迁移

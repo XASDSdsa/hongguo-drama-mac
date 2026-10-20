@@ -144,6 +144,30 @@ jobs:
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs "dist/mac-arm64/AI短剧助手.app/Contents/Resources"
 
+      - name: End to end with the bundled components (Chinese names)
+        env:
+          FFMPEG_PATH: ${{ github.workspace }}/build/ffmpeg/darwin-arm64/ffmpeg
+          FFPROBE_PATH: ${{ github.workspace }}/build/ffmpeg/darwin-arm64/ffprobe
+          REQUIRE_E2E: '1'
+        run: node scripts/check-draft-e2e.cjs
+
+      - name: Measure how fast the packaged app opens
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="dist/mac-arm64/AI短剧助手.app/Contents/MacOS/AI短剧助手"
+          for run in 1 2; do
+            out="$RUNNER_TEMP/startup-$run.json"
+            rm -f "$out"
+            AI_DRAMA_STARTUP_PROBE="$out" "$exe" > "$RUNNER_TEMP/startup-$run.log" 2>&1 &
+            pid=$!
+            for i in $(seq 1 120); do [ -s "$out" ] && break; sleep 1; done
+            wait "$pid" || true
+            [ -s "$out" ] || { echo "the app did not open within 120 s (run $run)" >&2; cat "$RUNNER_TEMP/startup-$run.log" >&2 || true; exit 1; }
+            echo "::notice title=startup run $run (ms since process start)::$(cat "$out")"
+          done
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!(r.pageLoaded<15000)){console.error('opening took', r.pageLoaded, 'ms'); process.exit(1)}" "$RUNNER_TEMP/startup-2.json"
+
       - name: Prepare release asset
         shell: bash
         run: |

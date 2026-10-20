@@ -62,6 +62,24 @@ let mainWindow = null;
 let quitConfirmed = false;
 // 软件改名（红果短剧 → AI短剧助手）后数据目录跟着名字变了：新目录里还没有数据时，把旧目录里的设置、
 // 下载记录、日志等逐项挪过来，用户不用重新填设置。挪不动（旧版还开着）的 JSON 文件改为复制。
+// 启动计时：打包机上用 AI_DRAMA_STARTUP_PROBE=<文件> 启动时，记下几个时间点写进这个文件后退出，
+// 用来检查装好的软件打开要多久（平时不开）。时间都从进程启动算起，单位毫秒。
+const startupProbe = process.env.AI_DRAMA_STARTUP_PROBE || '';
+const startupMarks = {};
+function markStartup(name) {
+  if (!startupProbe || startupMarks[name] != null) return;
+  startupMarks[name] = Math.round(process.uptime() * 1000);
+  if (name !== 'pageLoaded') return;
+  try {
+    fs.writeFileSync(startupProbe, JSON.stringify({ ...startupMarks, platform: process.platform }));
+  } catch (_) {}
+  setTimeout(() => {
+    quitConfirmed = true;
+    app.quit();
+  }, 500);
+}
+markStartup('mainScript');
+
 function migrateRenamedUserData() {
   try {
     if (typeof app.getPath !== 'function') return;
@@ -8575,8 +8593,10 @@ function createWindow() {
   const createdWindow = mainWindow;
 
   mainWindow.setMenuBarVisibility(false);
+  markStartup('windowCreated');
   mainWindow.webContents.once('did-finish-load', () => {
     if (storageError) sendToRenderer('storage-error', storageError);
+    markStartup('pageLoaded');
   });
 
   // 开发模式加载 vite dev server，生产模式加载打包产物
@@ -8737,6 +8757,7 @@ ipcMain.handle('open-log-folder', async () => {
 
 app.whenReady().then(async () => {
   if (!singleInstance) return;
+  markStartup('appReady');
   installFileLog();
   // AI 文案/海报请求走 Chromium 网络栈：跟随设置里的代理和系统代理，长时间作图不会被 Node 的 5 分钟限制断开。
   // Chromium 拒绝的少数端口（ERR_UNSAFE_PORT）退回 Node 自带的 fetch。
