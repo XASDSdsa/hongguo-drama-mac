@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build current FFmpeg with the NVENC API supported by the reported Windows driver.
+# Build FFmpeg against NVENC API 11.1: works with NVIDIA drivers 471.41 (2021) and newer.
+# Newer NVENC versions only add features this app does not use (10-bit, AV1, temporal filter),
+# but raise the minimum driver (12.2 needs 551.76), so many customer PCs would fall back to CPU.
 set -euo pipefail
 ROOT=${1:?Usage: build-ffmpeg-source-win.sh BUILD_DIRECTORY [JOBS]}
 JOBS=${2:-4}
@@ -12,7 +14,12 @@ ARCHIVES="$ROOT/archives"
 SOURCES="$ROOT/sources"
 PREFIX="$ROOT/prefix"
 ARTIFACTS="$ROOT/artifacts"
-NAME=ffmpeg-9.0.2-nvenc12.2-win-x64
+NVENC_MAJOR=11
+NVENC_MINOR=1
+NVH_TAG=n11.1.5.3
+NVH_COMMIT=43d91706e097565f57b311e567f0219838bcc2f6
+NVH_TREE=05f195eb5b0fd08e21b3f9e4c4c699131183b540
+NAME=ffmpeg-9.0.2-nvenc$NVENC_MAJOR.$NVENC_MINOR-win-x64
 mkdir -p "$ARCHIVES" "$SOURCES" "$PREFIX/include" "$PREFIX/lib/pkgconfig" "$ROOT/logs" "$ARTIFACTS/$NAME/bin" "$ARTIFACTS/$NAME/licenses"
 trap 'echo "Build failed; recent diagnostic logs:" >&2; for f in "$ROOT"/logs/*.log "$ROOT"/build-ffmpeg/ffbuild/config.log; do [[ ! -f "$f" ]] || { echo "$f" >&2; tail -n 70 "$f" >&2; }; done' ERR
 export PATH=/mingw64/bin:/usr/bin:$PATH
@@ -28,7 +35,6 @@ fetch() {
 }
 : > "$ROOT/SOURCES.txt"
 fetch ffmpeg-9.0.2.tar.xz 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
-fetch nv-codec-headers-n12.2.72.0.tar.gz dbeaec433d93b850714760282f1d0992b1254fc3b5a6cb7d76fc1340a1e47563 https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n12.2.72.0.tar.gz
 fetch libvpl-2.17.0.tar.gz 4de3e2faf1e8307fb282e4a43f443191810f6a6b0a484fffa7995ba1c814c6ec https://github.com/intel/libvpl/archive/refs/tags/v2.17.0.tar.gz
 fetch AMF-1.5.2.tar.gz 8a70b6dc85261e6e6e57769bd81ac1e09c0a4c96bbd5e358ffbc2dee51e8e50a https://github.com/GPUOpen-LibrariesAndSDKs/AMF/archive/refs/tags/v1.5.2.tar.gz
 fetch zlib-1.3.2.tar.xz d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3 https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz
@@ -44,9 +50,18 @@ git -C "$FETCH_DIR" archive --format=tar --prefix="x264-$X264_COMMIT/" "$X264_CO
 X264_SHA=$(sha256sum "$X264_ARCHIVE" | cut -d ' ' -f 1)
 printf '%s  %s  %s\n' "$X264_SHA" "x264-$X264_COMMIT.tar.gz" "https://code.videolan.org/videolan/x264.git#$X264_COMMIT" >> "$ROOT/SOURCES.txt"
 printf 'x264 Git commit: %s\nx264 Git tree: %s\n' "$X264_COMMIT" "$X264_TREE" >> "$ROOT/SOURCES.txt"
+# NV codec headers: pin the Git commit and tree (same approach as x264).
+NVH_FETCH=$(mktemp -d "$ROOT/nvh-fetch.XXXXXX")
+git -C "$NVH_FETCH" init --quiet
+git -C "$NVH_FETCH" fetch --quiet --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$NVH_COMMIT"
+[[ $(git -C "$NVH_FETCH" rev-parse --verify 'FETCH_HEAD^{commit}') == "$NVH_COMMIT" ]]
+[[ $(git -C "$NVH_FETCH" rev-parse --verify 'FETCH_HEAD^{tree}') == "$NVH_TREE" ]]
+git -C "$NVH_FETCH" archive --format=tar --prefix="nv-codec-headers-$NVH_TAG/" "$NVH_COMMIT" | gzip -n > "$ARCHIVES/nv-codec-headers-$NVH_TAG.tar.gz"
+printf '%s  %s  %s\n' "$(sha256sum "$ARCHIVES/nv-codec-headers-$NVH_TAG.tar.gz" | cut -d ' ' -f 1)" "nv-codec-headers-$NVH_TAG.tar.gz" "https://github.com/FFmpeg/nv-codec-headers.git#$NVH_COMMIT" >> "$ROOT/SOURCES.txt"
+printf 'nv-codec-headers Git commit: %s\nnv-codec-headers Git tree: %s\n' "$NVH_COMMIT" "$NVH_TREE" >> "$ROOT/SOURCES.txt"
 for archive in "$ARCHIVES"/*; do tar -xf "$archive" -C "$SOURCES"; done
 
-make -C "$SOURCES/nv-codec-headers-n12.2.72.0" PREFIX="$PREFIX" install > "$ROOT/logs/nv-codec-install.log" 2>&1
+make -C "$SOURCES/nv-codec-headers-$NVH_TAG" PREFIX="$PREFIX" install > "$ROOT/logs/nv-codec-install.log" 2>&1
 mkdir -p "$PREFIX/include/AMF"
 cp -r "$SOURCES/AMF-1.5.2/amf/public/include/core" "$SOURCES/AMF-1.5.2/amf/public/include/components" "$PREFIX/include/AMF/"
 # The legacy MSVC shim must not replace the secure CRT functions provided by MinGW.
@@ -79,7 +94,7 @@ make -j "$JOBS" > "$ROOT/logs/x264-build.log" 2>&1
 make install-lib-static > "$ROOT/logs/x264-install.log" 2>&1
 cd "$ROOT/build-ffmpeg"
 "$SOURCES/ffmpeg-9.0.2/configure" --prefix="$PREFIX" --arch=x86_64 --target-os=mingw32 \
-  --extra-version=hongguo-nvenc12.2 \
+  --extra-version=aidrama-nvenc$NVENC_MAJOR.$NVENC_MINOR \
   --disable-autodetect --disable-shared --enable-static --disable-doc --disable-debug --disable-ffplay \
   --enable-gpl --enable-version3 --enable-libx264 --enable-libvpl --enable-ffnvcodec --enable-nvenc --enable-amf \
   --enable-d3d11va --enable-dxva2 --enable-zlib --enable-schannel --enable-w32threads --disable-pthreads \
@@ -100,7 +115,7 @@ cp "$PREFIX/include/ffnvcodec/nvEncodeAPI.h" "$ARTIFACTS/$NAME/licenses/nvEncode
 
 REPORT="$ARTIFACTS/$NAME/BUILD-REPORT.txt"
 {
-  printf 'Build: %s\nNVENC API: 12.2 (headers n12.2.72.0)\n' "$NAME"
+  printf 'Build: %s\nNVENC API: %s.%s (headers %s, NVIDIA driver 471.41 or newer)\n' "$NAME" "$NVENC_MAJOR" "$NVENC_MINOR" "$NVH_TAG"
   printf 'Hardware encoding requires an installed compatible GPU and driver; hosted CI verifies presence, not physical GPU execution.\n'
   cat "$ROOT/SOURCES.txt"
   gcc --version
@@ -114,8 +129,8 @@ REPORT="$ARTIFACTS/$NAME/BUILD-REPORT.txt"
 for encoder in libx264 h264_nvenc h264_amf h264_qsv aac; do grep -Eq "[[:space:]]$encoder[[:space:]]" "$ROOT/encoders.txt"; done
 for encoder in h264_nvenc h264_amf h264_qsv; do ./ffmpeg.exe -hide_banner -h "encoder=$encoder" >> "$REPORT" 2>&1; done
 printf '#include <ffnvcodec/nvEncodeAPI.h>\n' | gcc -I"$PREFIX/include" -E -dM -x c - > "$ROOT/nvenc-macros.txt"
-grep -Eq '^#define NVENCAPI_MAJOR_VERSION 12$' "$ROOT/nvenc-macros.txt"
-grep -Eq '^#define NVENCAPI_MINOR_VERSION 2$' "$ROOT/nvenc-macros.txt"
+grep -Eq "^#define NVENCAPI_MAJOR_VERSION $NVENC_MAJOR\$" "$ROOT/nvenc-macros.txt"
+grep -Eq "^#define NVENCAPI_MINOR_VERSION $NVENC_MINOR\$" "$ROOT/nvenc-macros.txt"
 grep -E '^#define NVENCAPI_(MAJOR|MINOR)_VERSION ' "$ROOT/nvenc-macros.txt" >> "$REPORT"
 # Keep only system DLL imports: no MSYS, GCC, or libvpl DLL may be needed at runtime.
 for tool in "$ARTIFACTS/$NAME/bin/ffmpeg.exe" "$ARTIFACTS/$NAME/bin/ffprobe.exe"; do

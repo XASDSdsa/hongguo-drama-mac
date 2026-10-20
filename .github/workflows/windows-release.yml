@@ -15,14 +15,88 @@ on:
         description: Skip the build; publish the hongguo-windows artifact of this earlier run id to the tag.
         required: false
         default: ''
+      ffmpeg_only:
+        description: "Only build the bundled Windows FFmpeg (NVENC 11.1, NVIDIA driver 471.41+) and keep it as an artifact."
+        required: false
+        default: ''
 
 permissions:
   actions: read
   contents: write
 
 jobs:
+  build-ffmpeg:
+    if: inputs.ffmpeg_only == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+
+      - name: Install native compiler tools
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel git curl tar gzip xz zip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-pkgconf
+
+      - name: Build static FFmpeg from pinned sources
+        id: helpers
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg-source-win.sh /c/ffmpeg-compat-build 4
+
+      - name: Exercise real Windows processing with the new FFmpeg
+        shell: bash
+        env:
+          FFMPEG_PATH: C:/ffmpeg-compat-build/artifacts/ffmpeg-9.0.2-nvenc11.1-win-x64/bin/ffmpeg.exe
+          FFPROBE_PATH: C:/ffmpeg-compat-build/artifacts/ffmpeg-9.0.2-nvenc11.1-win-x64/bin/ffprobe.exe
+        run: |
+          set -e
+          npm ci --ignore-scripts
+          export PATH="/c/ffmpeg-compat-build/artifacts/ffmpeg-9.0.2-nvenc11.1-win-x64/bin:$PATH"
+          "$FFMPEG_PATH" -hide_banner -version | head -n 1
+          # 没有 NVIDIA 显卡的打包机上，NVENC 试编应报「找不到驱动」，而不是参数错误。
+          "$FFMPEG_PATH" -hide_banner -v error -f lavfi -i color=c=black:s=256x256:d=0.2 -frames:v 1 -pix_fmt yuv420p -c:v h264_nvenc -preset p1 -cq 21 -f null - 2>&1 | head -n 5 || true
+          node scripts/check-quchong.cjs
+          node scripts/check-dedup-timestamps.cjs
+          node scripts/check-resplit.cjs
+
+      - name: Keep binaries and corresponding source
+        if: always() && steps.helpers.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ffmpeg-9.0.2-nvenc11.1-win-x64
+          path: |
+            C:/ffmpeg-compat-build/artifacts/*.zip
+            C:/ffmpeg-compat-build/artifacts/*.tar.xz
+            C:/ffmpeg-compat-build/artifacts/*.sha256
+            C:/ffmpeg-compat-build/artifacts/*/BUILD-REPORT.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Keep build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ffmpeg-compat-build-logs
+          path: |
+            C:/ffmpeg-compat-build/logs
+            C:/ffmpeg-compat-build/build-ffmpeg/ffbuild/config.log
+          if-no-files-found: ignore
+
   publish-existing:
-    if: inputs.artifact_run != ''
+    if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -69,7 +143,7 @@ jobs:
           exit $failed
 
   build-windows:
-    if: inputs.artifact_run == ''
+    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true'
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
