@@ -88,25 +88,40 @@ async function detectPauses(ffmpegPath, file, signal) {
   return pauses.filter((item) => item.end > item.start);
 }
 
-/** 缩小画面后找镜头切换，速度比整帧检测快得多。 */
-async function detectScenes(ffmpegPath, file, signal) {
-  const text = await capture(
-    ffmpegPath,
-    [
-      '-hide_banner',
-      '-nostdin',
-      '-i',
-      file,
-      '-an',
-      '-vf',
-      "scale=160:-2,select='gt(scene,0.35)',metadata=print:file=-",
-      '-f',
-      'null',
-      '-',
-    ],
-    signal,
-    'stdout',
-  );
+/**
+ * 缩小画面后找镜头切换，速度比整帧检测快得多。
+ * 解码交给显卡（Windows 的 NVIDIA / AMD / Intel、Mac 的苹果芯片）：以前全靠 CPU 解码整集视频，
+ * 分析切点时 CPU 占满、显卡闲着。显卡解码不了（老显卡、驱动问题、特殊编码）就用 CPU 再做一遍，不会少切点。
+ */
+async function detectScenes(ffmpegPath, file, signal, { hwaccel = true } = {}) {
+  const run = (hw) =>
+    capture(
+      ffmpegPath,
+      [
+        '-hide_banner',
+        '-nostdin',
+        ...(hw ? ['-hwaccel', 'auto'] : []),
+        '-i',
+        file,
+        '-an',
+        '-vf',
+        "scale=160:-2,select='gt(scene,0.35)',metadata=print:file=-",
+        '-f',
+        'null',
+        '-',
+      ],
+      signal,
+      'stdout',
+    );
+  let text;
+  if (hwaccel) {
+    try {
+      text = await run(true);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      text = await run(false);
+    }
+  } else text = await run(false);
   const scenes = [];
   for (const match of text.matchAll(/pts_time:\s*([\d.]+)/g)) scenes.push(Number(match[1]));
   return scenes;
