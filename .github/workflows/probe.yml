@@ -5,4 +5,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm i --no-save axios@1 && node scripts/check-hot-rank-live.cjs
+      - run: npm i --no-save axios@1 && node scripts/check-hot-rank-live.cjs | tee o.txt && ! grep -q WARN o.txt && [ $(grep -c "^PASS" o.txt) -eq 5 ]
