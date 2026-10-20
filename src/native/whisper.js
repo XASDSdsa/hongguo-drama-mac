@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const os = require('node:os');
 const path = require('node:path');
+const { stageAscii } = require('./ascii-paths');
 const { spawn } = require('node:child_process');
 
 const DEFAULT_LANGUAGE = 'zh';
@@ -239,13 +240,19 @@ async function transcribeAudio(audioPath, options = {}, settings = {}) {
   const result = resolveWhisper(settings);
   if (!result.available) throw unavailableError(result);
   if (!fileUsable(audioPath, false, result.config.platform)) throw new Error('待转写音频不存在或为空');
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-whisper-'));
+  // Windows 上的 whisper-cli（MSVC 编译）把模型路径当 UTF-8 解析，中文 Windows 传的是 GBK：
+  // 装在「AI短剧助手」文件夹里、或剧名带中文时就读不了。路径有中文时先放到纯英文路径的临时目录。
+  const staged = await stageAscii(
+    { models: { model: result.modelPath }, inputs: { audio: audioPath } },
+    { platform: result.config.platform, root: options.asciiRoot },
+  );
+  const tempDir = staged.stage || (await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-whisper-')));
   const outputPrefix = path.join(tempDir, 'transcript');
   const args = [
     '-m',
-    result.modelPath,
+    staged.paths.model,
     '-f',
-    audioPath,
+    staged.paths.audio,
     '-l',
     String(options.language || result.config.language),
     '-nt',
@@ -265,6 +272,7 @@ async function transcribeAudio(audioPath, options = {}, settings = {}) {
     return text;
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await staged.cleanup();
   }
 }
 

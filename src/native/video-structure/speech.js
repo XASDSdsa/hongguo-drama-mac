@@ -1,9 +1,7 @@
 'use strict';
 const path = require('node:path');
-const os = require('node:os');
-const { randomUUID } = require('node:crypto');
-const fsSync = require('node:fs');
 const fs = require('node:fs').promises;
+const { isAscii, stageAscii } = require('../ascii-paths');
 const { run, probe, json, atomicJson } = require('./io');
 const { requireThat, envelope, validateIntervals } = require('./contracts');
 const EFFECTS_FILTER = 'highpass=f=900,acompressor=threshold=0.1:ratio=3:attack=5:release=50,alimiter=limit=0.95';
@@ -316,71 +314,7 @@ function voiceFilter(segments, options = {}) {
   }
   return timelineFilter(segments, { ...options, keepOnlySegments: true });
 }
-// sherpa-onnx 的命令行程序在 Windows 上把参数里的路径当 UTF-8 解析，而中文 Windows 传给程序的参数是 GBK：
-// 路径里只要有中文（剧名、用户名、安装在「AI短剧助手」文件夹），它就说文件不存在、退出码 -1。
-// 所以在 Windows 上，路径不全是英文字符时，模型、输入、输出都放到一个纯英文路径的临时文件夹里再交给它。
-const isAscii = (value) => /^[\x00-\x7f]*$/.test(String(value));
-function asciiScratchRoot(env = process.env) {
-  const candidates = [os.tmpdir(), env.PROGRAMDATA, env.PUBLIC, path.parse(os.tmpdir()).root].filter(Boolean);
-  for (const base of candidates) {
-    const dir = path.join(base, 'ai-drama-ascii');
-    if (!isAscii(dir)) continue;
-    try {
-      fsSync.mkdirSync(dir, { recursive: true });
-      fsSync.accessSync(dir, fsSync.constants.W_OK);
-      return dir;
-    } catch (_) {}
-  }
-  return null;
-}
-async function placeFile(from, to) {
-  try {
-    await fs.link(from, to); // 同一个盘：硬链接，不占空间、瞬间完成
-  } catch (_) {
-    const temp = `${to}.${process.pid}.part`;
-    await fs.copyFile(from, temp);
-    await fs.rename(temp, to);
-  }
-}
-async function moveFile(from, to) {
-  try {
-    await fs.rename(from, to);
-  } catch (_) {
-    await fs.copyFile(from, to);
-    await fs.rm(from, { force: true });
-  }
-}
-/** 给分离程序准备纯英文路径；不需要时原样返回。 */
-async function asciiSeparationPaths(paths, platform = process.platform, root = undefined) {
-  if (platform !== 'win32' || Object.values(paths).every(isAscii)) return { ...paths, stage: null };
-  const base = root === undefined ? asciiScratchRoot() : root;
-  requireThat(base, '找不到只含英文字符的临时文件夹：人声分离工具读不了带中文的路径');
-  const stage = path.join(base, randomUUID());
-  await fs.mkdir(stage, { recursive: true });
-  let model = paths.model;
-  if (!isAscii(model)) {
-    // 模型一百多 MB：放一份在固定位置反复用，大小对得上就不再拷。
-    const cached = path.join(base, 'models', path.basename(model));
-    const [want, have] = await Promise.all([fs.stat(model), fs.stat(cached).catch(() => null)]);
-    if (!have || have.size !== want.size) {
-      await fs.mkdir(path.dirname(cached), { recursive: true });
-      await fs.rm(cached, { force: true });
-      await placeFile(model, cached);
-    }
-    model = cached;
-  }
-  const input = path.join(stage, 'input.wav');
-  await placeFile(paths.input, input);
-  return {
-    model,
-    input,
-    vocals: path.join(stage, 'vocals-out.wav'),
-    accompaniment: path.join(stage, 'accompaniment-out.wav'),
-    stage,
-    finals: { vocals: paths.vocals, accompaniment: paths.accompaniment },
-  };
-}
-
+// sherpa-onnx 的命令行程序在 Windows 上读不了带中文的路径：交给它的文件先放到纯英文路径的临时目录（见 ascii-paths）。
 async function separation(ctx, audio, audioDir) {
   // Inst_HQ_3 predicts background. sherpa 1.13.8 names its direct model
   // output vocals regardless of the model target. Use the residual for speech.
@@ -410,16 +344,15 @@ async function separation(ctx, audio, audioDir) {
       );
   }, 2000);
   pulse.unref?.();
-  const files = await asciiSeparationPaths(
+  const staged = await stageAscii(
     {
-      model: ctx.params.model,
-      input: path.join(audioDir, audio.path),
-      vocals: path.join(ctx.dir, 'background.wav'),
-      accompaniment: path.join(ctx.dir, 'vocals.wav'),
+      models: { model: ctx.params.model },
+      inputs: { input: path.join(audioDir, audio.path) },
+      outputs: { vocals: path.join(ctx.dir, 'background.wav'), accompaniment: path.join(ctx.dir, 'vocals.wav') },
     },
-    ctx.platform || process.platform,
-    ctx.asciiRoot,
+    { platform: ctx.platform || process.platform, root: ctx.asciiRoot },
   );
+  const files = staged.paths;
   try {
     await run(
       ctx.params.binary,
@@ -441,13 +374,10 @@ async function separation(ctx, audio, audioDir) {
         },
       },
     );
-    if (files.stage) {
-      await moveFile(files.vocals, files.finals.vocals);
-      await moveFile(files.accompaniment, files.finals.accompaniment);
-    }
+    await staged.finish();
   } finally {
     clearInterval(pulse);
-    if (files.stage) await fs.rm(files.stage, { recursive: true, force: true }).catch(() => {});
+    await staged.cleanup();
   }
   report(3, '分离进程已完成，正在校验两条音轨');
   const tracks = {};
@@ -777,7 +707,6 @@ async function transcript(ctx, separated, media, separationDir) {
 }
 module.exports = {
   separation,
-  asciiSeparationPaths,
   isAscii,
   transcript,
   mapTranscript,

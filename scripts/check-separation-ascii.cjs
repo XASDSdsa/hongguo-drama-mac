@@ -103,7 +103,39 @@ if (process.platform === 'win32' || spawnSync(ffmpeg, ['-version']).status !== 0
   });
   console.log('PASS other systems pass paths unchanged; tool errors put the real reason first');
 
-  // 4. 工具报错：最后几行放前面，Windows 的 4294967295 显示成 -1。
+  // 4. 字幕识别（whisper.cpp 的 Windows 版同样读不了中文路径）：模型和音频在中文文件夹里时，工具只看到英文路径。
+  const whisper = require('../src/native/whisper');
+  const whisperBin = path.join(tmp, 'whisper-cli');
+  const whisperArgs = path.join(tmp, 'whisper-args.log');
+  fs.writeFileSync(
+    whisperBin,
+    [
+      '#!/bin/bash',
+      `printf '%s\n' "$@" > "${whisperArgs}"`,
+      'for a in "$@"; do',
+      "  if printf '%s' \"$a\" | LC_ALL=C grep -q '[^ -~]'; then echo \"failed to open '$a'\" >&2; exit 3; fi",
+      'done',
+      'while [ $# -gt 0 ]; do case "$1" in -of) OUT="$2"; shift;; -m) M="$2"; shift;; -f) F="$2"; shift;; esac; shift; done',
+      '[ -f "$M" ] && [ -f "$F" ] || { echo missing >&2; exit 3; }',
+      'echo "你来了" > "$OUT.txt"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  const whisperModel = path.join(install, 'models', 'ggml-tiny.bin');
+  fs.mkdirSync(path.dirname(whisperModel), { recursive: true });
+  fs.writeFileSync(whisperModel, Buffer.alloc(2048, 3));
+  const text = await whisper.transcribeAudio(
+    wav,
+    { asciiRoot },
+    { platform: 'win32', whisper_binary_path: whisperBin, whisper_model_path: whisperModel },
+  );
+  assert.equal(text, '你来了');
+  assert.ok(speech.isAscii(fs.readFileSync(whisperArgs, 'utf8')), 'whisper only got ASCII paths');
+  assert.deepEqual(fs.readdirSync(asciiRoot).sort(), ['models'], 'nothing left behind except reusable models');
+  console.log('PASS subtitles (whisper.cpp) with Chinese model and audio paths: the tool only sees ASCII paths');
+
+  // 5. 工具报错：最后几行放前面，Windows 的 4294967295 显示成 -1。
   const error = toolError(
     'C:/x/tool.exe',
     4294967295,

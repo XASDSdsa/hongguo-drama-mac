@@ -328,6 +328,7 @@ jobs:
           node scripts/check-originals-folder.cjs
           node scripts/check-app-rename.cjs
           node scripts/check-ai-network-errors.cjs
+          REQUIRE_WHISPER=1 node scripts/check-whisper-real.cjs
           # 三分轨草稿用打包剪映运行时的同一个 Python 环境真跑一遍（含 pyJianYingDraft），不跳过。
           JY_PY="$PWD/.cache/jianying-venv/Scripts/python.exe"
           if [ -f "$JY_PY" ]; then
