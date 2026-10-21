@@ -112,7 +112,8 @@ function sceneMethods(platform = process.platform, hwaccel = true) {
   return methods;
 }
 
-const SCENE_METHOD_TEXT = { d3d11: '显卡解码 + 显卡缩小', hwaccel: '显卡解码', cpu: 'CPU' };
+// hwaccel（-hwaccel auto）显卡用不上时 FFmpeg 会自己改用 CPU、不报错，所以只能写「自动」
+const SCENE_METHOD_TEXT = { d3d11: '显卡（D3D11 解码 + 缩小）', hwaccel: '自动解码（显卡用不上时是 CPU）', cpu: 'CPU' };
 
 /** 缩小画面后找镜头切换，速度比整帧检测快得多。返回切换时间（秒）的数组，数组上带 method（用的哪种做法）。 */
 async function detectScenes(ffmpegPath, file, signal, { hwaccel = true, platform = process.platform } = {}) {
