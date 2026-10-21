@@ -415,10 +415,10 @@ function parseModelVideo(vm) {
     const s = { ...streamScore(v), codecRank: rank(codec) };
     if (!bestScore || cmp(s, bestScore) > 0) {
       bestScore = s;
-      best = [v.main_url, ei.spade_a || null, codec];
+      best = [v.main_url, ei.spade_a || null, codec, s];
     }
   }
-  return best || [null, null, null];
+  return best || [null, null, null, null];
 }
 
 /** 这集的播放直链下载失败（过期、节点没有）后，把缓存的旧地址作废，下次取址一定重新拿。 */
@@ -445,29 +445,52 @@ async function fetchPlayUrlSingle(vid, sid, options = {}) {
   }
 }
 
+/** 下载要的清晰度下限：短边 720（720p）。 */
+const DOWNLOAD_MIN_DEFINITION = 720;
+
+/**
+ * 下载用的片源：只要 720p 以上（红果 App 接口一般是 1080p），不用官网直链的 360p——
+ * 下了 360p 还得放大一遍，画面也糊。App 接口取不到时再试旧接口（也只认 720p 以上），都没有就报错，不退回 360p。
+ */
+async function fetchDownloadUrl(vid) {
+  let appError;
+  try {
+    return await require('./app-source').fetchAppPlayUrl(String(vid));
+  } catch (error) {
+    appError = error;
+  }
+  try {
+    const j = await apiCall('/novel/player/multi_video_model/preload/v1', {
+      biz_param: MODEL_BIZ_PARAM,
+      dr_scene: 'preload',
+      mixed_video_id_map: { 1004: [vid] },
+    });
+    const [url, spadeA, codec, score] = parseModelVideo(j?.data?.[vid]?.video_model);
+    const shortSide = score ? Math.max(score.defNum, Math.sqrt(score.pixels * (9 / 16))) : 0;
+    if (url && shortSide >= DOWNLOAD_MIN_DEFINITION - 1) return { url, spadeA, codec, source: 'api' };
+  } catch (_) {
+    // 旧接口经常空返回，失败不影响报错原因。
+  }
+  throw new Error(
+    `红果 App 接口暂时取不到这一集的 1080p 片源（${appError?.message || '未知原因'}）。官网只有 360p，不下载 360p；请稍后重试`,
+  );
+}
+
 /**
  * 取一集的片源地址。
  *   官网直链：明文 H.264，可以边下边播，但只有 360p（竖屏 360×640 / 横屏 640×360）。
  *   App 接口：1080p（1080×1920，HEVC，加密，下载完要解密）。
- * 在线播放要快，先用官网；下载（appFirst）要清晰，先用 App 的 1080p，取不到再退回官网 360p。
+ * 在线播放要快，先用官网；下载（appFirst）只要 720p 以上，见 fetchDownloadUrl。
  */
 async function fetchPlayUrlFresh(vid, sid, { appFirst = false } = {}) {
-  if (appFirst) {
-    try {
-      return await require('./app-source').fetchAppPlayUrl(String(vid));
-    } catch (_) {
-      // 取不到 1080p 就用官网 360p，至少能下下来。
-    }
-  }
+  if (appFirst) return fetchDownloadUrl(vid);
   const web = await fetchPlayUrlFromWeb(vid, sid);
   if (web && web.url) return web;
 
-  if (!appFirst) {
-    try {
-      return await require('./app-source').fetchAppPlayUrl(String(vid));
-    } catch (_) {
-      // 保留旧接口回退；取址错误不可包含签名地址或媒体密钥。
-    }
+  try {
+    return await require('./app-source').fetchAppPlayUrl(String(vid));
+  } catch (_) {
+    // 保留旧接口回退；取址错误不可包含签名地址或媒体密钥。
   }
 
   const body = {
