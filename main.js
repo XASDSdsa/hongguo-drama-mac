@@ -4839,6 +4839,16 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
       title: path.basename(path.resolve(job.dir)),
       maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
       shotLimit: Number.isFinite(Number(settings.video_prompt_shot_limit)) ? Number(settings.video_prompt_shot_limit) : 2,
+      // 四宫格关键帧去字幕：用设置里的作图模型（和重画海报同一个），没配就不去
+      eraseSubtitles: String(settings.ai_image_api_key || settings.ai_api_key || '').trim()
+        ? async ({ image, mask, prompt, signal: eraseSignal }) =>
+            (
+              await openai.editImage(
+                { image, mask, prompt, size: '1024x1024', quality: settings.ai_image_quality, signal: eraseSignal },
+                settings,
+              )
+            ).buffer
+        : null,
       log,
       onProgress: (_percent, message) => {
         item.detail = String(message || '').slice(0, 80);

@@ -25,7 +25,7 @@ const {
 } = require('./compose');
 const { renderEpisodeHtml, keyframeTimes, jpegSize } = require('./html');
 const { describePhases } = require('./ark');
-const { detectEpisodeBand, grabCleanFrame } = require('./subtitle-clean');
+const { detectEpisodeBand, aiCleanFrame } = require('./subtitle-clean');
 
 const ATTEMPTS = 3;
 
@@ -139,8 +139,10 @@ async function deriveEpisodePrompts({
   // 每集只分析前几个分镜（0 = 全部）：后面的分镜只在页面上占位，不问方舟、不截关键帧，省额度。
   shotLimit = 0,
   fps = 2,
-  // 四宫格关键帧先抹掉烧在画面里的字幕（视频本身不动）
+  // 四宫格关键帧去字幕（视频本身不动）：eraseSubtitles({ image, mask, prompt, signal }) → 去过字的图片字节，
+  // 用设置里的作图模型；不给就不去字幕。
   cleanSubtitles = true,
+  eraseSubtitles = null,
   log = () => {},
   onProgress = () => {},
   signal,
@@ -312,29 +314,30 @@ async function deriveEpisodePrompts({
         jobs.push({ row, kind: 'poster', time: times[0] });
         times.forEach((time, i) => jobs.push({ row, kind: 'grid', index: i, time }));
       }
-      // 四宫格关键帧去字幕：先在整集里找字幕横带，找到了每张关键帧只在横带里抹字；找不到就是没有字幕，照常截图。
+      // 四宫格关键帧去字幕：先在整集里找字幕横带；找到了，每张关键帧把字幕附近交给作图模型去字，只把字幕那一点贴回原帧。
       let subtitle = { band: null, dims: null };
-      let cleaned = 0;
-      if (cleanSubtitles && size) {
+      const tally = { cleaned: 0, mismatch: 0, failed: 0 };
+      if (cleanSubtitles && size && eraseSubtitles) {
         try {
           subtitle = await detectEpisodeBand({ ffmpeg, inputPath, rows, utterances: transcript?.utterances, size, signal });
           if (subtitle.band) {
             const { y0, y1, frameHeight } = subtitle.band;
-            log('info', `关键帧去字幕：字幕在画面 ${Math.round((y0 / frameHeight) * 100)}%–${Math.round((y1 / frameHeight) * 100)}% 高度，四宫格关键帧先把字幕抹掉`);
+            log('info', `关键帧去字幕：字幕在画面 ${Math.round((y0 / frameHeight) * 100)}%–${Math.round((y1 / frameHeight) * 100)}% 高度，四宫格关键帧交给作图模型去字`);
           } else log('info', '关键帧去字幕：没找到烧在画面里的字幕，关键帧照常截');
         } catch (error) {
           if (signal?.aborted) throw error;
           log('warn', `关键帧去字幕没做成（${error.message}），关键帧照常截`);
         }
-      }
+      } else if (cleanSubtitles && !eraseSubtitles) log('info', '关键帧去字幕要用设置里的作图模型，还没配好，关键帧照常截');
       await pool(jobs, 4, async (job) => {
         const wide = job.kind === 'poster';
         let frame = null;
         if (!wide && subtitle.band) {
           try {
-            const clean = await grabCleanFrame({ ffmpeg, inputPath, time: job.time, band: subtitle.band, dims: subtitle.dims, outWidth: 320, quality: 7, signal });
+            const clean = await aiCleanFrame({ ffmpeg, inputPath, time: job.time, band: subtitle.band, dims: subtitle.dims, outWidth: 320, quality: 7, erase: eraseSubtitles, signal });
             frame = { uri: `data:image/jpeg;base64,${clean.bytes.toString('base64')}`, bytes: clean.bytes };
-            if (clean.cleaned) cleaned += 1;
+            if (clean.cleaned) tally.cleaned += 1;
+            else if (clean.reason in tally) tally[clean.reason] += 1;
           } catch (error) {
             if (signal?.aborted) throw error;
           }
@@ -346,7 +349,10 @@ async function deriveEpisodePrompts({
           if (!size) size = jpegSize(frame.bytes);
         } else frames[job.row.no].grid[job.index] = frame.uri;
       });
-      if (subtitle.band) log('info', `关键帧去字幕：抹掉了 ${cleaned} 张关键帧上的字幕`);
+      if (subtitle.band) {
+        const kept = [tally.mismatch && `${tally.mismatch} 张作图结果和原图对不齐`, tally.failed && `${tally.failed} 张作图没成功`].filter(Boolean);
+        log(kept.length ? 'warn' : 'info', `关键帧去字幕：去掉了 ${tally.cleaned} 张${kept.length ? `；${kept.join('、')}，这几张保留原图` : ''}`);
+      }
       const thumbs = {};
       await pool(library.characters.filter((c) => c.ref_time != null), 4, async (character) => {
         const frame = await grabFrame(ffmpeg, inputPath, character.ref_time, 160, 5, temp, `ref-${character.id}.jpg`, signal);

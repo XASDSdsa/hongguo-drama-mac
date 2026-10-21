@@ -341,6 +341,8 @@ async function editImage(options = {}, baseConfig = {}) {
   form.append('quality', options.quality || config.imageQuality);
   form.append('n', '1');
   form.append('image', new Blob([source.buffer], { type: source.contentType }), source.name);
+  // 遮罩（可选）：和原图一样大的 PNG，透明的地方是要改的地方
+  if (options.mask) form.append('mask', new Blob([Buffer.from(options.mask)], { type: 'image/png' }), 'mask.png');
   const { payload } = await request(config, '/images/edits', {
     kind: 'image',
     body: form,

@@ -65,6 +65,14 @@ const adapter = require('../src/native/openai');
   assert.equal(edited.buffer.toString(), 'edited');
   assert.equal(calls[1].url, 'https://relay.example.test/v1/images/edits');
   assert.ok(calls[1].options.body instanceof FormData);
+  assert.equal(calls[1].options.body.get('mask'), null, '不给遮罩就不带');
+  // 关键帧去字幕：带遮罩（透明 = 要改的地方）
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  responses.unshift({ data: [{ b64_json: Buffer.from('erased').toString('base64') }] });
+  await adapter.editImage({ image: png, mask: png, prompt: '去字幕', size: '1024x1024' }, config);
+  const masked = calls.pop();
+  assert.equal(masked.options.body.get('mask').name, 'mask.png');
+  assert.equal(masked.options.body.get('size'), '1024x1024');
 
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-drama-material-check-'));
   const audio = path.join(temp, 'audio.m4a');
