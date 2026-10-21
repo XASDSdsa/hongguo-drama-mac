@@ -753,7 +753,7 @@ export default function SeriesDetail({ folder, active = true }) {
               {dedupOn && (
                 <p className={`proc-name ${releaseTitle ? '' : 'is-missing'}`}>
                   {releaseTitle
-                    ? `成品命名：${releaseTitle}_第001集.mp4 …`
+                    ? `成品命名：${releaseTitle} - 第1集.mp4 …`
                     : '先在上面「AI 发布素材」里选定新剧名，成品会用新剧名命名'}
                 </p>
               )}

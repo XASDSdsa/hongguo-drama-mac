@@ -3429,7 +3429,8 @@ async function planAndQueueResplit({
     sanitizeFolderName(title) ||
     sanitizeFolderName(path.basename(dir)) ||
     '短剧';
-  const names = plan.pieces.map((piece) => `${seriesName}_第${String(piece.number).padStart(3, '0')}集`);
+  // 平台提审要求的命名：「剧目名 - 第N集」（如「我的中国梦 - 第1集」）。
+  const names = plan.pieces.map((piece) => libraryOutputStem(seriesName, piece.number));
   const destinations = allocateQuchongDestinations(
     plan.pieces.map((piece) => piece.segments[0].file),
     plan.pieces.map(() => outputDir),
@@ -4186,7 +4187,9 @@ ipcMain.handle('publish-save-synopsis', (_event, payload = {}) => {
 });
 
 // ===== 成品命名：用 AI 发布素材里选定的新剧名 =====
-const LIBRARY_OUTPUT_NAME = /^(.+)_第(\d+)集(?:_\d+)?\.mp4$/i;
+// 平台提审要求：「剧目名 - 第N集」。以前的「剧名_第001集」也认得，改剧名时一起改成新写法。
+const LIBRARY_OUTPUT_NAME = /^(.+?)(?: - |_)第0*(\d+)集(?:_\d+)?\.mp4$/i;
+const libraryOutputStem = (title, number) => `${title} - 第${Number(number)}集`;
 
 /** 这部剧选定的新剧名（「AI 发布素材」里选的或填的）；还没选返回空字符串。 */
 function libraryReleaseTitle(dir) {
@@ -4268,7 +4271,7 @@ function renameLibraryOutputs(dir) {
   const stale = fs
     .readdirSync(output)
     .map((name) => ({ name, match: LIBRARY_OUTPUT_NAME.exec(name) }))
-    .filter((row) => row.match && row.match[1] !== title);
+    .filter((row) => row.match && row.name !== `${libraryOutputStem(title, row.match[2])}.mp4`);
   if (!stale.length) return;
   if (busy) {
     libLog(dir, 'warn', `剧名已改成「${title}」，但${busy}，成品文件名先不改；做完后再改一次剧名即可同步`, 'side');
@@ -4276,14 +4279,14 @@ function renameLibraryOutputs(dir) {
   }
   let renamed = 0;
   for (const row of stale) {
-    const target = path.join(output, `${title}_第${row.match[2]}集.mp4`);
+    const target = path.join(output, `${libraryOutputStem(title, row.match[2])}.mp4`);
     if (fs.existsSync(target)) continue;
     fs.renameSync(path.join(output, row.name), target);
     renamed += 1;
     // 改名后路径变了，旧路径对应的分析文件不会再被用到。
     cleanupAndLog(dir, [path.join(output, row.name)], '成品已改名').catch(() => {});
   }
-  if (renamed) libLog(dir, 'ok', `成品已按新剧名「${title}」改名：${renamed} 个文件`, 'side');
+  if (renamed) libLog(dir, 'ok', `成品已按「${title} - 第N集」改名：${renamed} 个文件`, 'side');
 }
 
 // ===== 管理剧集的支线任务：生成剪映草稿 =====

@@ -22,6 +22,8 @@ const GAP_JUNCTION_SCORE = 1.3; // 缺集造成的剧情跳跃，尽量落在两
 // 末尾剩下一点点（不到最短时长的四分之一）的内容，直接并进最后一集，不再要求它落在时长范围内。
 const TAIL_ABSORB_RATIO = 0.25;
 
+// 短剧平台提审要求每集不少于 30 秒。
+const PLATFORM_MIN_SECONDS = 30;
 const DEFAULT_SPLIT = Object.freeze({ min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2, start_number: 1 });
 
 function validateSplit(input = {}) {
@@ -222,6 +224,7 @@ function cutCandidates({ pauses = [], scenes = [] }, lo, hi) {
 function planPieces({ sources, split, speedMin, speedMax, random = Math.random }) {
   const options = validateSplit(split);
   const warnings = [];
+  if (options.min_len < PLATFORM_MIN_SECONDS) warnings.push('每集最短时长不到 30 秒：短剧平台要求每集不少于 30 秒');
   const timeline = [];
   let offset = 0;
   for (const source of sources) {
@@ -267,7 +270,7 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
 
   const tailSlack = lengthMin * TAIL_ABSORB_RATIO;
   let tailAbsorbed = 0;
-  const solve = (lastMin) => {
+  const solve = (lastMin, lastMax = lengthMax) => {
     const n = times.length;
     const best = new Array(n).fill(Infinity);
     const from = new Array(n).fill(-1);
@@ -277,7 +280,9 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
       const isEnd = j === n - 1;
       const minimum = isEnd ? lastMin : lengthMin;
       while (low < j && times[j] - times[low] > lengthMax) low++;
-      for (let i = low; i < j; i++) {
+      let first = low;
+      if (isEnd) while (first > 0 && times[j] - times[first - 1] <= lastMax) first--;
+      for (let i = first; i < j; i++) {
         const length = times[j] - times[i];
         if (length < minimum || !Number.isFinite(best[i])) continue;
         const cost = best[i] + (isEnd ? 0 : 1 - scores[j]) + 0.3 + (0.5 * Math.abs(length - preferred)) / preferred;
@@ -311,8 +316,15 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
 
   let route = solve(lengthMin);
   if (!route) {
+    // 结尾剩下的内容不够一集：先试着并进最后一集（最后一集可以比最长时长长一些），
+    // 不让最后一集变短——平台要求每集不少于 30 秒。
     tailAbsorbed = 0;
-    route = solve(Math.max(1, lengthMin * 0.5));
+    route = solve(lengthMin, lengthMax + lengthMin);
+    if (route) warnings.push('最后一集比设定的最长时长长一些（结尾剩下的内容并进了最后一集）');
+  }
+  if (!route) {
+    tailAbsorbed = 0;
+    route = solve(Math.max(1, Math.min(lengthMin, PLATFORM_MIN_SECONDS), lengthMin * 0.5));
     if (route) warnings.push('最后一集比设定的最短时长短一些');
   }
   if (!route) {

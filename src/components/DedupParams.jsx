@@ -40,8 +40,8 @@ const TIME_GROUPS = [
   {
     title: '成品时长（秒）',
     fields: [
-      ['split', 'min_len', '最短', 1, 5, 600],
-      ['split', 'max_len', '最长', 1, 5, 900],
+      ['split', 'min_len', '最短', 1, 30, 600], // 平台要求每集不少于 30 秒
+      ['split', 'max_len', '最长', 1, 31, 900],
     ],
   },
   {

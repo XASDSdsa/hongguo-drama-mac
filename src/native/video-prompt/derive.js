@@ -323,8 +323,8 @@ async function deriveEpisodePrompts({
         const frame = await grabFrame(ffmpeg, inputPath, character.ref_time, 160, 5, temp, `ref-${character.id}.jpg`, signal);
         if (frame) thumbs[character.id] = frame.uri;
       });
-      // 成品文件名是「新剧名_第001集」：页头显示新剧名和「第1集」，不重复文件名
-      const named = /^(.+)_第0*(\d+)集(?:_\d+)?$/.exec(label);
+      // 成品文件名是「新剧名 - 第1集」（以前是「新剧名_第001集」）：页头显示新剧名和「第1集」，不重复文件名
+      const named = /^(.+?)(?: - |_)第0*(\d+)集(?:_\d+)?$/.exec(label);
       const html = renderEpisodeHtml({
         title: named ? named[1] : title,
         label,

@@ -87,7 +87,11 @@ const brightness = (file, at, crop) =>
       opts: { ...quchong.DEFAULTS, encoder: 'cpu', jobs: 1 },
     });
     const result = await quchong.probeMedia(ffprobe, out);
-    assert.equal(`${result.video_width}x${result.video_height}`, '360x640', '旋转的视频去重后仍是竖屏，不被压扁');
+    assert.equal(
+      `${result.video_width}x${result.video_height}`,
+      '720x1280',
+      '旋转的视频去重后仍是竖屏（不到 720p 放大到 720×1280），不被压扁',
+    );
     console.log('PASS rotated phone video keeps its upright size');
   } else console.log('SKIP rotated case: this FFmpeg has no -display_rotation');
 
@@ -107,14 +111,14 @@ const brightness = (file, at, crop) =>
   });
   const info = await quchong.probeMedia(ffprobe, out);
   const planned = segments.reduce((sum, item) => sum + item.duration / item.speed, 0);
-  assert.equal(`${info.video_width}x${info.video_height}`, '360x640', '跨集成片按第一段的尺寸');
+  assert.equal(`${info.video_width}x${info.video_height}`, '720x1280', '跨集成片按第一段的比例，放大到 720p');
   assert.ok(info.has_audio, '有音轨的集和没音轨的集拼在一起，成品仍有声音');
   assert.ok(Math.abs(info.duration - planned) < 0.3, `成片时长 ${info.duration} 应接近计划 ${planned}`);
   // 横屏那一段（第三段）上方应该是补的黑边，不是被拉伸的彩条。
   const landscapeAt = 1.5 / 1.1 + 1.5 / 1.2 + 0.7;
   const top = brightness(out, landscapeAt.toFixed(2), '200:40:80:10');
   assert.ok(top < 90, `横屏片段应按比例缩小补黑边，上方亮度 ${top}`);
-  const middle = brightness(out, landscapeAt.toFixed(2), '200:40:80:300');
+  const middle = brightness(out, landscapeAt.toFixed(2), '200:40:80:620');
   assert.ok(middle > top + 30, `横屏片段中间应是画面，亮度 ${middle}`);
   console.log('PASS mixed episodes: silent episode padded with silence, other aspect letterboxed, duration as planned');
 
@@ -151,8 +155,9 @@ const brightness = (file, at, crop) =>
     opts: { ...quchong.DEFAULTS, encoder: 'cpu', jobs: 1 },
   });
   const anaResult = await quchong.probeMedia(ffprobe, anaOut);
-  assert.equal(`${anaResult.video_width}x${anaResult.video_height}`, '640x640', '单集去重后仍是正方形画面');
-  // 拼进竖屏成片：正方形画面缩到 360×360、上下补黑边，不被压成 360×640。
+  // 正方形画面：短边要到 720、长边要到 1280，按比例放大到 1280×1280，仍是正方形。
+  assert.equal(`${anaResult.video_width}x${anaResult.video_height}`, '1280x1280', '单集去重后仍是正方形画面');
+  // 拼进竖屏成片：正方形画面缩到 360×360、上下补黑边（成片再放大到 720×1280），不被压成竖条。
   const anaPiece = path.join(work, 'anamorphic-piece.mp4');
   await quchong.runJob({
     ffmpegPath: ffmpeg,
@@ -165,7 +170,7 @@ const brightness = (file, at, crop) =>
     opts: { ...quchong.DEFAULTS, encoder: 'cpu', jobs: 1 },
   });
   const anaTop = brightness(anaPiece, '1.7', '200:40:80:20');
-  const anaMiddle = brightness(anaPiece, '1.7', '200:40:80:300');
+  const anaMiddle = brightness(anaPiece, '1.7', '200:40:80:620');
   assert.ok(anaTop < 90 && anaMiddle > anaTop + 30, `正方形画面应上下补黑边：上 ${anaTop} 中 ${anaMiddle}`);
   console.log('PASS non-square pixels: shown at display size, letterboxed inside a portrait piece');
 

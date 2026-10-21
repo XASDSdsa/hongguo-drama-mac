@@ -178,6 +178,13 @@ const plan = (sources, split = {}, overrides = {}) =>
     assert.ok(absorbed > 0, 'the leftover rule is actually used');
   });
 
+  await check('platform minimum: a per-episode minimum under 30 seconds is flagged', () => {
+    const short = plan([mk('a', 200, { candidates: [] })], { min_len: 10, max_len: 20 });
+    assert.ok(short.warnings.some((text) => /不少于 30 秒/.test(text)));
+    const ok = plan([mk('a', 200, { candidates: [] })]);
+    assert.ok(!ok.warnings.some((text) => /不少于 30 秒/.test(text)));
+  });
+
   await check('estimate: how many episodes the selected content makes before any analysis', () => {
     const sources = Array.from({ length: 80 }, (_, i) => ({ file: `/x/${i}.mp4`, duration: 92 }));
     const estimate = resplit.estimatePlan({ sources, split: {}, speedMin: 1.03, speedMax: 1.21 });
@@ -326,8 +333,9 @@ const plan = (sources, split = {}, overrides = {}) =>
       const kinds = probe.streams.map((stream) => stream.codec_type).sort();
       assert.deepEqual(kinds, ['audio', 'video']);
       const video = probe.streams.find((stream) => stream.codec_type === 'video');
-      assert.equal(video.width, 270, 'joined pieces keep the source resolution');
-      assert.equal(video.height, 480);
+      // 270×480 不到 720p：按比例放大到 720×1280（平台提审要求），竖屏比例不变。
+      assert.equal(video.width, 720, 'joined pieces keep the source aspect, scaled up to 720p');
+      assert.equal(video.height, 1280);
       assert.equal(probe.streams.find((stream) => stream.codec_type === 'audio').codec_name, 'aac');
       assert.ok(Math.abs(Number(probe.format.duration) - 7.2) < 0.5, `duration ${probe.format.duration}`);
       assert.ok(logs.some((line) => line.startsWith('[合并]')));

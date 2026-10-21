@@ -304,10 +304,70 @@ async function checkEncoders(ffmpegPath, platform = process.platform) {
   return { platform, adapters: windowsAdapters, results, picked: working };
 }
 
-function encoderArgs(name, lean, width, height) {
-  // NVIDIA：以前用 p1（FFmpeg 自己标注「最快、画质最低」），成品发糊。改用 p4（FFmpeg 默认的平衡档），
-  // 打开空间自适应量化（细节多的地方多给码率），-b:v 0 明确不限平均码率，只按画质目标 -cq 编。
-  // 显卡编码速度很快，整条处理的瓶颈在前面的滤镜，换成 p4 总时间基本不变。
+// ===== 成品要满足短剧平台提审要求 =====
+// 单个文件不超过 500MB、分辨率不低于 720p（720×1280）、码率不低于 4Mbps、时长不少于 30 秒。
+const DELIVERY = Object.freeze({
+  minShort: 720,
+  minLong: 1280,
+  minKbps: 4000,
+  maxBytes: 500 * 1000 * 1000, // 按 1MB = 100 万字节算，比 1024×1024 更保守
+  minSeconds: 30,
+});
+const AUDIO_KBPS = 128;
+const VIDEO_KBPS = 6000; // 视频目标码率：比 4Mbps 留足余量（硬件编码在静止画面上可能略低于目标）
+const LEAN_VIDEO_KBPS = 5000;
+
+const evenDown = (value) => Math.max(2, Math.floor(Number(value) / 2) * 2);
+
+/**
+ * 成品尺寸：原视频不到 720p（短边 720、长边 1280）就按比例放大到够，够了就保持原尺寸。
+ * 横竖屏、画面比例都不变（360×640 → 720×1280，640×360 → 1280×720）。
+ */
+function deliverySize(width, height) {
+  const w = Math.max(2, Number(width) || 2);
+  const h = Math.max(2, Number(height) || 2);
+  const short = Math.min(w, h);
+  const long = Math.max(w, h);
+  const factor = Math.max(1, DELIVERY.minShort / short, DELIVERY.minLong / long);
+  if (factor === 1) return { width: evenDown(w), height: evenDown(h) };
+  // 放大后向上取偶数，保证不会因为取整掉到 720 / 1280 以下。
+  return { width: Math.ceil((w * factor) / 2) * 2, height: Math.ceil((h * factor) / 2) * 2 };
+}
+
+/** 视频码率（kbps）：默认 6Mbps；片子很长时为了不超过 500MB 往下压（留 5% 余量给封装和音频）。 */
+function deliveryVideoKbps(seconds, lean = false) {
+  const target = lean ? LEAN_VIDEO_KBPS : VIDEO_KBPS;
+  const duration = Number(seconds);
+  if (!(duration > 0)) return target;
+  const budget = Math.floor((DELIVERY.maxBytes * 0.95 * 8) / 1000 / duration) - AUDIO_KBPS;
+  return Math.max(500, Math.min(target, budget));
+}
+
+/** 成品哪里不满足提审要求（空数组 = 都满足）。码率按整个文件算（文件大小 × 8 ÷ 时长）。 */
+function deliveryProblems({ width, height, duration, size }) {
+  const problems = [];
+  const short = Math.min(width, height);
+  const long = Math.max(width, height);
+  if (!(short >= DELIVERY.minShort && long >= DELIVERY.minLong))
+    problems.push({ key: 'resolution', text: `分辨率 ${width}×${height} 低于 720p（720×1280）` });
+  const kbps = duration > 0 ? (size * 8) / 1000 / duration : 0;
+  if (!(kbps >= DELIVERY.minKbps))
+    problems.push({ key: 'bitrate', text: `码率 ${(kbps / 1000).toFixed(2)}Mbps 低于 4Mbps` });
+  if (size > DELIVERY.maxBytes)
+    problems.push({ key: 'size', text: `文件 ${(size / 1000 / 1000).toFixed(0)}MB 超过 500MB` });
+  if (!(duration >= DELIVERY.minSeconds))
+    problems.push({ key: 'duration', text: `时长 ${Number(duration || 0).toFixed(1)} 秒，不到 30 秒` });
+  return problems;
+}
+
+/**
+ * 编码参数。为了满足「码率不低于 4Mbps」，各编码器都按固定码率（CBR）编，不再按画质目标编
+ * （按画质目标编时，画面简单的短剧经常只有 1～3Mbps）。
+ */
+function encoderArgs(name, lean, width, height, kbps = lean ? LEAN_VIDEO_KBPS : VIDEO_KBPS) {
+  const rate = `${kbps}k`;
+  const buffer = `${kbps * 2}k`;
+  // NVIDIA：p4 平衡档 + 空间自适应量化（细节多的地方多给码率），固定码率。
   if (name === 'nvenc')
     return [
       '-c:v',
@@ -317,35 +377,57 @@ function encoderArgs(name, lean, width, height) {
       '-tune',
       'hq',
       '-rc',
-      'vbr',
-      '-cq',
-      lean ? '24' : '21',
+      'cbr',
       '-b:v',
-      '0',
+      rate,
+      '-maxrate',
+      rate,
+      '-bufsize',
+      buffer,
       '-spatial-aq',
       '1',
     ];
-  // AMD：以前 -quality speed 又不给画质目标，落到默认码率；改为平衡档 + 固定量化参数（和 NVIDIA 的 -cq 同一档）。
-  if (name === 'amf') {
-    const qp = lean ? '24' : '21';
-    return ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', qp, '-qp_p', qp, '-qp_b', qp];
-  }
-  if (name === 'qsv') return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', lean ? '25' : '21'];
-  if (name === 'videotoolbox') {
-    let bitrate = Math.max(1500, Math.floor(width * height * 0.00386));
-    if (lean) bitrate = Math.floor(bitrate / 2);
+  // AMD：平衡档，固定码率；filler_data 在画面简单时补足码率。
+  if (name === 'amf')
     return [
       '-c:v',
-      'h264_videotoolbox',
+      'h264_amf',
+      '-quality',
+      'balanced',
+      '-rc',
+      'cbr',
       '-b:v',
-      `${bitrate}k`,
+      rate,
       '-maxrate',
-      `${Math.floor(bitrate * 1.5)}k`,
+      rate,
       '-bufsize',
-      `${bitrate * 2}k`,
+      buffer,
+      '-filler_data',
+      '1',
     ];
-  }
-  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', lean ? '23' : '20'];
+  // Intel：平均码率等于最高码率就是固定码率。
+  if (name === 'qsv')
+    return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', rate, '-maxrate', rate, '-bufsize', buffer];
+  // Mac：按平均码率编；万一画面太简单码率掉到 4Mbps 以下，成品检查时会改用 CPU 固定码率重编一次。
+  if (name === 'videotoolbox')
+    return ['-c:v', 'h264_videotoolbox', '-b:v', rate, '-maxrate', `${Math.floor(kbps * 1.5)}k`, '-bufsize', buffer];
+  // CPU：x264 真正的固定码率（nal-hrd=cbr 会补足码率）。
+  return [
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-b:v',
+    rate,
+    '-minrate',
+    rate,
+    '-maxrate',
+    rate,
+    '-bufsize',
+    buffer,
+    '-x264-params',
+    'nal-hrd=cbr',
+  ];
 }
 
 /** 原声的处理链：整条滤镜图里和“分开处理音频”那一步用的是同一份，保证两条路出来的声音一样。 */
@@ -372,10 +454,8 @@ function audioChain({ safe, speed, pitch, eq, volume, audioDelay, padTo }) {
 function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, audioMode = 'full' }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
-  // 不改分辨率：成品和原视频一样大（宽高取偶数）。裁掉边缘后再放回原尺寸，不加黑边、不横竖屏改构图。
-  const even = (value) => Math.max(2, Math.floor(Number(value) / 2) * 2);
-  const width = even(media.video_width);
-  const height = even(media.video_height);
+  // 成品尺寸：原视频够 720p 就保持原尺寸；不够就按比例放大到 720p（平台要求），不加黑边、不改横竖屏构图。
+  const { width, height } = deliverySize(media.video_width, media.video_height);
   const speed = r.SPEED;
   // external：音频交给单独的几步处理（见 renderAudioSeparately），这条命令只出视频，不碰音轨也不混 BGM。
   const external = audioMode === 'external';
@@ -394,7 +474,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   const sourceAudio = '[0:a:0]';
   if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
   // 裁剪和旋转会改变尺寸，这里统一缩回原来的大小。
-  vf.push(`scale=${width}:${height}`, 'setsar=1');
+  vf.push(`scale=${width}:${height}:flags=lanczos`, 'setsar=1');
   // rgbashift 只能在 RGB 里做，噪点也留在 RGB 里加（和以前的画面效果、码率一致），
   // 加完立刻转回 yuv420p：以前整条后续滤镜链都按 4:4:4 全分辨率在跑，数据量翻倍，白白变慢。
   if (opts.rgb_shift > 0) vf.push(`rgbashift=rh=${opts.rgb_shift}:rv=1:gh=0:gv=0:bh=-${opts.rgb_shift}:bv=1`);
@@ -466,7 +546,13 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
     '1:90000',
     '-pix_fmt',
     'yuv420p',
-    ...encoderArgs(encoder, opts.quality === 'lean', width, height),
+    ...encoderArgs(
+      encoder,
+      opts.quality === 'lean',
+      width,
+      height,
+      deliveryVideoKbps(outputDuration, opts.quality === 'lean'),
+    ),
   );
   if (audioOutput) args.push('-c:a', 'aac', '-b:a', '128k');
   args.push('-map_metadata', '-1', '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', dst);
@@ -958,7 +1044,7 @@ async function encodeOne({
         `[编码器] ${why || `${ENCODER_LABEL[firstChoice] || firstChoice}编码试编失败`}。这一批改用 ${ENCODER_LABEL[encoder] || encoder} 编码（成品一样，只是慢一些）`,
       );
     }
-    const build = (audioMode, output = tmp) =>
+    const build = (audioMode, output = tmp, useEncoder = encoder) =>
       buildCommand({
         src: inputs[0],
         dst: output,
@@ -966,7 +1052,7 @@ async function encodeOne({
         opts: options,
         rolled,
         media,
-        encoder,
+        encoder: useEncoder,
         audioMode,
       });
     let command = build('full');
@@ -1105,9 +1191,33 @@ async function encodeOne({
     }
     if (signal?.aborted) throw new Error('已取消');
     onStage?.('validating');
-    const result = await probeMedia(ffprobePath, tmp, signal);
-    const stat = await fsp.stat(tmp);
+    let result = await probeMedia(ffprobePath, tmp, signal);
+    let stat = await fsp.stat(tmp);
     if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
+    if (signal?.aborted) throw new Error('已取消');
+    // 平台提审要求：分辨率、码率、大小、时长。显卡 / Mac 编出来码率偏低时，改用 CPU 固定码率重编一次（一定够码率）。
+    const check = () =>
+      deliveryProblems({
+        width: result.video_width,
+        height: result.video_height,
+        duration: Number(result.duration) || 0,
+        size: stat.size,
+      });
+    let problems = check();
+    if (problems.some((item) => item.key === 'bitrate') && encoder !== 'cpu' && audioStep < 3) {
+      onLog?.(`[重编] ${problems.map((item) => item.text).join('，')}：改用 CPU 固定码率重编这一集`);
+      onStage?.('encoding');
+      onProgress?.(0);
+      const again = build(audioStep === 2 ? 'safe' : 'full', tmp, 'cpu');
+      await runProcess(ffmpegPath, again.args, again.duration, onProgress, signal, onStage, onLog);
+      onStage?.('validating');
+      result = await probeMedia(ffprobePath, tmp, signal);
+      stat = await fsp.stat(tmp);
+      if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
+      problems = check();
+    }
+    if (problems.length)
+      onLog?.(`[提醒] ${path.basename(dst)} 不满足平台提审要求：${problems.map((item) => item.text).join('，')}`);
     if (signal?.aborted) throw new Error('已取消');
     onStage?.('saving');
     await publishOutput(tmp, dst);
@@ -1119,6 +1229,13 @@ async function encodeOne({
       rolled,
       encodeSeconds: (Date.now() - startedAt) / 1000,
       outputSeconds: Number(result.duration) || 0,
+      delivery: {
+        width: result.video_width,
+        height: result.video_height,
+        bytes: stat.size,
+        kbps: Math.round((stat.size * 8) / 1000 / (Number(result.duration) || 1)),
+        problems: problems.map((item) => item.text),
+      },
     };
   } finally {
     if (holdingSession) releaseHwSession();
@@ -1303,6 +1420,10 @@ module.exports = {
   encoderFailureNote,
   setWindowsAdapters,
   encoderArgs,
+  DELIVERY,
+  deliverySize,
+  deliveryVideoKbps,
+  deliveryProblems,
   buildCommand,
   probeMedia,
   runJob,

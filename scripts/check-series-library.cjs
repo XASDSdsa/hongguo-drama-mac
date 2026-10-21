@@ -460,10 +460,17 @@ async function check(name, fn) {
       fs.writeFileSync(path.join(outDir, name), 'x');
     context.libraryReleaseTitle = () => '新名';
     context.renameLibraryOutputs(series.path);
-    assert.deepEqual(fs.readdirSync(outDir).sort(), ['新名_第001集.mp4', '新名_第002集.mp4', '说明.txt']);
+    assert.deepEqual(fs.readdirSync(outDir).sort(), ['新名 - 第1集.mp4', '新名 - 第2集.mp4', '说明.txt'].sort());
+    // 剧名没变、但还是以前「剧名_第001集」写法的：改成提审要求的「剧名 - 第N集」；已经是新写法的不动。
+    fs.writeFileSync(path.join(outDir, '新名_第003集.mp4'), 'x');
+    context.renameLibraryOutputs(series.path);
+    assert.deepEqual(
+      fs.readdirSync(outDir).sort(),
+      ['新名 - 第1集.mp4', '新名 - 第2集.mp4', '新名 - 第3集.mp4', '说明.txt'].sort(),
+    );
     // 重新拆分前旧成品整个挪走：「去重」里只留最新一版
     const moved = await context.retireLibraryOutputs(series.path);
-    assert.equal(moved, 3);
+    assert.equal(moved, 4);
     assert.deepEqual(fs.readdirSync(outDir), []);
     context.libraryReleaseTitle = (dir) => path.basename(dir);
     // 这批处理属于这部剧：处理进度、日志、总任务都按剧归到「管理剧集」里，切页面回来还能读到。
@@ -563,7 +570,7 @@ async function check(name, fn) {
       assert.equal(tasks.length, split.summary.count);
       assert.deepEqual(
         tasks.map((item) => path.basename(item.dst)),
-        tasks.map((_, i) => `真剧_第${String(i + 3).padStart(3, '0')}集.mp4`),
+        tasks.map((_, i) => `真剧 - 第${i + 3}集.mp4`),
       );
       assert.ok(tasks.every((item) => path.dirname(item.dst) === path.join(realDir, '去重')));
       assert.ok(

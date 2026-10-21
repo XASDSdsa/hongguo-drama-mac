@@ -235,12 +235,17 @@ async function main() {
   assert.deepEqual(quchong.encoderArgs('nvenc', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_nvenc']);
   assert.deepEqual(quchong.encoderArgs('amf', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_amf']);
   assert.deepEqual(quchong.encoderArgs('qsv', false, 720, 1280).slice(0, 2), ['-c:v', 'h264_qsv']);
-  // 显卡编码画质：NVIDIA 不再用最快最糊的 p1，平均码率不设上限，开空间自适应量化；AMD 用固定量化参数。
+  // 显卡编码：NVIDIA 用 p4 平衡档（不再用最快最糊的 p1）+ 空间自适应量化；各编码器都按固定码率编，
+  // 保证平台要求的码率不低于 4Mbps（默认 6Mbps，省空间档 5Mbps）。
   const nv = quchong.encoderArgs('nvenc', false, 1080, 1920).join(' ');
-  assert.match(nv, /-preset p4 -tune hq -rc vbr -cq 21 -b:v 0 -spatial-aq 1/);
+  assert.match(nv, /-preset p4 -tune hq -rc cbr -b:v 6000k -maxrate 6000k -bufsize 12000k -spatial-aq 1/);
   assert.ok(!/-preset p1/.test(nv));
-  assert.match(quchong.encoderArgs('nvenc', true, 1080, 1920).join(' '), /-cq 24/);
-  assert.match(quchong.encoderArgs('amf', false, 1080, 1920).join(' '), /-quality balanced -rc cqp -qp_i 21 -qp_p 21 -qp_b 21/);
+  assert.match(quchong.encoderArgs('nvenc', true, 1080, 1920).join(' '), /-b:v 5000k/);
+  assert.match(
+    quchong.encoderArgs('amf', false, 1080, 1920).join(' '),
+    /-quality balanced -rc cbr -b:v 6000k -maxrate 6000k -bufsize 12000k -filler_data 1/,
+  );
+  assert.match(quchong.encoderArgs('cpu', false, 1080, 1920).join(' '), /-b:v 6000k .*nal-hrd=cbr/);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-drama-quchong-'));
   try {
     const src = path.join(dir, 'source.mp4');
@@ -361,8 +366,10 @@ async function main() {
     const output = await quchong.probeMedia(ffprobe, dst);
     if (!output.has_video || !output.has_audio) throw new Error('合成输出缺少音视频轨道');
     const sourceSize = await quchong.probeMedia(ffprobe, src);
-    if (output.video_width !== sourceSize.video_width || output.video_height !== sourceSize.video_height)
-      throw new Error(`输出必须保持原分辨率：${output.video_width}x${output.video_height}`);
+    // 不到 720p 的原视频按比例放大到 720p（平台提审要求），够 720p 的保持原尺寸。
+    const want = quchong.deliverySize(sourceSize.video_width, sourceSize.video_height);
+    if (output.video_width !== want.width || output.video_height !== want.height)
+      throw new Error(`输出尺寸应为 ${want.width}x${want.height}：${output.video_width}x${output.video_height}`);
     await runJobCase('silent video with looping BGM', {
       ffmpegPath: ffmpeg,
       ffprobePath: ffprobe,
@@ -462,8 +469,9 @@ async function main() {
         );
         const info = await quchong.probeMedia(ffprobe, target);
         const sourceInfo = await quchong.probeMedia(ffprobe, portrait);
-        assert.equal(info.video_width, sourceInfo.video_width, '不改分辨率');
-        assert.equal(info.video_height, sourceInfo.video_height, '不改分辨率');
+        const want = quchong.deliverySize(sourceInfo.video_width, sourceInfo.video_height);
+        assert.equal(info.video_width, want.width, '竖屏放大到 720p，比例不变');
+        assert.equal(info.video_height, want.height, '竖屏放大到 720p，比例不变');
         assert.equal(info.has_audio, true);
         assert.equal(progress.at(-1), 100);
         assert.deepEqual(stages, ['probing', 'encoding', 'finalizing', 'validating', 'saving']);
