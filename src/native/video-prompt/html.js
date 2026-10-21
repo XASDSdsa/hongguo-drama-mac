@@ -89,6 +89,14 @@ main{padding:0 14px 40px}
 .seghead b{color:#fff}
 .seghead .meta{color:var(--muted)}
 .seghead .sp{flex:1}
+.blk.novel .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.blk.novel .head h3{margin:0}
+.match{font-weight:700;font-size:13px}
+.match.hi{color:var(--red)}
+.match.mid{color:var(--amber)}
+.match.lo{color:#9aa6b8}
+.novtext{margin:0;color:#c6d0e0;font-size:12.5px;line-height:1.85}
+.novnote{margin:6px 0 0;color:var(--amber);font-size:11.5px}
 .chip{display:inline-block;padding:1px 9px;border-radius:5px;font-size:12px;border:1px solid transparent;white-space:nowrap}
 .chip.g{background:#0f3a2c;color:var(--green);border-color:#17533f}
 .chip.a{background:#3a2a0e;color:var(--amber);border-color:#58411a}
@@ -273,6 +281,14 @@ function assetBlock(item, thumbs) {
   return `<div class="asset">${head}<div><b>${esc(item.name)}</b><em>#${esc(item.id)} · ${KIND_TEXT[item.kind] || ''}</em><br>${esc(item.desc || '（无描述）')}</div></div>`;
 }
 
+/** 「已匹配 92%」：85 分以上和模板一样用醒目色，70–84 琥珀色，70 以下标「偏低」。 */
+function matchBadge(shot) {
+  if (shot?.match == null) return '';
+  const value = shot.match;
+  const tone = value >= 85 ? 'hi' : value >= 70 ? 'mid' : 'lo';
+  return `<span class="match ${tone}">已匹配 ${value}%${value < 70 ? '（偏低）' : ''}</span>`;
+}
+
 function shotCard({
   segment,
   segIndex,
@@ -411,6 +427,9 @@ function shotCard({
 <div class="acts"><button type="button" class="btn primary sm" data-copy="seg:${segIndex}">复制整段提示词</button><button type="button" class="btn sm" data-copy="shot:${segIndex}:${shotIndex}"${hasPrompt ? '' : ' disabled'}>复制本镜</button><button type="button" class="btn sm" data-copy="say:${segIndex}:${shotIndex}"${row.dialogue.length ? '' : ' disabled'}>复制台词</button></div>
 </div>
 <div class="c3">
+<div class="blk novel"><div class="head"><h3>小说原文</h3>${matchBadge(shot)}</div>${
+    shot?.novel ? `<p class="novtext">${esc(shot.novel)}</p>` : `<p class="empty">${hasPrompt ? '方舟没有写出这一镜的小说原文' : '本段未生成'}</p>`
+  }${shot?.novel && shot.dialogue_covered != null && shot.dialogue_covered < 70 ? '<p class="novnote">小说原文里缺了这一镜的台词，匹配度最多按 70% 算</p>' : ''}</div>
 <div class="blk head"><h3>台词原文</h3><small>${row.dialogue.length} 句</small></div>
 <div class="blk" style="margin-top:-12px">${lines}</div>
 <div class="blk"><h3>画面观察</h3><div class="obs">${observe || '<span class="empty">没有可记录的内容</span>'}</div></div>
@@ -459,6 +478,8 @@ function renderEpisodeHtml({
   const segHtml = segments
     .map((segment, segIndex) => {
       const good = segment.failedMessage ? 0 : segment.rows.length;
+      const scores = (segment.failedMessage ? [] : segment.shots || []).map((shot) => shot?.match).filter((v) => v != null);
+      const average = scores.length ? Math.round(scores.reduce((sum, v) => sum + v, 0) / scores.length) : null;
       const cards = segment.rows
         .map((row, shotIndex) =>
           shotCard({
@@ -483,7 +504,9 @@ function renderEpisodeHtml({
       return `<section class="seg">
 <div class="seghead"><span class="dots" title="收起/展开">•••</span><b>第${segment.index}段</b><span class="meta">${clock(segment.start)}–${clock(segment.end)} · ${segment.rows.length}个镜头${
         segment.overlong ? ` · 单个分镜超过 ${maxSeconds} 秒，没有切开` : ''
-      }</span><span class="sp"></span><span class="chip g">已生成 ${good}</span><span class="chip a">未生成 ${segment.rows.length - good}</span><span class="meta">${seconds(segment.dur)}</span><button type="button" class="btn sm" data-copy="seg:${segIndex}">复制整段提示词</button></div>
+      }</span><span class="sp"></span><span class="chip g">已生成 ${good}</span><span class="chip a">未生成 ${segment.rows.length - good}</span>${
+        average == null ? '' : `<span class="meta">小说匹配 ${average}%</span>`
+      }<span class="meta">${seconds(segment.dur)}</span><button type="button" class="btn sm" data-copy="seg:${segIndex}">复制整段提示词</button></div>
 <div class="shots">${cards}</div>
 </section>`;
     })

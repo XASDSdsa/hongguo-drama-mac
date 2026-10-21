@@ -2,7 +2,8 @@
 // 视频反推提示词：分段、给模型的指令、模型结果校验、按 Seedance 2.5 阶段法拼提示词、输出文件格式。
 // 这个文件没有任何网络或文件操作，全部是纯函数，方便单独测试。
 
-const TEMPLATE_VERSION = 'seedance-2.5-stage-v1';
+// v2：每个分镜多写一段「小说原文」和它与画面的匹配度（旧缓存里没有，所以换版本号重新看）。
+const TEMPLATE_VERSION = 'seedance-2.5-stage-v2-novel';
 const DEFAULT_MAX_SEGMENT_SECONDS = 15;
 const MAX_SEGMENT_SECONDS = 30; // Seedance 2.5 单次最长
 const QUIET = /^(无|没有|无声|看不清|听不清|不详)$/;
@@ -123,8 +124,10 @@ function segmentInstruction({ segment, library }) {
     `分镜（时间相对本段开头，已确定，不要修改）：\n${shots}`,
     `素材库：\n${libraryText(library)}`,
     '只返回 JSON，不要任何解释，格式：',
-    '{"shots":[{"no":分镜序号,"camera":"景别和运镜，如“中景，缓慢推近”","action":"谁在哪里做什么，只写看得见的动作","expression":"2到4个可观察的表现：眼神、嘴角、呼吸、手部动作；没有就写空字符串","sound":"环境声和音效；听不出来写“无”","music":"配乐；没有写“无”","assets":["出镜的素材库编号，含场景"],"end_state":"这个分镜结束时画面里能直接看到的姿态、道具、位置"}]}',
+    '{"shots":[{"no":分镜序号,"camera":"景别和运镜，如“中景，缓慢推近”","action":"谁在哪里做什么，只写看得见的动作","expression":"2到4个可观察的表现：眼神、嘴角、呼吸、手部动作；没有就写空字符串","sound":"环境声和音效；听不出来写“无”","music":"配乐；没有写“无”","assets":["出镜的素材库编号，含场景"],"end_state":"这个分镜结束时画面里能直接看到的姿态、道具、位置","novel":"小说原文","match":匹配度}]}',
     '规则：不写“悲伤”“紧张”这类抽象情绪词；不要复述台词；看不清的地方写“看不清”，不要猜；assets 只能用素材库里的编号。',
+    'novel（小说原文）：用小说正文的笔法把这个分镜写成一段话，40–120 字，第三人称：在什么地方、谁、做了什么、神态如何；这个分镜有台词就用引号原样写进对白。只写这个分镜里看得见、听得见的，不补剧情、不写画面外的事。',
+    'match（匹配度）：0–100 的整数，这段小说原文和这个分镜的画面、台词对得上的程度。严格打分：人物、动作、场景、对白每有一处对不上或拿不准都要扣分，不要都给高分。',
   ].join('\n\n');
 }
 
@@ -196,6 +199,7 @@ function normalizeSegmentResult(raw, segment, library) {
     const assets = (Array.isArray(item.assets) ? item.assets : []).map(clean).filter(Boolean);
     const unknown = assets.find((id) => !known.has(id));
     if (unknown) fail(`镜${row.no} 用了素材库里没有的编号 ${unknown}`);
+    const novel = QUIET.test(clean(item.novel)) ? '' : clean(item.novel);
     return {
       no: row.no,
       camera,
@@ -205,8 +209,41 @@ function normalizeSegmentResult(raw, segment, library) {
       music: stripEnd(item.music),
       assets: [...new Set(assets)],
       end_state: stripEnd(item.end_state),
+      novel,
+      ...novelMatch(novel, item.match, row.dialogue),
     };
   });
+}
+
+/** 台词里的汉字有多少能在小说原文里按顺序找到（0–1）。 */
+function dialogueCoverage(novel, dialogue) {
+  const han = (text) => Array.from(String(text || '')).filter((ch) => /\p{Script=Han}/u.test(ch));
+  const want = han(dialogue.join(''));
+  if (!want.length) return 1;
+  const have = han(novel);
+  let found = 0;
+  let at = 0;
+  for (const ch of want) {
+    const index = have.indexOf(ch, at);
+    if (index >= 0) {
+      found += 1;
+      at = index + 1;
+    }
+  }
+  return found / want.length;
+}
+
+/**
+ * 匹配度：方舟自己打的分（0–100），程序再核对一项——这个分镜有台词，小说原文里却没写进去（台词的字不到七成），
+ * 最多只给 70 分，免得台词对不上还显示 90 多。没有小说原文就没有匹配度。
+ */
+function novelMatch(novel, raw, dialogue) {
+  if (!novel || QUIET.test(clean(novel))) return { match: null };
+  const score = Math.round(Number(raw));
+  let match = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null;
+  const covered = dialogueCoverage(novel, dialogue || []);
+  if (covered < 0.7) match = Math.min(match ?? 70, 70);
+  return { match, dialogue_covered: Math.round(covered * 100) };
 }
 
 // ===== 拼提示词 =====
@@ -289,6 +326,12 @@ function renderEpisodeFile({ label, duration, maxSeconds, library, segments, ref
     }
     out.push('提示词：');
     out.push(segment.prompt);
+    const novels = (segment.shots || []).filter((shot) => shot.novel);
+    if (novels.length) {
+      out.push('小说原文：');
+      for (const shot of novels)
+        out.push(`  镜${shot.no}${shot.match == null ? '' : `（匹配 ${shot.match}%）`}：${shot.novel}`);
+    }
   }
   return `${out.join('\n')}\n`;
 }
@@ -307,6 +350,8 @@ module.exports = {
   libraryEntries,
   composeSegmentPrompt,
   renderEpisodeFile,
+  novelMatch,
+  dialogueCoverage,
   clock,
   sec,
 };

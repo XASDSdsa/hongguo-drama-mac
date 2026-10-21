@@ -423,6 +423,39 @@ async function main() {
     assert.match(portrait, /\.vbox img\.poster,\.vbox video\{[^}]*object-fit:contain/);
     assert.match(portrait, /\.portrait \.kf\{grid-template-columns:repeat\(4,1fr\)\}/, '竖屏四张关键帧排一行');
   }
+  // 小说原文 + 匹配度（照用户的分镜工程图模板）：方舟看视频时每个分镜写一段小说正文和匹配度，程序再核对台词。
+  {
+    const c = require('../src/native/video-prompt/compose');
+    const lib = { style: '', characters: [{ id: 'C1', kind: 'character', name: '女主', desc: '长发' }], scenes: [{ id: 'S1', kind: 'scene', name: '客厅', desc: '夜' }], props: [] };
+    const segment = { index: 1, start: 0, end: 4, dur: 4, rows: [
+      { no: 1, start: 0, end: 2, dur: 2, dialogue: ['你终于来了'] },
+      { no: 2, start: 2, end: 4, dur: 2, dialogue: ['我等了你很久'] },
+    ] };
+    const ask = c.segmentInstruction({ segment, library: lib });
+    assert.match(ask, /"novel":"小说原文","match":匹配度/);
+    assert.match(ask, /用小说正文的笔法/);
+    assert.match(ask, /严格打分/);
+    const shots = c.normalizeSegmentResult({ shots: [
+      { no: 1, camera: '中景', action: '女主看向门口', assets: ['C1', 'S1'], novel: '女主抬眼望向门口，轻声说：“你终于来了。”', match: 93 },
+      { no: 2, camera: '近景', action: '女主低头', assets: ['C1'], novel: '她低下头，没有说话。', match: 96 },
+    ] }, segment, lib);
+    assert.equal(shots[0].novel, '女主抬眼望向门口，轻声说：“你终于来了。”');
+    assert.equal(shots[0].match, 93);
+    assert.equal(shots[1].match, 70, '这一镜有台词，小说原文里没写进去：最多 70');
+    assert.equal(shots[1].dialogue_covered, 0);
+    assert.equal(c.novelMatch('门开了。', 150, []).match, 100, '超出范围夹到 0–100');
+    assert.equal(c.novelMatch('看不清', 90, []).match, null);
+    assert.notEqual(c.TEMPLATE_VERSION, 'seedance-2.5-stage-v1', '旧缓存没有小说原文，要重新看');
+    const txt = c.renderEpisodeFile({ label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib, segments: [{ ...segment, prompt: 'p', shots }] });
+    assert.match(txt, /小说原文：\n  镜1（匹配 93%）：女主抬眼望向门口/);
+    const { renderEpisodeHtml } = require('../src/native/video-prompt/html');
+    const html = renderEpisodeHtml({ title: '新剧', label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib,
+      segments: [{ ...segment, prompt: 'p', shotLines: ['a', 'b'], shots }], frames: {}, thumbs: {}, videoRel: '', size: { width: 720, height: 1280 }, generatedAt: new Date(0), allText: '' });
+    assert.match(html, /<h3>小说原文<\/h3><span class="match hi">已匹配 93%<\/span>/);
+    assert.match(html, /<span class="match mid">已匹配 70%<\/span>/);
+    assert.match(html, /小说原文里缺了这一镜的台词/);
+    assert.match(html, /小说匹配 82%/, '段落标题显示平均匹配度');
+  }
   console.log('video prompt checks passed');
 }
 
