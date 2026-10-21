@@ -202,7 +202,7 @@ try {
   if (process.platform === 'win32') {
     assert.deepEqual(
       JSON.parse(fs.readFileSync(path.join(dir, 'draft_content.json'), 'utf8')),
-      info,
+      JSON.parse(fs.readFileSync(path.join(dir, 'draft_info.json'), 'utf8')),
       'Windows: draft_content.json is written',
     );
     const meta = fs.readFileSync(path.join(dir, 'draft_meta_info.json'), 'utf8');
