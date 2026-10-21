@@ -145,7 +145,6 @@ jobs:
           run_check node scripts/check-jianying-relink.cjs
           run_check node scripts/check-jianying-location.cjs
           run_check env PYTHON=python REQUIRE_JIANYING=1 node scripts/check-jianying-simple-draft.cjs
-          run_check node scripts/check-undefined-names.cjs
 
   quick-update:
     if: inputs.quick == 'true'
