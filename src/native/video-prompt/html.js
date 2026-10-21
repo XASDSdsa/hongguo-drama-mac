@@ -4,7 +4,7 @@
 // 页面里只放真实数据：没有数据来源的项（渲染状态、一致性分数、匹配率、重试/生成按钮等）不显示。
 // 纯函数，不碰文件和网络；关键帧和参考图由调用方抽好后以 data URI 传进来。
 
-const { libraryEntries } = require('./compose');
+const { libraryEntries, seedanceFormat } = require('./compose');
 
 const QUIET = /^(无|没有|无声|看不清|听不清|不详)$/;
 const KIND_TEXT = { character: '角色', scene: '场景', prop: '道具' };
@@ -372,8 +372,10 @@ function shotCard({
   const shotImages = (segment.images || []).filter((image) => (shot?.assets || []).includes(image.id)).length;
   const params = [
     ['目标模型', 'Seedance 2.5'],
-    ['原片画幅', size ? `${size.width}×${size.height}` : '—'],
+    // 生成设置：统一 720p，比例按原片（竖屏 9:16、横屏 16:9），不显示原片像素。
+    ['分辨率', seedanceFormat(size).resolution],
     ['时长', seconds(row.dur)],
+    ['比例', seedanceFormat(size).ratio],
     ['所属片段', `第 ${segment.index}/${segCount} 段`],
     ['段内时间', `${seconds(row.start - segment.start).replace('秒', '')}–${seconds(row.end - segment.start)}`],
     ['整集位置', `${clockPrecise(row.start)}–${clockPrecise(row.end)}`],
@@ -567,7 +569,7 @@ function renderEpisodeHtml({
   }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜${placeholders.length ? `（另有 ${placeholders.length} 镜占位）` : ''}</span>${
     stamp ? `<span class="stat">${esc(stamp)}</span>` : ''
   }</header>
-<div class="sub"><h1>${esc(headTitle)}</h1><span class="pill">目标模型 Seedance 2.5</span><span class="pill">每段 ≤ ${esc(maxSeconds)} 秒</span><span style="flex:1"></span><button type="button" class="btn primary" data-copy="all">复制全部提示词</button></div>
+<div class="sub"><h1>${esc(headTitle)}</h1><span class="pill">目标模型 Seedance 2.5</span><span class="pill">${seedanceFormat(size).resolution} · ${seedanceFormat(size).ratio}</span><span class="pill">每段 ≤ ${esc(maxSeconds)} 秒</span><span style="flex:1"></span><button type="button" class="btn primary" data-copy="all">复制全部提示词</button></div>
 <div class="filter"><input id="q" type="search" placeholder="⌕  筛选分镜、角色、场景…" autocomplete="off"><span class="chip g">已生成 ${okShots}</span><span class="chip a">未生成 ${badShots}</span><span class="sp"></span><button type="button" class="btn" id="styleBtn">风格参考</button></div>
 <div class="stylebar"><b>画风</b>${esc(library.style || '（没有识别出画风）')}</div>
 <main>

@@ -260,7 +260,11 @@ async function deriveEpisodePrompts({
 
     const maxLimit = Math.min(30, Math.max(2, Number(maxSeconds) || DEFAULT_MAX_SEGMENT_SECONDS));
     const allSegments = results.map((item) => item.segment);
-    let text = renderEpisodeFile({ label, duration, maxSeconds: maxLimit, library, segments: allSegments, refPaths });
+    // 原片画幅（决定生成用的比例 9:16 / 16:9）：先读出来，txt 和页面都要用。
+    let size = null;
+    const probe = await grabFrame(ffmpeg, inputPath, rows[0].start, 100000, 31, temp, 'size.jpg', signal);
+    if (probe) size = jpegSize(probe.bytes);
+    let text = renderEpisodeFile({ label, duration, maxSeconds: maxLimit, library, segments: allSegments, refPaths, size });
     if (placeholders.length)
       text += `\n（只分析了前 ${rows.length} 个分镜；镜 ${placeholders[0].no}–${placeholders.at(-1).no} 共 ${placeholders.length} 个分镜占位，没有处理）\n`;
     const file = path.join(outDir, `${label}.txt`);
@@ -278,7 +282,6 @@ async function deriveEpisodePrompts({
         jobs.push({ row, kind: 'poster', time: times[0] });
         times.forEach((time, i) => jobs.push({ row, kind: 'grid', index: i, time }));
       }
-      let size = null;
       await pool(jobs, 4, async (job) => {
         const wide = job.kind === 'poster';
         const frame = await grabFrame(ffmpeg, inputPath, job.time, wide ? 560 : 320, wide ? 4 : 7, temp, `kf-${job.row.no}-${job.kind}${job.index ?? ''}.jpg`, signal);
@@ -293,9 +296,6 @@ async function deriveEpisodePrompts({
         const frame = await grabFrame(ffmpeg, inputPath, character.ref_time, 160, 5, temp, `ref-${character.id}.jpg`, signal);
         if (frame) thumbs[character.id] = frame.uri;
       });
-      // 画幅：优先读原片尺寸（海报缩小过，宽高比一致但像素不对）。
-      const probe = await grabFrame(ffmpeg, inputPath, rows[0].start, 100000, 31, temp, 'size.jpg', signal);
-      if (probe) size = jpegSize(probe.bytes) || size;
       // 成品文件名是「新剧名_第001集」：页头显示新剧名和「第1集」，不重复文件名
       const named = /^(.+)_第0*(\d+)集(?:_\d+)?$/.exec(label);
       const html = renderEpisodeHtml({

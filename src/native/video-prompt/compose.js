@@ -301,13 +301,25 @@ function composeSegmentPrompt({ segment, shots, library, refImages = {}, previou
   return { text: lines.join('\n'), images, endState, shotLines };
 }
 
+// ===== Seedance 生成设置 =====
+
+/** 生成用的分辨率和比例：统一 720p；比例看原片，竖屏 9:16、横屏 16:9（读不到画幅按竖屏）。 */
+function seedanceFormat(size) {
+  const width = Number(size?.width);
+  const height = Number(size?.height);
+  const landscape = width > 0 && height > 0 && width > height;
+  return { resolution: '720p', ratio: landscape ? '16:9' : '9:16' };
+}
+
 // ===== 输出文件（每一集同一个格式） =====
 
-function renderEpisodeFile({ label, duration, maxSeconds, library, segments, refPaths = {} }) {
+function renderEpisodeFile({ label, duration, maxSeconds, library, segments, refPaths = {}, size = null }) {
+  const format = seedanceFormat(size);
   const out = [];
   out.push(`《${label}》视频提示词`);
   out.push(`目标模型：Seedance 2.5　整集 ${Math.round(duration)} 秒　共 ${segments.length} 段（每段不超过 ${maxSeconds} 秒）`);
-  out.push('用法：每段提示词对应 Seedance 的一次生成；时长和画幅比例在生成页面里设置，不写进提示词。');
+  out.push(`生成设置：分辨率 ${format.resolution}，比例 ${format.ratio}（按原片${format.ratio === '16:9' ? '横屏' : '竖屏'}）`);
+  out.push('用法：每段提示词对应 Seedance 的一次生成；时长、分辨率和比例在生成页面里设置，不写进提示词。');
   out.push('');
   out.push('==== 素材库 ====');
   for (const item of libraryEntries(library)) {
@@ -352,6 +364,7 @@ module.exports = {
   renderEpisodeFile,
   novelMatch,
   dialogueCoverage,
+  seedanceFormat,
   clock,
   sec,
 };
