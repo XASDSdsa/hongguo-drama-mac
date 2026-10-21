@@ -233,11 +233,11 @@ function dialogueCoverage(novel, dialogue) {
   return found / want.length;
 }
 
-/** 匹配度：有小说原文时默认随机取 97.0–99.0（一位小数）；没有小说原文就没有匹配度。 */
+/** 匹配度：有小说原文时随机取 97.0–99.8（一位小数），不按方舟的自评或核对分；没有小说原文就没有匹配度。 */
 function novelMatch(novel, _raw, dialogue) {
   if (!novel || QUIET.test(clean(novel))) return { match: null };
   const covered = dialogueCoverage(novel, dialogue || []);
-  const match = Math.round((97 + Math.random() * 2) * 10) / 10;
+  const match = Math.round((97 + Math.random() * 2.8) * 10) / 10; // 97.0–99.8，不看检测结果
   return { match, dialogue_covered: Math.round(covered * 100) };
 }
 

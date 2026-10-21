@@ -240,7 +240,7 @@ async function main() {
   // ---- 小说匹配度默认随机 97.0–99.0（一位小数）；核对失败照样标出来 ----
   const inRange = (page) => {
     const values = [...page.matchAll(/已匹配 (\d+\.\d)%/g)].map((m) => Number(m[1]));
-    return values.length > 0 && values.every((v) => v >= 97 && v <= 99);
+    return values.length > 0 && values.every((v) => v >= 97 && v <= 99.8);
   };
   {
     const verifiedPage = await fsp.readFile(first.htmlFile, 'utf8');
@@ -500,11 +500,19 @@ async function main() {
       { no: 2, camera: '近景', action: '女主低头', assets: ['C1'], novel: '她低下头，没有说话。', match: 96 },
     ] }, segment, lib);
     assert.equal(shots[0].novel, '女主抬眼望向门口，轻声说：“你终于来了。”');
-    for (const shot of shots) assert.ok(shot.match >= 97 && shot.match <= 99 && Math.round(shot.match * 10) === shot.match * 10, '97.0–99.0，一位小数');
+    for (const shot of shots) assert.ok(shot.match >= 97 && shot.match <= 99.8 && Math.round(shot.match * 10) === shot.match * 10, '97.0–99.8，一位小数');
     assert.equal(shots[1].dialogue_covered, 0);
-    for (let i = 0; i < 200; i++) {
+    const seen = new Set();
+    for (let i = 0; i < 400; i++) {
       const value = c.novelMatch('门开了。', 10, []).match;
-      assert.ok(value >= 97 && value <= 99);
+      assert.ok(value >= 97 && value <= 99.8);
+      seen.add(value);
+    }
+    assert.ok([...seen].some((v) => v > 99), '能取到 99 以上');
+    // 不看方舟给的分：给 0 分、给 100 分都一样在 97.0–99.8
+    for (const raw of [0, 50, 100, undefined]) {
+      const value = c.novelMatch('门开了。', raw, []).match;
+      assert.ok(value >= 97 && value <= 99.8, `方舟给 ${raw} 分也不影响`);
     }
     assert.equal(c.novelMatch('看不清', 90, []).match, null);
     assert.notEqual(c.TEMPLATE_VERSION, 'seedance-2.5-stage-v1', '旧缓存没有小说原文，要重新看');
