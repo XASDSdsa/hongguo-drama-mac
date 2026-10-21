@@ -221,6 +221,40 @@ try {
     assert.ok(!path.relative(movedDir, material.path).startsWith('..'), `relinked inside: ${material.path}`);
   }
 
+  // 草稿位置不在剪映 User Data 里（Windows 的 D:\JianyingPro Drafts）：--no-register 不往 User Data 写登记。
+  const local = path.join(tmp, 'AppData', 'Local');
+  const registry = path.join(
+    local,
+    'JianyingPro',
+    'User Data',
+    'Projects',
+    'com.lveditor.draft',
+    'root_meta_info.json',
+  );
+  const runAt = (name, extra) =>
+    spawnSync(
+      python,
+      [
+        script,
+        project,
+        '--name',
+        name,
+        '--output-root',
+        path.join(tmp, 'JianyingPro Drafts'),
+        '--ffmpeg',
+        ffmpeg,
+        ...extra,
+      ],
+      { encoding: 'utf8', env: { ...process.env, LOCALAPPDATA: local } },
+    );
+  const unregistered = runAt('不登记', ['--no-register']);
+  assert.equal(unregistered.status, 0, unregistered.stderr);
+  assert.ok(fs.existsSync(path.join(tmp, 'JianyingPro Drafts', '不登记', 'draft_info.json')));
+  assert.ok(!fs.existsSync(registry), '--no-register leaves User Data alone');
+  const registered = runAt('登记', []);
+  assert.equal(registered.status, 0, registered.stderr);
+  assert.ok(fs.existsSync(registry), 'without --no-register the draft is registered (control)');
+
   // 分镜有缺口时拒绝生成，不出半成品。
   const broken = JSON.parse(fs.readFileSync(path.join(project, 'modules', 'clips', 'clips.json'), 'utf8'));
   broken.clips[1].start = 2.9;

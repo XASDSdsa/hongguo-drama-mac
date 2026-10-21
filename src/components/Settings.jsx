@@ -560,7 +560,7 @@ function SettingsPage({ active = true }) {
                   aria-label="剪映草稿位置"
                   value={settings.jianying_user_data_path || ''}
                   onChange={(e) => update('jianying_user_data_path', e.target.value)}
-                  placeholder="留空使用剪映默认的草稿位置"
+                  placeholder="留空自动找剪映的草稿位置"
                 />
                 <button
                   className="btn btn-outline"
@@ -572,8 +572,8 @@ function SettingsPage({ active = true }) {
                 </button>
               </div>
               <em>
-                在剪映「全局设置 → 草稿位置」里改过位置的，填那个文件夹，草稿直接生成在那里。草稿挪过位置也没关系：
-                打开软件或进「管理剧集」时会自动把素材路径改到新位置。
+                留空会自动找剪映的草稿位置（Windows 一般是 D:\JianyingPro Drafts，草稿直接放在它下面）。找错了就填剪映
+                「全局设置 → 草稿位置」里显示的文件夹。草稿挪过位置也没关系：打开软件或进「管理剧集」时会自动把素材路径改到新位置。
               </em>
             </label>
           </div>

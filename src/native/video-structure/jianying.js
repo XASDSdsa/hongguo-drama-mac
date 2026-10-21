@@ -5,10 +5,21 @@ const { run, atomicJson, sha256 } = require('./io');
 const { envelope, requireThat } = require('./contracts');
 
 async function createJianyingDraft(ctx, options) {
-  const { executable, createScript, checkScript, outputRoot, name, userData, validate = true } = options;
+  const {
+    executable,
+    createScript,
+    checkScript,
+    outputRoot,
+    name,
+    userData,
+    register = true,
+    validate = true,
+  } = options;
   requireThat(executable && createScript && checkScript, '缺少内置剪映运行时或草稿脚本，请安装完整版本');
   const args = [createScript, ctx.projectDir, '--name', name, '--output-root', outputRoot, '--ffmpeg', ctx.ffmpeg];
   if (userData) args.push('--jianying-user-data', userData);
+  // 草稿位置不在剪映 User Data 里（Windows 的 D:\\JianyingPro Drafts）：不往 User Data 登记，剪映打开时自己扫到。
+  if (!register) args.push('--no-register');
   const output = [];
   ctx.onProgress?.({ progress: 0, message: '启动内置剪映运行时' });
   await run(executable, args, {

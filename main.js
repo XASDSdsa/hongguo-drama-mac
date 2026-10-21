@@ -53,6 +53,7 @@ const { createJianyingDraft } = require('./src/native/video-structure/jianying')
 const arkVideo = require('./src/native/video-prompt/ark');
 const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
+const jianyingLocator = require('./src/native/jianying-location');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
@@ -1231,7 +1232,7 @@ function getReconstructionPipeline() {
         // 管理剧集里发起的草稿会登记模式（多分轨 / 三分轨）和没装剪映时的存放位置。
         const plan = libraryDraftPlans.get(ctx.taskId) || {};
         const simple = plan.mode === 'simple';
-        const userData = resolveJianyingUserData();
+        const location = jianyingLocation();
         const stamp = new Date()
           .toISOString()
           .replace(/[-:.TZ]/g, '')
@@ -1241,9 +1242,11 @@ function getReconstructionPipeline() {
           executable: resolveJianyingRuntime()?.executable,
           createScript: resolveJianyingScript(simple ? 'create-jianying-simple-draft.py' : 'create-jianying-draft.py'),
           checkScript: resolveJianyingScript('check-jianying-draft.py'),
-          outputRoot: resolveJianyingDraftRoot() || plan.fallbackRoot || path.join(ctx.projectDir, '剪映草稿'),
+          outputRoot: location.draftRoot || plan.fallbackRoot || path.join(ctx.projectDir, '剪映草稿'),
           name,
-          userData,
+          // 只有草稿位置就是 User Data 里那个时才登记；Windows 的 D:\JianyingPro Drafts 不登记，剪映自己会扫到。
+          userData: location.userData,
+          register: !!location.userData,
           // 三分轨草稿结构简单，由脚本自己核对；多分轨照旧走完整校验。
           validate: simple ? false : workflowGates().validateDraft,
         });
@@ -1487,36 +1490,19 @@ function resolveJianyingScript(name) {
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
-/** 设置里「剪映草稿位置」填的文件夹；没填返回 ''。 */
-function configuredJianyingDir() {
-  return String(getCurrentSettings().jianying_user_data_path || '').trim();
-}
-
-/** 剪映的 User Data 文件夹（草稿登记到剪映用）。设置里填的是 User Data 就用它，否则找剪映默认位置。 */
-function resolveJianyingUserData() {
-  const configured = configuredJianyingDir();
-  const candidates = [];
-  if (configured && fs.existsSync(path.join(configured, 'Projects', 'com.lveditor.draft'))) candidates.push(configured);
-  if (process.platform === 'darwin')
-    candidates.push(path.join(app.getPath('home'), 'Movies', 'JianyingPro', 'User Data'));
-  if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'JianyingPro', 'User Data'));
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
-}
-
 /**
- * 草稿放在哪：剪映打开时读这个文件夹。
- * 设置里可以填剪映「全局设置 → 草稿位置」显示的文件夹（很多人改到了 D 盘），也可以填 User Data；
- * 没填就用剪映默认的草稿位置。都没有（没装剪映）返回 null。
+ * 剪映草稿放哪（见 jianying-location）：设置里填了就用设置的；没填就自动找剪映真正的草稿位置
+ * （Windows 新版剪映常见 D:\JianyingPro Drafts，草稿直接放在下面；Mac 和老版本是 User Data\Projects\com.lveditor.draft）。
+ * 找一次要看各个盘，结果留 5 分钟。
  */
-function resolveJianyingDraftRoot() {
-  const configured = configuredJianyingDir();
-  if (configured) {
-    const inUserData = path.join(configured, 'Projects', 'com.lveditor.draft');
-    if (fs.existsSync(inUserData)) return inUserData;
-    if (fs.existsSync(configured)) return configured;
-  }
-  const userData = resolveJianyingUserData();
-  return userData ? path.join(userData, 'Projects', 'com.lveditor.draft') : null;
+let jianyingLocationCache = null;
+function jianyingLocation() {
+  const configured = String(getCurrentSettings().jianying_user_data_path || '').trim();
+  if (jianyingLocationCache && jianyingLocationCache.configured === configured && Date.now() - jianyingLocationCache.at < 300_000)
+    return jianyingLocationCache.value;
+  const value = jianyingLocator.resolveJianyingLocation({ configured, home: app.getPath('home') });
+  jianyingLocationCache = { configured, at: Date.now(), value };
+  return value;
 }
 
 function workflowError(message, code = 'WORKFLOW_FAILED') {
@@ -4531,10 +4517,11 @@ function relinkMovedDrafts(seriesDirs = null) {
   if (draftRelinkRunning) return draftRelinkRunning;
   draftRelinkRunning = (async () => {
     const roots = new Map(); // 草稿所在的文件夹 -> 属于哪部剧（写日志用）
-    const draftRoot = resolveJianyingDraftRoot();
-    if (draftRoot) roots.set(draftRoot, null);
-    const userData = resolveJianyingUserData();
-    if (userData) roots.set(path.join(userData, 'Projects', 'com.lveditor.draft'), null);
+    jianyingLocationCache = null; // 剪映的草稿位置可能刚改过
+    const location = jianyingLocation();
+    if (location.draftRoot) roots.set(location.draftRoot, null);
+    // 剪映所有可能的草稿位置都看一遍（以前的版本可能把草稿放在了别的位置，用户又挪进了现在的位置）。
+    for (const root of jianyingLocator.findJianyingDraftRoots({ home: app.getPath('home') })) roots.set(root, null);
     let dirs = seriesDirs;
     if (!dirs) {
       try {

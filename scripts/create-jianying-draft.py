@@ -216,6 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default="episode-103-v1", help="剪映草稿名称")
     parser.add_argument("--output-root", type=Path, help="剪映草稿根目录，默认项目目录/jianying/draft")
     parser.add_argument("--jianying-user-data", type=Path, help="剪映 User Data 目录；写入真实草稿根目录时用于注册 root_meta_info")
+    parser.add_argument("--no-register", action="store_true", help="不登记到剪映 User Data（草稿位置不在 User Data 里时，剪映打开会自己扫到）")
     parser.add_argument("--ffmpeg", type=Path, help="用于拆分音频的 FFmpeg；默认从 FFMPEG 环境变量或 PATH 查找")
     parser.add_argument("--watermark", default=DEFAULT_WATERMARK, help=f"公司水印文字，默认：{DEFAULT_WATERMARK}；传空字符串可关闭")
     parser.add_argument("--disclaimer", default=DEFAULT_DISCLAIMER, help=f"文案文字，默认：{DEFAULT_DISCLAIMER}；传空字符串可关闭")
@@ -559,6 +560,9 @@ def main() -> int:
     output_root = Path(os.path.abspath(args.output_root or project_dir / "jianying" / "draft"))
     output_root.mkdir(parents=True, exist_ok=True)
     draft_dir = output_root / args.name
+    if args.no_register:
+        # pyJianYingDraft 没给 User Data 时会按 LOCALAPPDATA 找默认位置登记，这里连它也不让找。
+        os.environ.pop("LOCALAPPDATA", None)
     draft_folder = draft.DraftFolder(
         str(output_root),
         user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data else None,
