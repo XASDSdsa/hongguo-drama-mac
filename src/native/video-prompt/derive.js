@@ -25,6 +25,7 @@ const {
 } = require('./compose');
 const { renderEpisodeHtml, keyframeTimes, jpegSize } = require('./html');
 const { describePhases } = require('./ark');
+const { detectEpisodeBand, grabCleanFrame } = require('./subtitle-clean');
 
 const ATTEMPTS = 3;
 
@@ -138,6 +139,8 @@ async function deriveEpisodePrompts({
   // 每集只分析前几个分镜（0 = 全部）：后面的分镜只在页面上占位，不问方舟、不截关键帧，省额度。
   shotLimit = 0,
   fps = 2,
+  // 四宫格关键帧先抹掉烧在画面里的字幕（视频本身不动）
+  cleanSubtitles = true,
   log = () => {},
   onProgress = () => {},
   signal,
@@ -309,15 +312,41 @@ async function deriveEpisodePrompts({
         jobs.push({ row, kind: 'poster', time: times[0] });
         times.forEach((time, i) => jobs.push({ row, kind: 'grid', index: i, time }));
       }
+      // 四宫格关键帧去字幕：先在整集里找字幕横带，找到了每张关键帧只在横带里抹字；找不到就是没有字幕，照常截图。
+      let subtitle = { band: null, dims: null };
+      let cleaned = 0;
+      if (cleanSubtitles && size) {
+        try {
+          subtitle = await detectEpisodeBand({ ffmpeg, inputPath, rows, utterances: transcript?.utterances, size, signal });
+          if (subtitle.band) {
+            const { y0, y1, frameHeight } = subtitle.band;
+            log('info', `关键帧去字幕：字幕在画面 ${Math.round((y0 / frameHeight) * 100)}%–${Math.round((y1 / frameHeight) * 100)}% 高度，四宫格关键帧先把字幕抹掉`);
+          } else log('info', '关键帧去字幕：没找到烧在画面里的字幕，关键帧照常截');
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          log('warn', `关键帧去字幕没做成（${error.message}），关键帧照常截`);
+        }
+      }
       await pool(jobs, 4, async (job) => {
         const wide = job.kind === 'poster';
-        const frame = await grabFrame(ffmpeg, inputPath, job.time, wide ? 560 : 320, wide ? 4 : 7, temp, `kf-${job.row.no}-${job.kind}${job.index ?? ''}.jpg`, signal);
+        let frame = null;
+        if (!wide && subtitle.band) {
+          try {
+            const clean = await grabCleanFrame({ ffmpeg, inputPath, time: job.time, band: subtitle.band, dims: subtitle.dims, outWidth: 320, quality: 7, signal });
+            frame = { uri: `data:image/jpeg;base64,${clean.bytes.toString('base64')}`, bytes: clean.bytes };
+            if (clean.cleaned) cleaned += 1;
+          } catch (error) {
+            if (signal?.aborted) throw error;
+          }
+        }
+        if (!frame) frame = await grabFrame(ffmpeg, inputPath, job.time, wide ? 560 : 320, wide ? 4 : 7, temp, `kf-${job.row.no}-${job.kind}${job.index ?? ''}.jpg`, signal);
         if (!frame) return;
         if (wide) {
           frames[job.row.no].poster = frame.uri;
           if (!size) size = jpegSize(frame.bytes);
         } else frames[job.row.no].grid[job.index] = frame.uri;
       });
+      if (subtitle.band) log('info', `关键帧去字幕：抹掉了 ${cleaned} 张关键帧上的字幕`);
       const thumbs = {};
       await pool(library.characters.filter((c) => c.ref_time != null), 4, async (character) => {
         const frame = await grabFrame(ffmpeg, inputPath, character.ref_time, 160, 5, temp, `ref-${character.id}.jpg`, signal);
