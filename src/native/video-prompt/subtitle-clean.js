@@ -463,7 +463,7 @@ const SEND_SIZE = 1024;
  *   cleaned 去过字幕；clean 最后这张图里没检测到字幕；
  *   reason 没去成的原因：'none' 这一刻没字幕 / 'noEraser' 没配作图模型 / 'mismatch' 对不齐 / 'residue' 去完还有字 / 'failed' 调用失败。
  */
-async function aiCleanFrame({ ffmpeg, inputPath, time, band, dims, outWidth, quality, erase, signal }) {
+async function aiCleanFrame({ ffmpeg, inputPath, time, band, dims, outWidth, quality, erase, signal, retryWithinMs = 60000 }) {
   const original = await grabRaw(ffmpeg, inputPath, time, dims, signal);
   const cover = subtitleCover(original, band);
   let image = original;
@@ -485,7 +485,9 @@ async function aiCleanFrame({ ffmpeg, inputPath, time, band, dims, outWidth, qua
         encodePng(ffmpeg, crop, region.side, region.side, 'rgb24', SEND_SIZE, signal),
         encodePng(ffmpeg, maskRgba, region.side, region.side, 'rgba', SEND_SIZE, signal),
       ]);
+      const started = Date.now();
       for (let attempt = 1; attempt <= 2 && !cleaned; attempt++) {
+        if (attempt > 1 && Date.now() - started > retryWithinMs) break; // 第一次就很慢，不再重试
         const result = await erase({ image: png, mask, prompt: ERASE_PROMPT, signal, region, time, attempt });
         const ai = await decodeRaw(ffmpeg, result, region.side, region.side, signal);
         const candidate = { ...original, data: Buffer.from(original.data) };

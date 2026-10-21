@@ -4844,7 +4844,8 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
         ? async ({ image, mask, prompt, signal: eraseSignal }) =>
             (
               await openai.editImage(
-                { image, mask, prompt, size: '1024x1024', quality: settings.ai_image_quality, signal: eraseSignal },
+                // 一张最多等 90 秒，画质中等（只取字幕那一点，够用，回得快）
+                { image, mask, prompt, size: '1024x1024', quality: 'medium', timeout: 90000, signal: eraseSignal },
                 settings,
               )
             ).buffer

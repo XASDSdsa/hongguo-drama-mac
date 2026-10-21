@@ -347,7 +347,7 @@ async function editImage(options = {}, baseConfig = {}) {
     kind: 'image',
     body: form,
     signal: options.signal,
-    timeout: IMAGE_TIMEOUT,
+    timeout: options.timeout || IMAGE_TIMEOUT,
     maxBytes: MAX_IMAGE * 1.4,
   });
   return fetchImageResult(parseImageData(payload), options.signal);

@@ -23,7 +23,7 @@ const {
   composeSegmentPrompt,
   renderEpisodeFile,
 } = require('./compose');
-const { renderEpisodeHtml, keyframeTimes, jpegSize } = require('./html');
+const { renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS } = require('./html');
 const { describePhases } = require('./ark');
 const { detectEpisodeBand, aiCleanFrame } = require('./subtitle-clean');
 
@@ -332,18 +332,49 @@ async function deriveEpisodePrompts({
           for (const row of rows) frames[row.no].subtitleFree = false;
         }
       }
+      // 去字幕要等作图模型：每张处理完写一行；一直没回来就每 30 秒报一次还在等，别让人以为卡住了
+      const gridTotal = jobs.filter((job) => job.kind === 'grid').length;
+      let gridDone = 0;
+      let erasing = 0;
+      const waitStart = Date.now();
+      const heartbeat =
+        subtitle.band && eraseSubtitles
+          ? setInterval(() => {
+              if (erasing > 0)
+                log('info', `关键帧去字幕：还在等作图模型回图（已处理 ${gridDone}/${gridTotal} 张，已等 ${Math.round((Date.now() - waitStart) / 1000)} 秒）`);
+            }, 30000)
+          : null;
+      heartbeat?.unref?.();
+      const REASON = {
+        mismatch: '作图结果和原图对不齐，保留原图',
+        residue: '去了两次还有字，保留原图',
+        failed: '作图没成功（超时或接口出错），保留原图',
+        noEraser: '没配作图模型，保留原图',
+      };
+      try {
       await pool(jobs, 4, async (job) => {
         const wide = job.kind === 'poster';
         let frame = null;
         if (!wide && subtitle.band) {
+          const started = Date.now();
+          erasing += 1;
           try {
             const clean = await aiCleanFrame({ ffmpeg, inputPath, time: job.time, band: subtitle.band, dims: subtitle.dims, outWidth: 320, quality: 7, erase: eraseSubtitles, signal });
             frame = { uri: `data:image/jpeg;base64,${clean.bytes.toString('base64')}`, bytes: clean.bytes };
             if (clean.cleaned) tally.cleaned += 1;
             else if (clean.reason in tally) tally[clean.reason] += 1;
             if (!clean.clean) frames[job.row.no].subtitleFree = false;
+            gridDone += 1;
+            const where = `镜${job.row.no} ${FRAME_LABELS[job.index] || ''}`.trim();
+            const seconds = Math.round((Date.now() - started) / 1000);
+            if (clean.cleaned) log('info', `关键帧去字幕 ${gridDone}/${gridTotal}：${where} 去掉了（用时 ${seconds} 秒）`);
+            else if (clean.reason && clean.reason !== 'none')
+              log('warn', `关键帧去字幕 ${gridDone}/${gridTotal}：${where} ${REASON[clean.reason] || '没去成'}（用时 ${seconds} 秒）`);
+            onProgress(99, `关键帧去字幕 ${gridDone}/${gridTotal}`);
           } catch (error) {
             if (signal?.aborted) throw error;
+          } finally {
+            erasing -= 1;
           }
           // 去字幕这一步出错退回普通截图：这一刻有没有字幕不知道，不算干净
           if (!frame) frames[job.row.no].subtitleFree = false;
@@ -355,6 +386,9 @@ async function deriveEpisodePrompts({
           if (!size) size = jpegSize(frame.bytes);
         } else frames[job.row.no].grid[job.index] = frame.uri;
       });
+      } finally {
+        if (heartbeat) clearInterval(heartbeat);
+      }
       if (subtitle.band) {
         const kept = [
           tally.noEraser && `${tally.noEraser} 张有字幕（没配作图模型）`,
