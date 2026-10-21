@@ -19,6 +19,10 @@ on:
         description: "Only build the bundled Windows FFmpeg (NVENC 11.1, NVIDIA driver 471.41+) and keep it as an artifact."
         required: false
         default: ''
+      quick:
+        description: "true = 只出快速更新包（软件代码，几 MB，装在已有完整版上用），不打完整安装包。"
+        required: false
+        default: ''
 
 permissions:
   actions: read
@@ -26,7 +30,7 @@ permissions:
 
 jobs:
   build-ffmpeg:
-    if: inputs.ffmpeg_only == 'true'
+    if: inputs.ffmpeg_only == 'true' && inputs.quick != 'true'
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -95,8 +99,74 @@ jobs:
             C:/ffmpeg-compat-build/build-ffmpeg/ffbuild/config.log
           if-no-files-found: ignore
 
+  # 快速更新包：只有软件代码（resources/app.asar + 剪映草稿脚本），几分钟出包，用户解压后双击 update.cmd 替换。
+  # 运行库（FFmpeg、剪映运行时、模型）没变时用它；运行库变了要出完整安装包。
+  quick-update:
+    if: inputs.quick == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Refuse to publish a version number that was already released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [ "${{ inputs.tag }}" != "v${version}" ] || [ "${{ inputs.tag }}" = "v1.1.30" ]; then
+            echo "::error title=发布页和版本号不一致::package.json 是 ${version}，发布页填的是 ${{ inputs.tag }}，应为 v${version}。"
+            exit 1
+          fi
+          if gh release view "v${version}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null | grep -Eqx "ai-drama-assistant-${version}-(Setup\.exe|update\.zip)"; then
+            echo "::error title=版本号已发布过::v${version} 已经发过安装包或快速更新包。请先把版本号改成新的。"
+            exit 1
+          fi
+
+      - name: Install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Quick checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_check() { if ! "$@" > "$RUNNER_TEMP/c.log" 2>&1; then echo "::error title=检查没过：$*::$(tail -n 20 "$RUNNER_TEMP/c.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; exit 1; fi; }
+          run_check node scripts/check-undefined-names.cjs
+          run_check node scripts/check-jianying-relink.cjs
+          run_check node scripts/check-jianying-location.cjs
+          run_check node scripts/check-native-performance.cjs
+          # 更新脚本是 PowerShell：先确认语法没问题（Ubuntu 打包机自带 pwsh）。
+          run_check pwsh -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("scripts/quick-update/update.ps1",[ref]$null,[ref]$e); if ($e) { $e | ForEach-Object { $_.ToString() }; exit 1 }'
+
+      - name: Build the quick update package
+        run: |
+          set -euo pipefail
+          npm run build:react
+          node scripts/make-quick-update.cjs dist/quick
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          zip="dist/quick/ai-drama-assistant-${version}-update.zip"
+          (cd dist/quick && sha256sum "ai-drama-assistant-${version}-update.zip" > "ai-drama-assistant-${version}-update.sha256")
+          bash scripts/create-release-page.sh "${{ inputs.tag }}" "AI短剧助手 ${version}（快速更新）" "AI短剧助手 ${version} 快速更新包（软件代码 ${GITHUB_SHA}）：解压后先关掉软件，双击 update.cmd。需要先装过 1.2.6 或更新的完整版。"
+          gh release upload "${{ inputs.tag }}" "$zip" "dist/quick/ai-drama-assistant-${version}-update.sha256" --repo "${{ github.repository }}" --clobber
+          echo "::notice title=快速更新包::$(ls -l "$zip" | awk '{print $5}') 字节"
+
   publish-existing:
-    if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true'
+    if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -147,7 +217,7 @@ jobs:
           exit $failed
 
   build-windows:
-    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true'
+    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
