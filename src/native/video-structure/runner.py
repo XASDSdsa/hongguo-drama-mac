@@ -8,7 +8,7 @@ import sys
 import wave
 
 # Windows consoles default to cp1252; progress lines carry Chinese text and the parent reads UTF-8.
-for _stream in (sys.stdout, sys.stderr):
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
     if hasattr(_stream, 'reconfigure'):
         _stream.reconfigure(encoding='utf-8')
 
@@ -213,9 +213,55 @@ def transcribe(args):
                 timing_method='vad_segment', duration=total / 16000)
 
 
+def inpaint_server(args):
+    """LaMa (big-lama TorchScript) inpainting for keyframe subtitles. Resident: the model loads once,
+    then one JSON job per stdin line -> one JSON reply per stdout line. A job names a raw RGB crop
+    (width*height*3 bytes), a mask (width*height bytes, non-zero = repaint) and where to write the
+    model's RGB output (same size, not composited: the caller pastes back only the masked box)."""
+    import time
+    import numpy as np
+    import torch
+    torch.set_num_threads(max(1, args.threads))
+    # Weights are stored as float16 to keep the installer small; compute in float32.
+    model = torch.jit.load(args.model, map_location='cpu').eval().float()
+    with torch.no_grad():
+        model(torch.zeros(1, 3, 64, 64), torch.zeros(1, 1, 64, 64))
+    print(json.dumps(dict(type='ready', torch=torch.__version__, threads=torch.get_num_threads())), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        job = {}
+        try:
+            job = json.loads(line)
+            width, height = int(job['width']), int(job['height'])
+            if width < 8 or height < 8 or width > 4096 or height > 4096:
+                raise ValueError('bad crop size')
+            image = np.frombuffer(Path(job['input']).read_bytes(), np.uint8)
+            mask = np.frombuffer(Path(job['mask']).read_bytes(), np.uint8)
+            if image.size != width * height * 3 or mask.size != width * height:
+                raise ValueError('crop or mask size mismatch')
+            image = image.reshape(height, width, 3)
+            mask = (mask.reshape(height, width) > 0).astype(np.float32)
+            pad_h, pad_w = (8 - height % 8) % 8, (8 - width % 8) % 8
+            padded = np.pad(image, ((0, pad_h), (0, pad_w), (0, 0)), mode='symmetric')
+            padded_mask = np.pad(mask, ((0, pad_h), (0, pad_w)), mode='symmetric')
+            started = time.time()
+            with torch.no_grad():
+                output = model(torch.from_numpy(padded.copy()).permute(2, 0, 1)[None].float() / 255,
+                               torch.from_numpy(padded_mask.copy())[None, None])
+            result = (output[0].permute(1, 2, 0).numpy() * 255).round().clip(0, 255).astype(np.uint8)[:height, :width]
+            temporary = job['output'] + '.tmp'
+            Path(temporary).write_bytes(np.ascontiguousarray(result).tobytes())
+            os.replace(temporary, job['output'])
+            print(json.dumps(dict(type='done', id=job.get('id'), seconds=round(time.time() - started, 3))), flush=True)
+        except Exception as error:  # one bad job must not stop the server
+            print(json.dumps(dict(type='error', id=job.get('id'), message=f'{type(error).__name__}: {error}'), ensure_ascii=False), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('module', choices=['shots', 'verify-shots', 'transcript', 'status'])
+    parser.add_argument('module', choices=['shots', 'verify-shots', 'transcript', 'status', 'inpaint'])
     parser.add_argument('--input')
     parser.add_argument('--output')
     parser.add_argument('--model')
@@ -230,6 +276,9 @@ def main():
     parser.add_argument('--min-silence', type=float, default=0.5)
     parser.add_argument('--min-speech', type=float, default=0.25)
     args = parser.parse_args()
+    if args.module == 'inpaint':
+        inpaint_server(args)
+        return
     if args.module == 'status':
         import torch
         import sherpa_onnx

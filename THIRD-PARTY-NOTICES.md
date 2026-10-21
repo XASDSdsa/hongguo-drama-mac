@@ -111,6 +111,7 @@ cuBLAS、cuDNN 9 及 CUDA runtime 的可再分发动态库和 Microsoft Visual C
 - Paraformer 和 Silero VAD 采用 sherpa-onnx 官方 asr-models 发布文件，构建脚本固定 SHA256。模型来源和版本随 runtime.json 保存；模型使用条件独立于推理程序许可证。
 - 中文标点恢复采用 sherpa-onnx 官方发布的 CT-Transformer 2024-04-12 int8 转换模型；上游 [ModelScope iic 模型卡](https://modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch/) 标注 Apache-2.0。安装包仅在本机运行该模型，构建脚本校验模型 SHA256；标点只是句界候选，不能保证语义准确。
 - PyTorch 2.5.1、NumPy 1.26.4 许可证随内置运行时收集；用户端不会执行 pip 或在线安装模型。
+- 分镜工程图关键帧去字幕采用 LaMa（big-lama，Roman Suvorov 等，[advimman/lama](https://github.com/advimman/lama)，Apache-2.0）。模型文件取自 IOPaint 项目发布的 TorchScript 导出版（[Sanster/models add_big_lama](https://github.com/Sanster/models/releases/tag/add_big_lama)），构建脚本校验 SHA256 后把权重存成 float16 以减小安装包（运行时转回 float32），许可证随源码存放于 src/native/video-structure/vendor/LAMA-LICENSE.txt，并随运行时放在 licenses/LaMa-Apache-2.0.txt。只在本机运行，不联网。
 
 ## 海报标题字体
 

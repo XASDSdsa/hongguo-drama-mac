@@ -99,6 +99,30 @@ async function check(name, run) {
     const paths = h.run('downloadTasks.map(task => task.savePath)');
     assert.equal(new Set(paths).size, 2, 'different episodes must not share a final or temporary path');
   });
+  // 集号写「第1集」，不补 0（不写 001）；默认和去重成品一样是「剧名 - 第1集」，以前没改过的两个预设也跟着变
+  await check('episode file names are 「剧名 - 第1集」 without leading zeros', async () => {
+    const names = async (format, episodes = series()[0].episodes) => {
+      const h = load(format === undefined ? {} : { name_format: format });
+      await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes });
+      return JSON.parse(h.run('JSON.stringify(downloadTasks.map(task => [task.filename, task.title]))')).sort();
+    };
+    const expected = [
+      ['Short - 第1集.mp4', '《Short》第1集'],
+      ['Short - 第2集.mp4', '《Short》第2集'],
+    ];
+    assert.deepEqual(await names(undefined), expected, '默认');
+    assert.deepEqual(await names('剧名 集数'), expected, '以前的默认预设');
+    assert.deepEqual(await names('剧名 - 集数'), expected);
+    assert.deepEqual(await names('剧名'), expected, '模板里没写集数：自动补「 - 第N集」');
+    const titled = [
+      { vid: 'one', vid_index: 1, title: '相遇' },
+      { vid: 'ten', vid_index: 10, title: '重逢' },
+    ];
+    assert.deepEqual((await names('剧名 集数 标题', titled)).map((x) => x[0]), ['Short - 第10集 重逢.mp4', 'Short - 第1集 相遇.mp4']);
+    assert.deepEqual((await names('剧名_第集数集')).map((x) => x[0]), ['Short_第1集.mp4', 'Short_第2集.mp4'], '自己写了「第集数集」不重复套');
+    const h = load({ name_format: '剧名 集数' });
+    assert.equal(h.run('getCurrentSettings().name_format'), '剧名 - 集数', '设置页里显示新的写法');
+  });
   await check('episode status prefers a valid file over a newer failed retry', async () => {
     const h = load();
     h.set('seriesRegistry', series());

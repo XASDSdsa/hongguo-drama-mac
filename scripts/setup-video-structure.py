@@ -49,12 +49,38 @@ def tf_converter_python():
     subprocess.run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', 'tensorflow==2.20.0'], check=True)
     return python
 
+LAMA_FILE = 'big-lama-fp16.pt'
+
+def half_lama(source, target):
+    import torch
+    model = torch.jit.load(str(source), map_location='cpu').eval()
+    with torch.no_grad():
+        for _, tensor in list(model.named_parameters()) + list(model.named_buffers()):
+            if tensor.is_floating_point():
+                half = tensor.half()
+                # BatchNorm running variances overflow float16: those few stay float32
+                if torch.isfinite(half).all() and (half.float() - tensor).abs().max() <= 1e-2 * max(1.0, float(tensor.abs().max())):
+                    tensor.data = half
+    temp = target.with_name(target.name + '.part')
+    torch.jit.save(model, str(temp))
+    os.replace(temp, target)
+
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
     models = DEST / 'models'
     models.mkdir(exist_ok=True)
     fetch('https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR-MDX-NET-Inst_HQ_3.onnx', models / 'UVR-MDX-NET-Inst_HQ_3.onnx')
     fetch('https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx', models / 'silero_vad.onnx')
+    # LaMa (big-lama, Apache-2.0) TorchScript export published by the IOPaint project: removes burned-in
+    # subtitles from storyboard keyframes on the user's machine. The pinned download is verified, then its
+    # weights are stored as float16 (half the installer size; loaded back as float32, output differs by
+    # about 0.1/255). The Windows installer must stay under GitHub's 2 GiB asset limit.
+    lama_source = CACHE / 'big-lama.pt'
+    fetch('https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt', lama_source)
+    if hashlib.file_digest(lama_source.open('rb'), 'sha256').hexdigest() != '344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9':
+        raise RuntimeError('Pinned model checksum mismatch: big-lama.pt')
+    if not (models / LAMA_FILE).exists():
+        half_lama(lama_source, models / LAMA_FILE)
     model_name = 'sherpa-onnx-paraformer-zh-small-2024-03-09'
     if not (models / model_name / 'model.int8.onnx').exists():
         archive(f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{model_name}.tar.bz2', models)
@@ -100,7 +126,7 @@ def main():
                 raise RuntimeError('Pinned model checksum mismatch: ' + name)
     file_hashes = {}
     for file in sorted(models.rglob('*')):
-        if file.is_file() and file.suffix in ('.onnx', '.pth', '.txt'):
+        if file.is_file() and file.suffix in ('.onnx', '.pth', '.pt', '.txt'):
             file_hashes[str(file.relative_to(DEST))] = hashlib.file_digest(file.open('rb'), 'sha256').hexdigest()
     (DEST / 'runtime.json').write_text(json.dumps(dict(schema_version='1.0.0', sherpa_version=VERSION, transnet_revision=REVISION, paraformer=model_name, files=file_hashes), indent=2), encoding='utf-8')
     print('Models and native source separation ready:', DEST, flush=True)

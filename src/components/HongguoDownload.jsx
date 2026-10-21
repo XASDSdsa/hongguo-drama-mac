@@ -402,7 +402,7 @@ function HongguoDownload({ onNavigate, active = true }) {
                     )}
                   </div>
                   <div className="episode-info">
-                    <span className="episode-num">第 {String(ep.vid_index).padStart(2, '0')} 集</span>
+                    <span className="episode-num">第 {Number(ep.vid_index) || ep.vid_index} 集</span>
                     {ep.locked ? (
                       <span className="episode-title">锁定 · 需在来源解锁</span>
                     ) : (

@@ -434,6 +434,8 @@ jobs:
           run_check node scripts/check-jianying-location.cjs
           run_check node scripts/check-separation-ascii.cjs
           run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
+          # 关键帧去字幕：用打包进软件的运行时和 big-lama 真跑一遍（装不上、跑不了就不发）
+          run_check env REQUIRE_LAMA=1 node scripts/check-lama-subtitle.cjs
           # 端到端：原剧 → 重新拆分去重 → 分析 → 三分轨 / 多分轨剪映草稿，中文剧名和文件夹，全用打包进软件的组件。
           run_check env REQUIRE_E2E=1 node scripts/check-draft-e2e.cjs
 
@@ -510,6 +512,19 @@ jobs:
             echo "::error title=NSIS build log::$msg"
           fi
           exit $code
+
+      # GitHub 发布页每个文件必须小于 2 GiB：超了在这里就停，说清楚，不等到最后上传才失败
+      - name: Installer must stay under the 2 GiB release asset limit
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=$(ls dist/*-Setup.exe | head -n 1)
+          size=$(stat -c %s "$f")
+          echo "::notice title=安装包大小::$(basename "$f") ${size} 字节（$((size / 1048576)) MiB，上限 2048 MiB）"
+          if [ "$size" -ge 2147483648 ]; then
+            echo "::error title=安装包超过 2 GiB::$(basename "$f") 有 ${size} 字节，GitHub 发布页传不上去"
+            exit 1
+          fi
 
       # 不再出便携版：它每次打开都要先把几个 GB 解压到临时文件夹（再被杀毒软件逐个扫描），要等好几分钟。
       - name: Build unpacked directory and zip

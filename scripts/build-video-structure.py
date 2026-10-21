@@ -12,6 +12,35 @@ ROOT = Path(__file__).resolve().parents[1]
 def digest(p):
     with p.open('rb') as f:
         return hashlib.file_digest(f,'sha256').hexdigest()
+def lama_self_test(executable, env, model, cache):
+    """The frozen worker must load big-lama and repaint a masked box: a white bar across a smooth gradient
+    comes back close to the gradient, pixels outside the box are not the caller's concern."""
+    width, height = 96, 64
+    image = bytearray()
+    for y in range(height):
+        for x in range(width):
+            image += bytes((40 + x, 60 + y, 120))
+    mask = bytearray(width * height)
+    for y in range(26, 38):
+        for x in range(10, 86):
+            image[(y * width + x) * 3:(y * width + x) * 3 + 3] = b'\xff\xff\xff'
+            mask[y * width + x] = 1
+    crop, mask_file, output = cache / 'frozen-lama.rgb', cache / 'frozen-lama-mask.bin', cache / 'frozen-lama-out.rgb'
+    crop.write_bytes(bytes(image)); mask_file.write_bytes(bytes(mask)); output.unlink(missing_ok=True)
+    job = json.dumps(dict(id=1, input=str(crop), mask=str(mask_file), output=str(output), width=width, height=height))
+    run = subprocess.run([str(executable), 'inpaint', '--model', str(model), '--threads', '2'], input=job + '\n', env=env, capture_output=True, text=True, encoding='utf-8', timeout=600)
+    replies = [json.loads(line) for line in run.stdout.splitlines() if line.strip().startswith('{')]
+    if run.returncode != 0 or [r.get('type') for r in replies] != ['ready', 'done']:
+        raise RuntimeError('Frozen LaMa self-test failed: ' + run.stdout[-500:] + run.stderr[-1500:])
+    result = output.read_bytes()
+    if len(result) != width * height * 3:
+        raise RuntimeError('Frozen LaMa self-test returned a wrong size')
+    error = sum(abs(result[(y * width + x) * 3 + c] - (40 + x, 60 + y, 120)[c]) for y in range(26, 38) for x in range(10, 86) for c in range(3)) / (12 * 76 * 3)
+    if error > 25:
+        raise RuntimeError(f'Frozen LaMa self-test left the bar in place (mean error {error:.1f})')
+    print('Frozen LaMa self-test: mean error', round(error, 1), flush=True)
+
+
 def main():
     target, build_id = sys.argv[1:3]
     out = ROOT / 'build/video-structure' / target
@@ -48,6 +77,7 @@ def main():
     invalid_output=cache/'frozen-invalid-threshold.json';invalid_output.unlink(missing_ok=True)
     invalid=subprocess.run([str(executable),'verify-shots','--input',str(review_frames),'--timeline',str(timeline),'--predictions',str(test),'--threshold','0.6','--output',str(invalid_output)],env=env,capture_output=True,text=True)
     if invalid.returncode==0 or invalid_output.exists() or 'Invalid verification timeline or prediction scores' not in invalid.stderr:raise RuntimeError('Frozen shot verifier accepted an unapproved threshold')
+    lama_self_test(executable,env,models/'big-lama-fp16.pt',cache)
     license_dir=out/'licenses';license_dir.mkdir(exist_ok=True)
     for name in ['torch','sherpa-onnx','numpy','opencv-python-headless','sympy','networkx','filelock','fsspec','jinja2','markupsafe','mpmath']:
         dist=importlib.metadata.distribution(name)
@@ -57,7 +87,8 @@ def main():
                 if source.is_file():
                     destination=license_dir/name/str(entry).replace('..','_');destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,destination)
     shutil.copyfile(ROOT/'src/native/video-structure/vendor/TRANSNET-LICENSE.txt',license_dir/'TransNetV2-MIT.txt')
+    shutil.copyfile(ROOT/'src/native/video-structure/vendor/LAMA-LICENSE.txt',license_dir/'LaMa-Apache-2.0.txt')
     files={str(p.relative_to(out)).replace(os.sep,'/'):digest(p) for p in out.rglob('*') if p.is_file() and p.name not in ['bundle.json']}
-    (out/'bundle.json').write_text(json.dumps(dict(platform=target,minimumMacOS=minimum_macos,buildId=build_id,offlineSelfTest=True,shotVerifierSelfTest=True,punctuationSelfTest=True,versions=versions,sha256=files),indent=2),encoding='utf-8')
+    (out/'bundle.json').write_text(json.dumps(dict(platform=target,minimumMacOS=minimum_macos,buildId=build_id,offlineSelfTest=True,shotVerifierSelfTest=True,punctuationSelfTest=True,lamaSelfTest=True,versions=versions,sha256=files),indent=2),encoding='utf-8')
     print('Offline structured runtime verified:',out)
 if __name__=='__main__':main()

@@ -111,6 +111,8 @@ jobs:
           run_check node scripts/check-jianying-location.cjs
           run_check node scripts/check-separation-ascii.cjs
           run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
+          # 关键帧去字幕：用打包进软件的运行时和 big-lama 真跑一遍（装不上、跑不了就不发）
+          run_check env REQUIRE_LAMA=1 node scripts/check-lama-subtitle.cjs
           run_check node scripts/check-encoder-retry.cjs
           run_check npm run check:subtitles
           run_check python scripts/check-subtitle-alignment.py

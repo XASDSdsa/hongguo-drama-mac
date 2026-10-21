@@ -55,6 +55,8 @@ const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
 const jianyingLocator = require('./src/native/jianying-location');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
+const { createLamaWorker, MODEL_FILE: LAMA_MODEL_FILE } = require('./src/native/video-prompt/lama');
+const structureRuntime = require('./src/native/video-structure/runtime');
 const storyboardSnapshot = require('./src/native/video-prompt/snapshot');
 const { seedanceFormat } = require('./src/native/video-prompt/compose');
 const store = require('./src/store');
@@ -243,8 +245,9 @@ function getDefaultSettings() {
     structure_output_dir: '',
     merge_output_dir: '',
     ai_output_dir: '',
-    // 文件命名模板：可用变量 剧名(series_title) 集数(vid_index) 标题(ep_title)
-    name_format: '剧名 集数',
+    // 文件命名模板：可用变量 剧名(series_title) 集数(vid_index，写成「第1集」，不补 0) 标题(ep_title)
+    // 默认和去重成品一样：「剧名 - 第1集」
+    name_format: '剧名 - 集数',
     max_concurrent: 3,
     // 视频去重同时运行的 FFmpeg 数量（1~8），下载管理和视频处理共用。
     quchong_jobs: quchong.DEFAULTS.jobs,
@@ -432,6 +435,8 @@ function getCurrentSettings() {
   const jobs = merged.quchong_jobs;
   // 旧版本把文本模型默认存成了 gpt-5.6；没有改过的统一升到现在的默认值。
   if (merged.ai_text_model === 'gpt-5.6') merged.ai_text_model = openai.DEFAULT_TEXT_MODEL;
+  // 以前的两个预设（「剧名 001」那种）没改过的，换成现在的「剧名 - 第1集」写法
+  if (LEGACY_NAME_FORMATS[merged.name_format]) merged.name_format = LEGACY_NAME_FORMATS[merged.name_format];
   return {
     ...merged,
     max_concurrent: MAX_CONCURRENT_DOWNLOADS,
@@ -475,24 +480,29 @@ function sanitizeFolderName(name) {
   return /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(cleaned) ? `_${cleaned}` : cleaned;
 }
 
+const LEGACY_NAME_FORMATS = { '剧名 集数': '剧名 - 集数', '剧名 集数 标题': '剧名 - 集数 标题' };
+
+/** 集号写法：「第1集」，不补 0（不写成 001）。 */
+function episodeLabel(vidIndex) {
+  const n = Number(vidIndex);
+  return `第${Number.isSafeInteger(n) && n > 0 ? n : String(vidIndex || '').trim()}集`;
+}
+
 // 按命名模板渲染文件名，返回 名称(不含扩展名) 或 null
 function renderName(format, seriesTitle, vidIndex, epTitle) {
-  const fmt = String(format || '').trim();
+  // 模板里自己写了「第集数集」的，不再套一层「第…集」
+  const fmt = String(format || '')
+    .trim()
+    .replace(/第\s*(集数|vid_index)\s*集/g, '$1');
   if (!fmt) return null;
   const vars = {
     series_title: String(seriesTitle || '').trim(),
-    vid_index: String(vidIndex).padStart(3, '0'),
+    vid_index: episodeLabel(vidIndex),
     ep_title: String(epTitle || '').trim(),
   };
-  const zhMap = {
-    剧名: 'series_title',
-    集数: 'vid_index',
-    标题: 'ep_title',
-  };
-  const zhRe = /剧名|集数|标题/g;
-  let name = fmt
-    .replace(zhRe, (w) => zhMap[w] || w)
-    .replace(/([A-Za-z]+(?:_[A-Za-z]+)*)/g, (tok) => (vars[tok] !== undefined ? vars[tok] || '' : tok));
+  const keys = { 剧名: 'series_title', 集数: 'vid_index', 标题: 'ep_title', series_title: 'series_title', vid_index: 'vid_index', ep_title: 'ep_title' };
+  // 一遍替换完：「剧名_集数」这种用下划线连着写的也认得（以前会原样变成 series_title_vid_index）
+  let name = fmt.replace(/series_title|vid_index|ep_title|剧名|集数|标题/g, (w) => vars[keys[w]] || '');
   name = name
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
     .replace(/\s+/g, ' ')
@@ -4841,6 +4851,22 @@ function snapshotStoryboard(htmlFile) {
   return run;
 }
 
+// 分镜工程图关键帧去字幕用的 LaMa：整个软件共用一个（模型只在内存里放一份），空闲一分钟自动退出。
+let lamaWorker = null;
+let lamaWorkerKey = '';
+function getLamaWorker() {
+  const settings = getTranscriptionSettings();
+  const rt = structureRuntime.runtime(settings);
+  const threads = structureRuntime.params('shots', settings, rt).threads;
+  const key = [rt.command, ...rt.prefix, threads].join('\u0000');
+  if (!lamaWorker || lamaWorkerKey !== key) {
+    lamaWorker?.close();
+    lamaWorker = createLamaWorker({ command: rt.command, prefix: rt.prefix, model: path.join(rt.models, LAMA_MODEL_FILE), threads });
+    lamaWorkerKey = key;
+  }
+  return lamaWorker;
+}
+
 async function deriveLibraryPrompts(job, file, item, { alignment, transcript, sourceKey }) {
   const key = path.resolve(job.dir);
   const label = path.basename(file, path.extname(file));
@@ -4881,6 +4907,14 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
       title: path.basename(path.resolve(job.dir)),
       maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
       shotLimit: Number.isFinite(Number(settings.video_prompt_shot_limit)) ? Number(settings.video_prompt_shot_limit) : 2,
+      lama: (() => {
+        try {
+          return getLamaWorker();
+        } catch (error) {
+          log('warn', `LaMa 补图准备不了：${error?.message || error}`);
+          return null;
+        }
+      })(),
       log,
       onProgress: (percent, message) => {
         item.detail = String(message || '').slice(0, 80);
@@ -6036,10 +6070,9 @@ function repairTaskDestination(task) {
 }
 
 function uniqueEpisodeFilename(settings, title, episode) {
-  const index = String(episode.vid_index).padStart(3, '0');
   const format = settings.name_format || '';
   const rendered = renderName(format, title, episode.vid_index, episode.title) || title;
-  return `${rendered}${/集数|vid_index/.test(format) ? '' : `_第${index}集`}.mp4`;
+  return `${rendered}${/集数|vid_index/.test(format) ? '' : ` - ${episodeLabel(episode.vid_index)}`}.mp4`;
 }
 
 /**
@@ -7512,7 +7545,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   const changedTasks = [];
   const previousQueue = downloadQueue.slice();
   for (const ep of episodes) {
-    const epIndexStr = String(ep.vid_index).padStart(3, '0');
+    const epLabel = episodeLabel(ep.vid_index);
     const filename = uniqueEpisodeFilename(settings, cleanSeriesTitle, ep);
     const finalPath = path.join(originalsDir, filename);
 
@@ -7547,7 +7580,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
       batchInfo,
       savePath: finalPath,
       customDir: downloadDir,
-      title: `《${cleanSeriesTitle}》第${epIndexStr}集${ep.title ? ' ' + ep.title : ''}`,
+      title: `《${cleanSeriesTitle}》${epLabel}${ep.title ? ' ' + ep.title : ''}`,
       filename,
       platform: 'hongguo',
       type: 'hongguo',
@@ -7558,7 +7591,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
       startTime: Date.now(),
       videoInfo: {
         author: cleanSeriesTitle,
-        title: `《${cleanSeriesTitle}》第${epIndexStr}集`,
+        title: `《${cleanSeriesTitle}》${epLabel}`,
         cover: ep.cover || firstCover,
         aweme_id: ep.vid,
       },
@@ -8070,7 +8103,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
       : [Number(task.episodeIndex)].filter(Number.isSafeInteger);
   const prefix = task.productId
     ? `作品-${sanitizeFolderName(String(task.productId))}`
-    : `第${String(task.episodeIndex).padStart(3, '0')}集`;
+    : episodeLabel(task.episodeIndex);
   const transcriptPath = task.transcriptPath || path.join(materialDir, `${prefix}-转写.txt`);
   let transcript;
   if (task.transcriptFingerprint === fingerprint && aiOutputIsUsable(transcriptPath)) {
@@ -9473,6 +9506,13 @@ app.on('child-process-gone', (_event, details) => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// 真要退出了（before-quit 没被拦下）：把 LaMa 补图进程一起关掉
+app.on('will-quit', () => {
+  try {
+    lamaWorker?.close();
+  } catch (_) {}
 });
 
 let waitingForSubtitles = false;

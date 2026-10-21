@@ -363,6 +363,73 @@ async function main() {
   const settingsUi = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Settings.jsx'), 'utf8');
   for (const key of ['ark_base_url', 'ark_api_key', 'ark_video_model', 'video_prompt_max_seconds']) assert.ok(settingsUi.includes(`'${key}'`), `设置页要保存 ${key}`);
 
+  // ---- 关键帧去字幕走 LaMa：先加载模型（日志里说），每张写「LaMa，x 秒」；LaMa 起不来 / 中途出错就退回本机补图，日志写清楚 ----
+  {
+    const font = [
+      '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+      '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+      '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
+      'C:\\Windows\\Fonts\\msyhbd.ttc',
+      'C:\\Windows\\Fonts\\msyh.ttc',
+      '/System/Library/Fonts/PingFang.ttc',
+      '/System/Library/Fonts/STHeiti Medium.ttc',
+    ].find((file) => fs.existsSync(file));
+    if (!font) console.log('SKIP LaMa wiring: no CJK font for drawtext');
+    else {
+      const fontArg = font.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const said = [['你终于来了，我等你很久了', 1, 2.6], ['这件事你必须给我一个交代', 3.2, 5.4], ['不然我们之间就到此为止', 6, 7.6]];
+      const subbed = path.join(dir, '第6集.mp4');
+      const draw = said
+        .map(([t, a, b]) => `drawtext=fontfile='${fontArg}':text='${t}':fontsize=30:fontcolor=white:borderw=2:bordercolor=black:x=(w-tw)/2:y=h*0.75:enable='between(t,${a},${b})'`)
+        .join(',');
+      execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', `gradients=s=540x960:speed=0.015:n=4:c0=0x3a5f8a:c1=0xb07a48:c2=0x5f8f4e:c3=0x7a4a6e:seed=7,format=yuv420p,${draw}`, '-t', '19', '-r', '12', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', subbed]);
+      const subTranscript = { duration: 19, utterances: said.map(([text, start, end]) => ({ start, end, text })) };
+      // 假 LaMa：框里每一列用框上面那一行的颜色填（字没了），用时报 0.4 秒
+      const calls = { start: 0, inpaint: 0 };
+      const fakeInpaint = async ({ data, width, height, mask }) => {
+        calls.inpaint += 1;
+        const out = Buffer.from(data);
+        for (let x = 0; x < width; x++) {
+          let above = null;
+          for (let y = 0; y < height; y++) {
+            const p = y * width + x;
+            if (!mask[p]) above = p;
+            else if (above != null) data.copy(out, p * 3, above * 3, above * 3 + 3);
+          }
+        }
+        return { data: out, seconds: 0.4 };
+      };
+      const run = async (name, lama) => {
+        const seen = [];
+        const result = await deriveEpisodePrompts({ ...options, inputPath: subbed, transcript: subTranscript, label: '第6集', shotLimit: 2, outDir: path.join(dir, `out-${name}`), cacheFile: path.join(dir, 'cache', `${name}.json`), sourceKey: `hash-${name}`, lama, log: (level, message) => seen.push([level, message]) });
+        assert.ok(result.htmlFile, `${name}：页面生成了`);
+        return seen;
+      };
+      const has = (seen, level, pattern) => seen.some(([l, m]) => l === level && pattern.test(m));
+
+      const ok = await run('lama', { start: async () => (calls.start += 1), inpaint: fakeInpaint });
+      assert.ok(has(ok, 'info', /字幕在画面 7\d%–\d+% 高度/), '找到字幕');
+      assert.ok(has(ok, 'info', /加载 LaMa 补图模型…/) && has(ok, 'info', /LaMa 补图模型准备好了（\d+\.\d 秒）/), '先加载模型，日志里说');
+      assert.equal(calls.start, 1);
+      assert.ok(calls.inpaint >= 2, `有字幕的关键帧交给 LaMa（${calls.inpaint} 张）`);
+      assert.equal(ok.filter(([l, m]) => l === 'info' && /关键帧去字幕 \d+\/8：镜\d .+ 去掉了（LaMa，0\.4 秒）/.test(m)).length, calls.inpaint, '每张写「LaMa，用时」');
+      assert.ok(has(ok, 'info', /关键帧去字幕 \d+\/8：镜\d .+ 这一刻没有字幕，不用补/), '没字幕的那几张也报一声');
+      assert.ok(has(ok, 'info', new RegExp(`去掉了 ${calls.inpaint} 张（LaMa ${calls.inpaint} 张）$`)), '最后一行合计');
+      assert.ok(!has(ok, 'warn', /本机补图/), '全程 LaMa，没退回本机补图');
+
+      const noStart = await run('lama-down', { start: async () => { throw new Error('内置分析运行时没装上（需要完整安装包）'); }, inpaint: async () => assert.fail('起不来就不该再补') });
+      assert.ok(has(noStart, 'warn', /LaMa 用不了（内置分析运行时没装上（需要完整安装包）），这一集用本机补图（效果差一些）/), 'LaMa 起不来：说清楚，退回本机补图');
+      assert.ok(has(noStart, 'info', /去掉了（本机补图，\d+\.\d 秒）/));
+      assert.ok(has(noStart, 'warn', /；\d+ 张是本机补图/));
+
+      let broke = 0;
+      const midway = await run('lama-broke', { start: async () => {}, inpaint: async () => { broke += 1; throw new Error('LaMa 补图进程退出了（1）'); } });
+      assert.equal(broke, 1, '出过一次错就不再试');
+      assert.equal(midway.filter(([l, m]) => l === 'warn' && /LaMa 出错了（LaMa 补图进程退出了（1）），这一集剩下的关键帧用本机补图/.test(m)).length, 1, '只报一次');
+      assert.ok(has(midway, 'info', /去掉了（本机补图/), '出错那张和后面的都用本机补图补上');
+    }
+  }
+
   await fsp.rm(dir, { recursive: true, force: true });
   // 看视频提问可以等 10 分钟（以前 3 分钟就自己掐断）；上传等普通请求仍是 3 分钟；超时说中文。
   {

@@ -4,8 +4,8 @@ import './Settings.css';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 const FORMAT_PRESETS = [
-  { label: '剧名_第N集', value: '剧名 集数' },
-  { label: '剧名_第N集_标题', value: '剧名 集数 标题' },
+  { label: '剧名 - 第N集', value: '剧名 - 集数' },
+  { label: '剧名 - 第N集 标题', value: '剧名 - 集数 标题' },
 ];
 
 const PROXY_MODES = [
@@ -391,7 +391,7 @@ function SettingsPage({ active = true }) {
               onChange={(e) => update('name_format', e.target.value)}
             />
             <p className="settings-hint">
-              可用变量：<code>剧名</code> · <code>集数</code>（如 001）· <code>标题</code>
+              可用变量：<code>剧名</code> · <code>集数</code>（如 第1集，不补 0）· <code>标题</code>
               。每集保留独立集号，避免同名覆盖。
             </p>
           </div>

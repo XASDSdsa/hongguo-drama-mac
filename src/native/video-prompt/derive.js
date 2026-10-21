@@ -139,8 +139,10 @@ async function deriveEpisodePrompts({
   // 每集只分析前几个分镜（0 = 全部）：后面的分镜只在页面上占位，不问方舟、不截关键帧，省额度。
   shotLimit = 0,
   fps = 2,
-  // 四宫格关键帧去字幕（视频本身不动；在本机用画面里真实的纹理补，不调接口）
+  // 四宫格关键帧去字幕（视频本身不动；在本机用 LaMa 补，不调接口）
   cleanSubtitles = true,
+  // LaMa 补图：createLamaWorker() 的返回值（{ start, inpaint }）；没有或用不了时退回本机补图
+  lama = null,
   log = () => {},
   onProgress = () => {},
   signal,
@@ -315,7 +317,7 @@ async function deriveEpisodePrompts({
       // 四宫格关键帧去字幕：先在整集里找字幕横带；找到了，每张关键帧把字幕那一行用旁边真实的画面补上。
       // 视频首帧（播放前显示的那张）就用去过字幕的「起幅」，不另外截。
       let subtitle = { band: null, dims: null };
-      const tally = { cleaned: 0, residue: 0, failed: 0 };
+      const tally = { cleaned: 0, residue: 0, failed: 0, lama: 0 };
       if (cleanSubtitles && size) {
         try {
           subtitle = await detectEpisodeBand({ ffmpeg, inputPath, rows, utterances: transcript?.utterances, size, signal });
@@ -330,6 +332,43 @@ async function deriveEpisodePrompts({
           for (const row of rows) frames[row.no].subtitleFree = false;
         }
       }
+      // 先把 LaMa 模型加载好（第一次要几秒到十几秒）：每 15 秒报一次还在加载，不让日志干等着没动静
+      let lamaBroken = null;
+      if (subtitle.band) {
+        if (!lama) lamaBroken = new Error('没有 LaMa 补图');
+        else {
+          const started = Date.now();
+          log('info', '关键帧去字幕：加载 LaMa 补图模型…');
+          const beat = setInterval(() => log('info', `关键帧去字幕：LaMa 补图模型还在加载（已 ${Math.round((Date.now() - started) / 1000)} 秒）…`), 15000);
+          try {
+            // 加载中途点了停止：马上停，不等模型加载完
+            await new Promise((resolve, reject) => {
+              lama.start().then(resolve, reject);
+              signal?.addEventListener?.('abort', () => reject(signal.reason || new Error('已停止')), { once: true });
+            });
+            log('info', `关键帧去字幕：LaMa 补图模型准备好了（${((Date.now() - started) / 1000).toFixed(1)} 秒）`);
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            lamaBroken = error;
+          } finally {
+            clearInterval(beat);
+          }
+        }
+        if (lamaBroken) log('warn', `关键帧去字幕：LaMa 用不了（${lamaBroken.message}），这一集用本机补图（效果差一些）`);
+      }
+      // LaMa 出过一次错（进程起不来、模型坏了）：这一集剩下的关键帧不再试，直接用本机补图
+      const inpaint = async (job) => {
+        if (lamaBroken) throw lamaBroken;
+        try {
+          return await lama.inpaint(job);
+        } catch (error) {
+          if (!signal?.aborted && !lamaBroken) {
+            lamaBroken = error;
+            log('warn', `关键帧去字幕：LaMa 出错了（${error.message}），这一集剩下的关键帧用本机补图（效果差一些）`);
+          }
+          throw error;
+        }
+      };
       const gridTotal = jobs.filter((job) => job.kind === 'grid').length;
       let gridDone = 0;
       await pool(jobs, 4, async (job) => {
@@ -348,6 +387,7 @@ async function deriveEpisodePrompts({
               dims: subtitle.dims,
               sizes: first ? [{ width: 320, quality: 7 }, { width: 560, quality: 4 }] : [{ width: 320, quality: 7 }],
               signal,
+              inpaint: lamaBroken ? null : inpaint,
             });
             frame = { uri: `data:image/jpeg;base64,${clean.outputs[0].toString('base64')}`, bytes: clean.outputs[0] };
             if (first) frames[job.row.no].poster = `data:image/jpeg;base64,${clean.outputs[1].toString('base64')}`;
@@ -356,14 +396,18 @@ async function deriveEpisodePrompts({
               tally.residue += 1;
               frames[job.row.no].subtitleFree = false;
             }
+            if (clean.method === 'lama') tally.lama += 1;
             gridDone += 1;
             const where = `镜${job.row.no} ${FRAME_LABELS[job.index] || ''}`.trim();
-            const seconds = ((Date.now() - started) / 1000).toFixed(1);
+            // LaMa 一次只补一张（几张同时排队）：写 LaMa 自己用的时间，不算排队等的
+            const seconds = (clean.method === 'lama' ? clean.seconds : (Date.now() - started) / 1000).toFixed(1);
+            const how = clean.method === 'lama' ? 'LaMa' : '本机补图';
             if (clean.cleaned)
               log(
                 clean.clean ? 'info' : 'warn',
-                `关键帧去字幕 ${gridDone}/${gridTotal}：${where} ${clean.clean ? '去掉了' : '补过了，但还检测到字'}（${seconds} 秒）`,
+                `关键帧去字幕 ${gridDone}/${gridTotal}：${where} ${clean.clean ? '去掉了' : '补过了，但还检测到字'}（${how}，${seconds} 秒）`,
               );
+            else log('info', `关键帧去字幕 ${gridDone}/${gridTotal}：${where} 这一刻没有字幕，不用补`);
             onProgress(99, `关键帧去字幕 ${gridDone}/${gridTotal}`);
           } catch (error) {
             if (signal?.aborted) throw error;
@@ -385,8 +429,13 @@ async function deriveEpisodePrompts({
         }
       });
       if (subtitle.band) {
-        const notes = [tally.residue && `${tally.residue} 张补完还检测到字`, tally.failed && `${tally.failed} 张没做成`].filter(Boolean);
-        log(notes.length ? 'warn' : 'info', `关键帧去字幕：去掉了 ${tally.cleaned} 张${notes.length ? `；${notes.join('、')}` : ''}`);
+        const local = tally.cleaned - tally.lama;
+        const notes = [
+          local > 0 && `${local} 张是本机补图`,
+          tally.residue && `${tally.residue} 张补完还检测到字`,
+          tally.failed && `${tally.failed} 张没做成`,
+        ].filter(Boolean);
+        log(notes.length ? 'warn' : 'info', `关键帧去字幕：去掉了 ${tally.cleaned} 张（LaMa ${tally.lama} 张）${notes.length ? `；${notes.join('、')}` : ''}`);
       }
       const thumbs = {};
       await pool(library.characters.filter((c) => c.ref_time != null), 4, async (character) => {

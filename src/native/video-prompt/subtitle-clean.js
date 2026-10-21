@@ -4,9 +4,10 @@
 // 1) 整集先抽十来帧（说话时刻和没人说话的空档对照），找出字幕所在的那一条横带（字幕位置一部剧基本固定）。
 //    找不到说明这一集没有烧进画面的字幕，什么都不做。
 // 2) 每张关键帧在这条横带里找出字幕（亮色字 + 深色描边 / 阴影），把整行字框起来，
-//    用框上面、框下面真实的画面纹理一块一块补上（从上往下补一份、从下往上补一份，按高度渐变混合）。
+//    交给 LaMa（big-lama，内置在分析运行时里）按四周的画面把这一行重新画出来，只贴回框里那块；
+//    LaMa 用不了时退回本机补图：用框上面、框下面真实的画面纹理补（效果差一些）。
 // 3) 补完再找一次字：还找得到就算没去干净（画面校验里不写「无字幕水印」）。
-// 全部在本机算，不调接口、不花钱，一张一秒左右。
+// 全部在本机算，不调接口、不花钱，LaMa 一张一两秒。
 
 const { spawn } = require('node:child_process');
 
@@ -745,23 +746,71 @@ async function decodeRaw(ffmpeg, bytes, width, height, signal) {
   return data;
 }
 
+// LaMa 补字幕那一行时，框上下各带多少行真实画面给它参考（至少 96 行、不少于框高）：
+// 实测和整张图一起补效果一样，只要四分之一的时间。
+const LAMA_CONTEXT = 96;
+
+/**
+ * 用 LaMa 补字幕整行的框：裁出框上下各一段（整个宽度）交给 LaMa，只把框里的像素贴回来，框外逐像素不变。
+ * inpaint({ data, width, height, mask, signal }) → { data, seconds }。原地修改，返回 LaMa 用的秒数。
+ */
+async function lamaBox(image, lb, inpaint, signal) {
+  const { width: W, height: H, data } = image;
+  const context = Math.max(LAMA_CONTEXT, lb.y1 - lb.y0 + 1);
+  const top = Math.max(0, lb.y0 - context);
+  const bottom = Math.min(H, lb.y1 + 1 + context);
+  const rows = bottom - top;
+  const result = await inpaint({
+    data: Buffer.from(data.subarray(top * W * 3, bottom * W * 3)),
+    width: W,
+    height: rows,
+    mask: Buffer.from(lb.box.subarray(top * W, bottom * W)),
+    signal,
+  });
+  const out = result?.data;
+  if (!out || out.length !== W * rows * 3) throw new Error('LaMa 补图输出尺寸不对');
+  for (let y = lb.y0; y <= lb.y1; y++) {
+    const from = ((y - top) * W + lb.x0) * 3;
+    out.copy(data, (y * W + lb.x0) * 3, from, from + (lb.x1 - lb.x0 + 1) * 3);
+  }
+  return Number(result.seconds) || 0;
+}
+
 /**
  * 抽一张关键帧并去字幕，按 sizes（[{ width, quality }]）各出一张 JPEG（四宫格用 320 宽；起幅那张顺便出 560 宽给视频首帧）。
- * 返回 { outputs: [字节…], cleaned, clean, reason }：
- *   cleaned 补过字幕；clean 最后这张图里检测不到字幕；reason：'none' 这一刻没字幕 / 'residue' 补完还检测到字。
+ * inpaint 给了就用 LaMa 补（见 lamaBox），没给或 LaMa 出错就用本机补图（cleanBox）。
+ * 返回 { outputs: [字节…], cleaned, clean, reason, method, seconds, lamaError }：
+ *   cleaned 补过字幕；clean 最后这张图里检测不到字幕；reason：'none' 这一刻没字幕 / 'residue' 补完还检测到字；
+ *   method：'lama' / 'local'（没补过是 ''）；seconds：LaMa 用的秒数；lamaError：LaMa 出错的原因（退回了本机补图）。
  */
-async function cleanKeyframe({ ffmpeg, inputPath, time, band, dims, sizes, signal }) {
+async function cleanKeyframe({ ffmpeg, inputPath, time, band, dims, sizes, signal, inpaint = null }) {
   const original = await grabRaw(ffmpeg, inputPath, time, dims, signal);
   const cover = subtitleCover(original, band);
   let image = original;
   let cleaned = false;
   let clean = true;
   let reason = 'none';
+  let method = '';
+  let seconds = 0;
+  let lamaError = null;
   if (cover) {
     const lb = lineBox(cover, original.width, original.height, original);
     if (lb) {
       image = { ...original, data: Buffer.from(original.data) };
-      cleanBox(image, lb);
+      if (inpaint) {
+        try {
+          seconds = await lamaBox(image, lb, inpaint, signal);
+          method = 'lama';
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          lamaError = error;
+          image = { ...original, data: Buffer.from(original.data) };
+        }
+      }
+      if (!method) {
+        cleanBox(image, lb);
+        method = 'local';
+      }
       cleaned = true;
       clean = !subtitleCover(image, band);
       reason = clean ? '' : 'residue';
@@ -773,7 +822,7 @@ async function cleanKeyframe({ ffmpeg, inputPath, time, band, dims, sizes, signa
     if (bytes.length < 100) throw new Error('关键帧编码失败');
     outputs.push(bytes);
   }
-  return { outputs, cleaned, clean, reason };
+  return { outputs, cleaned, clean, reason, method, seconds, lamaError };
 }
 
 /** 从列表里均匀挑最多 count 个。 */
@@ -847,6 +896,8 @@ module.exports = {
   fillBox,
   blendBox,
   cleanBox,
+  lamaBox,
+  LAMA_CONTEXT,
   detectEpisodeBand,
   cleanKeyframe,
 };
