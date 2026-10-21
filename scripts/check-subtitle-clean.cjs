@@ -104,6 +104,11 @@ const font = FONTS.find((file) => fs.existsSync(file));
     const fakeModel = (mode) => async ({ image, mask, prompt, region, time }) => {
       calls.push({ mode, image: pngSize(image), mask: pngSize(mask), prompt, time });
       if (mode === 'fail') throw new Error('作图接口 500');
+      if (mode === 'lazy') {
+        // 模型什么都没改：把原来带字幕的那块原样送回来
+        const same = await sc.grabRaw(ffmpeg, subbed, time, dims);
+        return sc.encodeJpeg(ffmpeg, { width: region.side, height: region.side, data: cropOf(same, region) }, region.side, 2);
+      }
       const truth = await sc.grabRaw(ffmpeg, plain, time, dims);
       // moved：模型把画面改了（这里用反色当成一张不一样的图）
       const crop = mode === 'moved' ? Buffer.from(cropOf(truth, region, 60).map((v) => 255 - v)) : shiftBy(cropOf(truth, region), 6);
@@ -122,8 +127,11 @@ const font = FONTS.find((file) => fs.existsSync(file));
     for (const time of [1.5, 4.0, 6.8]) {
       const plainFrame = await frameOf(time, null);
       assert.equal(plainFrame.cleaned, false);
+      assert.equal(plainFrame.clean, false, '没配作图模型：这张还有字幕');
+      assert.equal(plainFrame.reason, 'noEraser');
       const result = await frameOf(time, fakeModel('ok'));
       assert.equal(result.cleaned, true, `${time}s 有字幕，要去`);
+      assert.equal(result.clean, true, '去完复查没字了');
       assert.deepEqual(jpegSize(result.bytes), { width: 320, height: 568 }, '和平常截的关键帧一样大');
       const before = await decode320(plainFrame.bytes);
       const after = await decode320(result.bytes);
@@ -141,17 +149,25 @@ const font = FONTS.find((file) => fs.existsSync(file));
     assert.ok(calls.every((call) => call.mask.width === 1024 && call.mask.height === 1024), '遮罩和图一样大');
     assert.ok(calls[0].prompt.includes('只去掉') && calls[0].prompt.includes('保持完全不变'));
 
-    // 4) 作图结果对不齐（模型挪了画面）、作图失败：保留原图，不贴半成品
-    for (const mode of ['moved', 'fail']) {
+    // 4) 作图结果对不齐（模型挪了画面）、去完复查还有字、作图失败：保留原图，不贴半成品，标成不干净
+    for (const [mode, reason, tries] of [
+      ['moved', 'mismatch', 2],
+      ['lazy', 'residue', 2],
+      ['fail', 'failed', 1],
+    ]) {
+      calls.length = 0;
       const result = await frameOf(4.0, fakeModel(mode));
       assert.equal(result.cleaned, false, mode);
-      assert.equal(result.reason, mode === 'moved' ? 'mismatch' : 'failed');
+      assert.equal(result.clean, false, `${mode}：这张还有字幕`);
+      assert.equal(result.reason, reason);
+      assert.equal(calls.length, tries, `${mode}：不干净就重新去一次，最多两次`);
       assert.ok(result.bytes.equals((await frameOf(4.0, null)).bytes), `${mode}：和原图一模一样`);
     }
     // 这一刻没字幕：不调作图模型
     calls.length = 0;
     const quiet = await frameOf(2.9, fakeModel('ok'));
     assert.equal(quiet.reason, 'none');
+    assert.equal(quiet.clean, true, '这一刻本来就没字幕');
     assert.equal(calls.length, 0, '没字幕的那一帧不花钱调作图');
 
     // 4b) 满画面花纹（草地、树叶、噪点）：横带里看着也「像字」，但上方对照那条一样，不当字幕

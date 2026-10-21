@@ -162,6 +162,7 @@ const radiusFor = (width) => Math.max(2, Math.round((width / WORK_WIDTH) * 3));
  * - 样本分「正在说话」和「没人说话」两组：字幕只在说话时出现，画面里本来就有的字（招牌、屏幕、静止的标识）
  *   两组都有，所以一行的分数 = 说话组里有字的比例 − 没说话组里有字的比例。
  * - 字幕每句不一样，画面里的字一直是那几个：说话组各帧在这条里的「字形」几乎一样的，不算字幕。
+ * - 字幕左右居中：字的左右中点不在画面正中附近的，不算字幕。
  * 分数够高的行连成一条（两行字幕中间的行距也并进来）。返回 { y0, y1, height, frameHeight }，找不到返回 null。
  */
 function findSubtitleBand(spokenImages, silentImages = []) {
@@ -217,13 +218,31 @@ function findSubtitleBand(spokenImages, silentImages = []) {
       }
     return pairs ? total / pairs : 0;
   };
+  // 字幕是左右居中的：说话组各帧这条里字的左右中点都在画面正中附近（画面里的字多半靠一边）
+  const centered = (group) => {
+    const centers = [];
+    for (const { mask } of spokenScans) {
+      let minX = W;
+      let maxX = -1;
+      for (let y = group.y0; y <= group.y1; y++)
+        for (let x = 0; x < W; x++)
+          if (mask[y * W + x]) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+          }
+      if (maxX - minX > W * 0.08) centers.push((minX + maxX) / 2 / W);
+    }
+    if (!centers.length) return false;
+    centers.sort((a, b) => a - b);
+    return Math.abs(centers[Math.floor(centers.length / 2)] - 0.5) <= 0.08;
+  };
   const candidates = groups
     .filter((group) => {
       const height = group.y1 - group.y0 + 1;
-      return height >= H * 0.012 && height <= H * 0.2;
+      return height >= H * 0.012 && height <= H * 0.1; // 字幕一两行，最多占画面高的一成
     })
     .sort((a, b) => b.score - a.score);
-  const best = candidates.find((group) => sameShape(group) < 0.6);
+  const best = candidates.find((group) => centered(group) && sameShape(group) < 0.6);
   if (!best) return null;
   return { y0: best.y0, y1: best.y1, height: best.y1 - best.y0 + 1, frameHeight: H };
 }
@@ -438,43 +457,58 @@ const ERASE_PROMPT = [
 const SEND_SIZE = 1024;
 
 /**
- * 抽一张关键帧并去字幕。erase({ image, mask, prompt, signal }) → 图片字节（作图模型）；不给 erase 就不去字幕。
- * 返回 { bytes, cleaned, reason }：reason 是没去成的原因（'none' 这一刻没字幕 / 'mismatch' 对不齐 / 'failed' 调用失败）。
+ * 抽一张关键帧并去字幕。erase({ image, mask, prompt, signal }) → 图片字节（作图模型）；不给 erase 就只检查不去。
+ * 去完再在字幕那一条里找一次字：还有就重新去一次；两次都不干净就保留原图。
+ * 返回 { bytes, cleaned, clean, reason }：
+ *   cleaned 去过字幕；clean 最后这张图里没检测到字幕；
+ *   reason 没去成的原因：'none' 这一刻没字幕 / 'noEraser' 没配作图模型 / 'mismatch' 对不齐 / 'residue' 去完还有字 / 'failed' 调用失败。
  */
 async function aiCleanFrame({ ffmpeg, inputPath, time, band, dims, outWidth, quality, erase, signal }) {
-  const image = await grabRaw(ffmpeg, inputPath, time, dims, signal);
-  const cover = erase ? subtitleCover(image, band) : null;
+  const original = await grabRaw(ffmpeg, inputPath, time, dims, signal);
+  const cover = subtitleCover(original, band);
+  let image = original;
   let cleaned = false;
-  let reason = cover ? '' : 'none';
-  if (cover) {
-    const region = squareAround(cover, image.width, image.height);
+  let reason = cover ? (erase ? '' : 'noEraser') : 'none';
+  if (cover && erase) {
+    const region = squareAround(cover, original.width, original.height);
+    const crop = cropRgb(original, region);
+    const maskRgba = Buffer.alloc(region.side * region.side * 4, 255);
+    const editArea = dilate(
+      Uint8Array.from({ length: region.side * region.side }, (_, p) => cover[(region.top + Math.floor(p / region.side)) * original.width + region.left + (p % region.side)]),
+      region.side,
+      region.side,
+      3,
+    );
+    for (let p = 0; p < editArea.length; p++) if (editArea[p]) maskRgba[p * 4 + 3] = 0; // 透明 = 要改
     try {
-      const crop = cropRgb(image, region);
-      const maskRgba = Buffer.alloc(region.side * region.side * 4, 255);
-      const editArea = dilate(
-        Uint8Array.from({ length: region.side * region.side }, (_, p) => cover[(region.top + Math.floor(p / region.side)) * image.width + region.left + (p % region.side)]),
-        region.side,
-        region.side,
-        3,
-      );
-      for (let p = 0; p < editArea.length; p++) if (editArea[p]) maskRgba[p * 4 + 3] = 0; // 透明 = 要改
       const [png, mask] = await Promise.all([
         encodePng(ffmpeg, crop, region.side, region.side, 'rgb24', SEND_SIZE, signal),
         encodePng(ffmpeg, maskRgba, region.side, region.side, 'rgba', SEND_SIZE, signal),
       ]);
-      const result = await erase({ image: png, mask, prompt: ERASE_PROMPT, signal, region, time });
-      const ai = await decodeRaw(ffmpeg, result, region.side, region.side, signal);
-      cleaned = pasteBack(image, cover, region, ai);
-      if (!cleaned) reason = 'mismatch';
+      for (let attempt = 1; attempt <= 2 && !cleaned; attempt++) {
+        const result = await erase({ image: png, mask, prompt: ERASE_PROMPT, signal, region, time, attempt });
+        const ai = await decodeRaw(ffmpeg, result, region.side, region.side, signal);
+        const candidate = { ...original, data: Buffer.from(original.data) };
+        if (!pasteBack(candidate, cover, region, ai)) {
+          reason = 'mismatch';
+          continue;
+        }
+        if (subtitleCover(candidate, band)) {
+          reason = 'residue'; // 去完那一条里还找得到字
+          continue;
+        }
+        image = candidate;
+        cleaned = true;
+        reason = '';
+      }
     } catch (error) {
       if (signal?.aborted) throw error;
       reason = 'failed';
-      cleaned = false;
     }
   }
   const bytes = await encodeJpeg(ffmpeg, image, outWidth, quality, signal);
   if (bytes.length < 100) throw new Error('关键帧编码失败');
-  return { bytes, cleaned, reason };
+  return { bytes, cleaned, clean: !cover || cleaned, reason };
 }
 
 /** 从列表里均匀挑最多 count 个。 */

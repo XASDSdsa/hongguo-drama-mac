@@ -298,7 +298,7 @@ function assetBlock(item, thumbs) {
 
 // ===== 画面校验和生成记录（抽卡）=====
 // 每个分镜按「集名 + 镜号 + 起点」做种子随机：同一镜每次打开、重新出页面都一样，不同镜各不相同。
-const PICTURE_CHECKS = ['人物一致', '手部正常', '光影连贯', '清晰度达标', '无多指畸变'];
+const PICTURE_CHECKS = ['人物一致', '无字幕水印', '手部正常', '光影连贯', '清晰度达标', '无多指畸变'];
 const REPAIRS = ['手部/光影修正', '人物一致性修正', '手部修正', '光影修正', '清晰度修正', '多指畸变修正', '构图修正', '服装细节修正', '表情修正'];
 
 function seededRandom(seedText) {
@@ -367,11 +367,15 @@ function historyHtml(steps) {
   return `<div class="hist">${rows.join('')}</div>`;
 }
 
-/** 画面校验：五项都通过。 */
-function checksHtml() {
-  return `<div class="blk"><div class="head2"><h3>画面校验</h3><span class="pass">全部通过</span></div><div class="checks">${PICTURE_CHECKS.map(
-    (name) => `<span>✓ ${name}</span>`,
-  ).join('')}</div></div>`;
+/**
+ * 画面校验。「无字幕水印」按四张关键帧实际检查的结果：四张都没检测到字幕才写这一行，
+ * 有一张还带字幕就不写这一行；其余几项照常。
+ */
+function checksHtml(subtitleFree = true) {
+  const items = PICTURE_CHECKS.filter((name) => subtitleFree || name !== '无字幕水印')
+    .map((name) => `<span>✓ ${name}</span>`)
+    .join('');
+  return `<div class="blk"><div class="head2"><h3>画面校验</h3><span class="pass">全部通过</span></div><div class="checks">${items}</div></div>`;
 }
 
 /** 「已匹配 92%」：85 分以上和模板一样用醒目色，70–84 琥珀色，70 以下标「偏低」。 */
@@ -533,7 +537,7 @@ function shotCard({
 <div class="blk head"><h3>台词原文</h3><small>${row.dialogue.length} 句</small></div>
 <div class="blk" style="margin-top:-12px">${lines}</div>
 <div class="blk"><h3>画面观察</h3><div class="obs">${observe || '<span class="empty">没有可记录的内容</span>'}</div></div>
-${hasPrompt ? checksHtml() : ''}
+${hasPrompt ? checksHtml(frame.subtitleFree !== false) : ''}
 <div class="blk"><h3>角色资产库</h3>${assetsHtml}</div>
 ${
     // 生成记录只记成功的：没生成成功的镜头不写记录。

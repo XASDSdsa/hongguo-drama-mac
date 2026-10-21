@@ -507,10 +507,15 @@ async function main() {
     assert.match(html, /<h3>小说原文<\/h3><span class="match hi"[^>]*>已匹配 9[789]\.\d%<\/span>/);
     assert.match(html, /小说原文里缺了这一镜的台词/);
     assert.match(html, /小说匹配 9[789]\.\d%/, '段落标题显示平均匹配度');
-    // 画面校验：五项都通过；生成记录（抽卡）：v1 起、终稿在最后、时间从早到晚，同一镜每次一样。
+    // 画面校验：六项（无字幕水印按实际检查）；生成记录（抽卡）：v1 起、终稿在最后、时间从早到晚，同一镜每次一样。
     assert.match(html, /<h3>画面校验<\/h3><span class="pass">全部通过<\/span>/);
-    for (const name of ['人物一致', '手部正常', '光影连贯', '清晰度达标', '无多指畸变']) assert.ok(html.includes(`✓ ${name}`), name);
-    assert.ok(!html.includes('字幕水印'), '视频带字幕：不写无字幕水印');
+    for (const name of ['人物一致', '无字幕水印', '手部正常', '光影连贯', '清晰度达标', '无多指畸变']) assert.ok(html.includes(`✓ ${name}`), name);
+    // 关键帧还带字幕：不写「无字幕水印」这一行，其余照常
+    const withSubs = renderEpisodeHtml({ title: '新剧', label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib,
+      segments: [{ ...segment, prompt: 'p', shotLines: ['a', 'b'], shots }], frames: { 1: { poster: '', grid: [null, null, null, null], subtitleFree: false } }, thumbs: {}, videoRel: '', size: { width: 720, height: 1280 }, generatedAt: new Date(0), allText: '' });
+    assert.equal((withSubs.match(/✓ 无字幕水印/g) || []).length, 1, '镜 1 带字幕不写这一行，镜 2 照常');
+    assert.equal((withSubs.match(/✓ 手部正常/g) || []).length, 2, '其余几项两镜都有');
+    assert.ok(!withSubs.includes('未通过') && !withSubs.includes('✗'));
     assert.ok(html.includes('终稿 <b class="ok">✓ 已采纳</b> · 一致性'));
     const { drawHistory } = require('../src/native/video-prompt/html');
     const at = new Date('2026-10-21T12:00:00+08:00');
