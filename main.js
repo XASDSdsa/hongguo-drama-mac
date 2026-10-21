@@ -3327,6 +3327,40 @@ async function dedupSpaceProblem(outputDir, inputs) {
   return `输出位置所在的磁盘只剩 ${gb(free)} GB，这次处理大约需要 ${gb(need)} GB。请先清理磁盘，或在设置里换一个空间更大的输出位置`;
 }
 
+// ===== 每部剧最近一次去重的记录（管理剧集「去重后」那一块显示用）=====
+// 记下原剧第几集到第几集、多少集参与去重、生成了第几集到第几集、当时的参数。存在软件数据目录，不放进剧文件夹。
+let dedupRecordCache = null;
+function dedupRecordFile() {
+  return path.join(app.getPath('userData'), 'library-dedup-records.json');
+}
+function dedupRecords() {
+  if (dedupRecordCache) return dedupRecordCache;
+  try {
+    dedupRecordCache = JSON.parse(fs.readFileSync(dedupRecordFile(), 'utf8')) || {};
+  } catch (_) {
+    dedupRecordCache = {};
+  }
+  return dedupRecordCache;
+}
+function libraryDedupRecord(dir) {
+  return dedupRecords()[libraryActivity.dirKey(dir)] || null;
+}
+function saveLibraryDedupRecord(dir, record) {
+  const all = dedupRecords();
+  all[libraryActivity.dirKey(dir)] = record;
+  // 只留最近 200 部剧的记录。
+  const keys = Object.keys(all).sort((a, b) => (all[b]?.at || 0) - (all[a]?.at || 0));
+  for (const key of keys.slice(200)) delete all[key];
+  try {
+    const file = dedupRecordFile();
+    const temp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(all));
+    fs.renameSync(temp, file);
+  } catch (error) {
+    console.warn('[Dedup] 去重记录保存失败:', error?.message || error);
+  }
+}
+
 async function planAndQueueResplit({
   dir,
   files,
@@ -3459,6 +3493,24 @@ async function planAndQueueResplit({
     })),
   });
   const finals = plan.pieces.map((piece) => piece.finalDuration);
+  if (result?.success !== false) {
+    const indexes = ordered.map((item) => item.index).filter((index) => index !== null);
+    const { jobs: _jobs, encoder: _encoder, ...keptOpts } = options;
+    saveLibraryDedupRecord(dir, {
+      at: Date.now(),
+      title: seriesName,
+      sourceFrom: indexes.length ? Math.min(...indexes) : null,
+      sourceTo: indexes.length ? Math.max(...indexes) : null,
+      sourceCount: ordered.length,
+      resultFrom: plan.pieces[0].number,
+      resultTo: plan.pieces[plan.pieces.length - 1].number,
+      resultCount: plan.pieces.length,
+      minSeconds: Math.min(...finals),
+      maxSeconds: Math.max(...finals),
+      opts: keptOpts,
+      split: splitOptions,
+    });
+  }
   return {
     ...result,
     warnings: plan.warnings,
@@ -3745,6 +3797,8 @@ function libraryEpisodeDetail(dir) {
     outputDir: path.join(folder, '去重'),
     // 「去重」里已有多少集成品：再次去重会把它们全部换掉，界面要据此提醒。
     outputCount: libraryDedupOutputs(folder).length,
+    // 最近一次去重：原剧第几集到第几集、生成了多少集、当时的参数。
+    lastDedup: libraryDedupRecord(folder),
     episodes,
     missing: missing.map((item) => ({
       ...item,

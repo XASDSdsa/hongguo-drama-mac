@@ -161,6 +161,49 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
   );
 }
 
+/** 「去重处理后」：最近一次去重用了原剧第几集到第几集、多少集参与去重、生成了多少集。 */
+function DedupResult({ record, outputCount, running }) {
+  const done = running.reduce((n, batch) => n + (batch.done || 0), 0);
+  const planned = running.reduce((n, batch) => n + (batch.total || 0), 0);
+  if (!record && !outputCount)
+    return (
+      <p className="dedup-result-empty">还没有去重。勾选上面的「视频去重」开始处理后，这里显示去重的范围和结果。</p>
+    );
+  const range = (from, to) =>
+    from != null && to != null ? (from === to ? `第 ${from} 集` : `第 ${from}–${to} 集`) : '—';
+  const tiles = record
+    ? [
+        ['原剧范围', range(record.sourceFrom, record.sourceTo)],
+        ['已去重', `${record.sourceCount} 集`, '原剧参与去重的集数'],
+        [
+          '结果',
+          `${record.resultCount} 集`,
+          `${range(record.resultFrom, record.resultTo)} · 每集 ${Math.round(record.minSeconds)}–${Math.round(record.maxSeconds)} 秒`,
+        ],
+        [
+          '「去重」文件夹',
+          planned ? `${done}/${planned} 集` : `${outputCount} 集`,
+          planned
+            ? '正在去重'
+            : outputCount < record.resultCount
+              ? `比结果少 ${record.resultCount - outputCount} 集（没做完或被删了）`
+              : '都已生成',
+        ],
+      ]
+    : [['「去重」文件夹', `${outputCount} 集`, '以前的版本做的，没有记录范围和参数']];
+  return (
+    <div className="dedup-result">
+      {tiles.map(([label, value, hint]) => (
+        <div key={label} className="dedup-result-tile">
+          <span>{label}</span>
+          <b>{value}</b>
+          {hint && <em>{hint}</em>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、AI 发布素材、要做的处理（去重、剪映草稿）和进度日志。 */
 export default function SeriesDetail({ folder, active = true }) {
   const [detail, setDetail] = useState(null);
@@ -183,7 +226,8 @@ export default function SeriesDetail({ folder, active = true }) {
       ? saved.draftNums.map(String)
       : defaultDraftNums(saved.split?.start_number),
   );
-  const [showParams, setShowParams] = useState(false);
+  const [showParams, setShowParams] = useState(false); // 去重参数弹窗
+  const [showSaved, setShowSaved] = useState(false); // 上次处理参数弹窗（只看）
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState('');
   const [decision, setDecision] = useState(null);
@@ -196,7 +240,6 @@ export default function SeriesDetail({ folder, active = true }) {
   );
   const [publish, setPublish] = useState(null); // AI 发布素材的最新结果（新海报、新剧名）
   const requestId = useRef(0);
-  const paramsRef = useRef(null);
   const progressRef = useRef(null);
   const reloadTimer = useRef(null);
   const detailRef = useRef(null);
@@ -269,6 +312,7 @@ export default function SeriesDetail({ folder, active = true }) {
             missing: result.missing,
             coverUrl: result.coverUrl,
             outputCount: result.outputCount,
+            lastDedup: result.lastDedup,
           }
         : previous,
     );
@@ -326,9 +370,6 @@ export default function SeriesDetail({ folder, active = true }) {
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
   }, [pageSize]);
-  useEffect(() => {
-    if (showParams) paramsRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-  }, [showParams]);
 
   const resetParams = async () => {
     const defaults = await window.electronAPI.quchongDefaults?.().catch(() => null);
@@ -458,6 +499,16 @@ export default function SeriesDetail({ folder, active = true }) {
     await refreshActivity().catch(() => {});
     if (result?.success) progressRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   };
+
+  // 参数弹窗：Esc 关闭，焦点留在弹窗里。
+  useDialogKeyboard(
+    active && (showParams || showSaved),
+    () => {
+      setShowParams(false);
+      setShowSaved(false);
+    },
+    '.lib-params-dialog',
+  );
 
   // 强提示窗打开时，键盘焦点和 Esc 都归它。
   useDialogKeyboard(
@@ -721,8 +772,8 @@ export default function SeriesDetail({ folder, active = true }) {
             />
           </section>
 
-          <section className="proc-panel" aria-label="处理">
-            <h3>处理</h3>
+          <section className="proc-panel" aria-label="处理整部">
+            <h3>处理整部</h3>
 
             <div className="proc-item">
               <div className="proc-line">
@@ -735,14 +786,16 @@ export default function SeriesDetail({ folder, active = true }) {
                   />
                   <b>视频去重</b>
                 </label>
-                {dedupOn && (
-                  <span className="proc-summary">{estimateText || `每集 ${split.min_len}–${split.max_len} 秒`}</span>
-                )}
-                {dedupOn && (
-                  <button className="btn btn-sm proc-more" onClick={() => setShowParams((value) => !value)}>
-                    {showParams ? '收起参数' : '参数'}
-                  </button>
-                )}
+                <span className="proc-summary">
+                  {dedupOn
+                    ? `${selectedCount === episodes.length ? `整部 ${selectedCount} 集` : `前 ${selectedCount} 集`} · ${
+                        estimateText || `每集 ${split.min_len}–${split.max_len} 秒`
+                      }`
+                    : '不去重：直接用「去重」里已有的成品做下面的剪映草稿 / 分镜工程图'}
+                </span>
+                <button className="btn btn-sm proc-more" onClick={() => setShowParams(true)} disabled={!opts}>
+                  去重参数
+                </button>
               </div>
               {dedupOn && (detail?.outputCount || 0) > 0 && (
                 <p className="proc-name is-missing">
@@ -757,25 +810,24 @@ export default function SeriesDetail({ folder, active = true }) {
                     : '先在上面「AI 发布素材」里选定新剧名，成品会用新剧名命名'}
                 </p>
               )}
-              {dedupOn && showParams && opts && (
-                <div ref={paramsRef} className="lib-params-card">
-                  <DedupParams
-                    opts={opts}
-                    onChange={(k, v) => setOpts({ ...opts, [k]: v })}
-                    split={split}
-                    onSplitChange={(k, v) => {
-                      const next = k === 'start_number' ? Math.max(1, Math.floor(v) || 1) : v;
-                      // 草稿集号还是默认的连续 4 集时，跟着新集编号走；自己改过的不动。
-                      if (k === 'start_number' && draftNums.join() === defaultDraftNums(split.start_number).join())
-                        setDraftNums(defaultDraftNums(next));
-                      setSplit({ ...split, [k]: next });
-                    }}
-                    onReset={resetParams}
-                    disabled={submitting}
-                  />
-                </div>
+              {paramsInvalid && (
+                <p className="proc-name is-missing">
+                  去重参数需要调整：{rangeProblems(opts, split).join('；')}（点「去重参数」修改）
+                </p>
               )}
             </div>
+          </section>
+
+          <section className="proc-panel proc-after" aria-label="去重处理后">
+            <div className="proc-head">
+              <h3>去重处理后</h3>
+              {detail.lastDedup && (
+                <button className="btn btn-sm" onClick={() => setShowSaved(true)}>
+                  查看处理参数
+                </button>
+              )}
+            </div>
+            <DedupResult record={detail.lastDedup} outputCount={detail.outputCount || 0} running={activeBatches} />
 
             <div className="proc-item">
               <div className="proc-line">
@@ -859,11 +911,6 @@ export default function SeriesDetail({ folder, active = true }) {
             <div className="proc-foot">
               <div className="proc-foot-info">
                 {busyText && <div className="lib-status">{busyText}</div>}
-                {!busyText && paramsInvalid && (
-                  <div className="lib-notice">
-                    去重参数需要调整：{rangeProblems(opts, split).join('；')}（点「参数」修改）
-                  </div>
-                )}
                 {notice && <div className="lib-notice lib-notice-lines">{notice}</div>}
               </div>
               <button
@@ -888,6 +935,84 @@ export default function SeriesDetail({ folder, active = true }) {
             <SeriesProgress dir={detail.dir} activity={activity} onChanged={refreshActivity} />
           </div>
         </>
+      )}
+
+      {showParams && opts && (
+        <div className="lib-mask lib-mask-top" onClick={() => setShowParams(false)}>
+          <div
+            className="lib-confirm lib-params-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="去重参数"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="lib-params-dialog-head">
+              <h3>去重参数</h3>
+              <span>{estimateText || `每集 ${split.min_len}–${split.max_len} 秒`}</span>
+            </div>
+            <DedupParams
+              opts={opts}
+              onChange={(k, v) => setOpts({ ...opts, [k]: v })}
+              split={split}
+              onSplitChange={(k, v) => {
+                const next = k === 'start_number' ? Math.max(1, Math.floor(v) || 1) : v;
+                // 草稿集号还是默认的连续 4 集时，跟着新集编号走；自己改过的不动。
+                if (k === 'start_number' && draftNums.join() === defaultDraftNums(split.start_number).join())
+                  setDraftNums(defaultDraftNums(next));
+                setSplit({ ...split, [k]: next });
+              }}
+              onReset={resetParams}
+              disabled={submitting}
+            />
+            <div className="lib-confirm-actions">
+              <button className="btn btn-primary" onClick={() => setShowParams(false)}>
+                完成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaved && detail?.lastDedup && (
+        <div className="lib-mask lib-mask-top" onClick={() => setShowSaved(false)}>
+          <div
+            className="lib-confirm lib-params-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="上次处理参数"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="lib-params-dialog-head">
+              <h3>上次处理参数</h3>
+              <span>{formatTime(detail.lastDedup.at)} 开始的那次去重（只读）</span>
+            </div>
+            <DedupParams
+              opts={{ ...(opts || {}), ...(detail.lastDedup.opts || {}) }}
+              onChange={() => {}}
+              split={{ ...DEFAULT_SPLIT, ...(detail.lastDedup.split || {}) }}
+              onSplitChange={() => {}}
+              disabled
+            />
+            <div className="lib-confirm-actions">
+              <button
+                className="btn"
+                disabled={submitting || !opts}
+                title="把这组参数填进这次的「去重参数」"
+                onClick={() => {
+                  const { jobs: _jobs, encoder: _encoder, ...keep } = detail.lastDedup.opts || {};
+                  setOpts({ ...opts, ...keep });
+                  setSplit({ ...DEFAULT_SPLIT, ...(detail.lastDedup.split || {}) });
+                  setShowSaved(false);
+                }}
+              >
+                用这组参数
+              </button>
+              <button className="btn btn-primary" onClick={() => setShowSaved(false)}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {preview && (

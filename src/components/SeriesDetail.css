@@ -341,6 +341,76 @@
   font-size: 15px;
   font-weight: 650;
 }
+/* 「去重处理后」：标题旁边是「查看处理参数」，下面是去重的范围和结果 */
+.proc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dedup-result {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 12px 0 2px;
+}
+.dedup-result-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border-radius: 10px;
+}
+.dedup-result-tile span {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.dedup-result-tile b {
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.dedup-result-tile em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.dedup-result-empty {
+  margin: 10px 0 4px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+.proc-after .dedup-result + .proc-item {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-muted);
+}
+.proc-after .dedup-result-empty + .proc-item {
+  margin-top: 6px;
+  border-top: 1px solid var(--border-muted);
+}
+
+/* 去重参数弹窗：参数多，比一般确认窗宽 */
+.lib-confirm.lib-params-dialog {
+  max-width: 760px;
+}
+.lib-params-dialog-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+}
+.lib-params-dialog-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.lib-params-dialog-head span {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 .proc-item {
   padding: 14px 0;
   border-bottom: 1px solid var(--border-muted);
@@ -555,4 +625,8 @@ button.lib-ep.is-missing:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.proc-panel > .proc-item:last-child {
+  padding-bottom: 2px;
+  border-bottom: 0;
 }
