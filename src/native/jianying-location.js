@@ -76,6 +76,59 @@ function pathsInJianyingConfig(userData, { maxFiles = 200 } = {}) {
   return found;
 }
 
+const WIN_DRIVES = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => `${letter}:\\`);
+
+/** Qt 配置文件里非 ASCII 字符写成 \x8349 这种：还原成中文。 */
+function decodeQtString(value) {
+  return String(value).replace(/\\x([0-9a-fA-F]{1,4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+/**
+ * 剪映自己记的「草稿位置」：User Data\Config\globalSetting 里的 currentCustomDraftPath=…（剪映「全局设置 → 草稿位置」）。
+ * 剪映只在这个文件夹里找草稿，所以 Windows 上草稿一定要放这里。读不到、文件夹不存在返回 null。
+ */
+function draftPathFromGlobalSetting(userData) {
+  try {
+    const file = path.join(userData, 'Config', 'globalSetting');
+    const match = /^\s*currentCustomDraftPath\s*=\s*(.+?)\s*$/m.exec(fs.readFileSync(file, 'utf8'));
+    if (!match) return null;
+    const value = decodeQtString(match[1].replace(/^"(.*)"$/, '$1')).trim();
+    if (!value || !isDir(value)) return null;
+    return { dir: path.resolve(value), time: fs.statSync(file).mtimeMs };
+  } catch (_) {
+    return null;
+  }
+}
+
+/** 剪映 User Data 可能在的地方：默认的 %LOCALAPPDATA%、各盘的 JianyingPro\User Data、设置里填的文件夹附近。 */
+function userDataCandidates({ platform = process.platform, env = process.env, home, drives = platform === 'win32' ? WIN_DRIVES : [], configured = '' } = {}) {
+  const dirs = new Set();
+  const fallback = defaultUserData({ platform, env, home });
+  if (fallback) dirs.add(fallback);
+  if (platform === 'win32')
+    for (const drive of drives) {
+      if (!isDir(drive)) continue;
+      for (const sub of ['JianyingPro', path.join('Program Files', 'JianyingPro'), path.join('Program Files (x86)', 'JianyingPro')])
+        dirs.add(path.join(drive, sub, 'User Data'));
+    }
+  if (configured) {
+    dirs.add(configured);
+    dirs.add(path.join(configured, 'User Data'));
+    dirs.add(path.dirname(configured));
+  }
+  return [...dirs].filter(isDir);
+}
+
+/** 剪映自己设的草稿位置（有好几个 User Data 时取配置最近改过的那个）。 */
+function jianyingOwnDraftRoot(options = {}) {
+  return (
+    userDataCandidates(options)
+      .map(draftPathFromGlobalSetting)
+      .filter(Boolean)
+      .sort((a, b) => b.time - a.time)[0]?.dir || null
+  );
+}
+
 /**
  * 可能是剪映草稿位置的文件夹，剪映最近用过的排前面。只返回里面真有 root_meta_info.json 的。
  */
@@ -83,7 +136,7 @@ function findJianyingDraftRoots({
   platform = process.platform,
   env = process.env,
   home = require('node:os').homedir(),
-  drives = platform === 'win32' ? 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => `${letter}:\\`) : [],
+  drives = platform === 'win32' ? WIN_DRIVES : [],
 } = {}) {
   const userData = defaultUserData({ platform, env, home });
   const candidates = new Set();
@@ -109,7 +162,15 @@ function findJianyingDraftRoots({
     .filter(
       (item, index, list) => list.findIndex((other) => other.dir.toLowerCase() === item.dir.toLowerCase()) === index,
     )
-    .sort((a, b) => b.time - a.time)
+    // Windows 新版剪映的草稿位置是「JianyingPro Drafts」这种文件夹；Projects\com.lveditor.draft 是老版本 / Mac 的，排后面
+    .sort((a, b) => {
+      if (platform === 'win32') {
+        const oldA = /com\.lveditor\.draft$/i.test(a.dir);
+        const oldB = /com\.lveditor\.draft$/i.test(b.dir);
+        if (oldA !== oldB) return oldA ? 1 : -1;
+      }
+      return b.time - a.time;
+    })
     .map((item) => item.dir);
 }
 
@@ -141,7 +202,19 @@ function resolveJianyingLocation({
 } = {}) {
   const userDataDefault = defaultUserData({ platform, env, home });
   const userData = userDataDefault && isDir(userDataDefault) ? userDataDefault : null;
-  const fromSetting = classifyConfiguredDir(String(configured || '').trim());
+  const typed = String(configured || '').trim();
+  if (platform === 'win32') {
+    // Windows：剪映只在它自己设的「草稿位置」里找草稿 → 先读剪映的配置；读不到再用设置里填的文件夹（原样，不往下找
+    // Projects\com.lveditor.draft）；都没有就找有 root_meta_info.json 的文件夹（JianyingPro Drafts 优先）。都不登记。
+    const own = jianyingOwnDraftRoot({ platform, env, home, ...(drives ? { drives } : {}), configured: typed });
+    if (own) return { draftRoot: own, userData: null, source: 'jianying' };
+    if (typed && isDir(typed)) return { draftRoot: path.resolve(typed), userData: null, source: 'setting' };
+    const found = findJianyingDraftRoots({ platform, env, home, ...(drives ? { drives } : {}) });
+    if (found.length) return { draftRoot: found[0], userData: null, source: 'detected' };
+    if (userData) return { draftRoot: path.join(userData, 'Projects', 'com.lveditor.draft'), userData: null, source: 'default' };
+    return { draftRoot: null, userData: null, source: '' };
+  }
+  const fromSetting = classifyConfiguredDir(typed);
   let draftRoot = fromSetting?.draftRoot || null;
   let registerUserData = fromSetting?.userData || null;
   let source = fromSetting ? 'setting' : '';
@@ -164,6 +237,8 @@ function resolveJianyingLocation({
 
 module.exports = {
   DRAFTS_DIR_NAME,
+  draftPathFromGlobalSetting,
+  jianyingOwnDraftRoot,
   defaultUserData,
   pathsInJianyingConfig,
   findJianyingDraftRoots,

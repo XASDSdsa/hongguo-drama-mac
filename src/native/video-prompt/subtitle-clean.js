@@ -3,9 +3,10 @@
 //
 // 1) 整集先抽十来帧（说话时刻和没人说话的空档对照），找出字幕所在的那一条横带（字幕位置一部剧基本固定）。
 //    找不到说明这一集没有烧进画面的字幕，什么都不做。
-// 2) 每张关键帧在这条横带里找出字幕笔画（亮色字 + 深色描边），截字幕附近的一块方图交给作图模型去字，
-//    回来的图只取字幕笔画那一点像素、边缘柔化后贴回原帧；其余像素一个不动。
-// 3) 作图模型没配、调用失败、或者回来的图和原图对不齐（模型改了构图）：保留原图（带字幕），不出半成品。
+// 2) 每张关键帧在这条横带里找出字幕（亮色字 + 深色描边 / 阴影），把整行字框起来，
+//    用框上面、框下面真实的画面纹理一块一块补上（从上往下补一份、从下往上补一份，按高度渐变混合）。
+// 3) 补完再找一次字：还找得到就算没去干净（画面校验里不写「无字幕水印」）。
+// 全部在本机算，不调接口、不花钱，一张一秒左右。
 
 const { spawn } = require('node:child_process');
 
@@ -331,33 +332,201 @@ function subtitleCover(image, band) {
   return dilate(kept, W, H, radius + 2);
 }
 
-// ===== 交给作图模型、贴回原帧 =====
+// ===== 本地补图：用旁边真实的纹理块补（不是从四周抹匀）=====
 
-/** 原始 RGB / RGBA → PNG（可以顺便缩放到 outSize×outSize）。 */
-function encodePng(ffmpeg, data, width, height, pixFmt, outSize, signal) {
-  const scale = outSize ? ['-vf', `scale=${outSize}:${outSize}:flags=lanczos`] : [];
-  return ffmpegBuffer(
-    ffmpeg,
-    ['-v', 'error', '-f', 'rawvideo', '-pix_fmt', pixFmt, '-s', `${width}x${height}`, '-i', 'pipe:0', ...scale, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'],
-    data,
-    signal,
-  );
+/**
+ * 样本块补图（Criminisi 一类做法的简化版）：从外往里，一块一块地补。每次在要补的地方周围（search 像素内）
+ * 找一块和它已知部分最像的、完全没被字盖住的真实画面（树皮、衣服、背景），把这块的像素抄过来。
+ * 找的时候稍微偏向近处的块，免得从远处抄来不相干的东西。补出来是真实纹理，不会是一团糊。原地修改，返回补了多少像素。
+ */
+function patchInpaint(image, mask, { patch = 7, search = 30, direction = 'both' } = {}) {
+  const { width: W, height: H, data } = image;
+  const half = patch >> 1;
+  const known = new Uint8Array(W * H);
+  let todo = 0;
+  let minX = W;
+  let maxX = -1;
+  let minY = H;
+  let maxY = -1;
+  for (let p = 0; p < W * H; p++) {
+    if (mask[p]) {
+      todo += 1;
+      const x = p % W;
+      const y = (p - x) / W;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    } else known[p] = 1;
+  }
+  if (!todo) return 0;
+  const total = todo;
+  // 上下要能够到框外面：竖着找的范围至少到框高的一半再多一点；横着按 search
+  const searchX = search;
+  const searchY = Math.max(search, Math.ceil((maxY - minY + 1) / 2) + half + 4);
+  // 能当样本的块：整块都在画面里、一个像素都没被字盖住（用原来的遮罩算）
+  const sx0 = Math.max(half, minX - searchX - half);
+  const sx1 = Math.min(W - 1 - half, maxX + searchX + half);
+  const sy0 = Math.max(half, minY - searchY - half);
+  const sy1 = Math.min(H - 1 - half, maxY + searchY + half);
+  const bw = sx1 - sx0 + 1 + patch;
+  const bh = sy1 - sy0 + 1 + patch;
+  const ox = sx0 - half;
+  const oy = sy0 - half;
+  const integral = new Int32Array((bw + 1) * (bh + 1));
+  for (let y = 0; y < bh; y++) {
+    let row = 0;
+    for (let x = 0; x < bw; x++) {
+      const gx = ox + x;
+      const gy = oy + y;
+      row += gx >= 0 && gy >= 0 && gx < W && gy < H && mask[gy * W + gx] ? 1 : 0;
+      integral[(y + 1) * (bw + 1) + x + 1] = integral[y * (bw + 1) + x + 1] + row;
+    }
+  }
+  const cleanSource = (cx, cy) => {
+    const x0 = cx - half - ox;
+    const y0 = cy - half - oy;
+    const x1 = x0 + patch;
+    const y1 = y0 + patch;
+    return integral[y1 * (bw + 1) + x1] - integral[y0 * (bw + 1) + x1] - integral[y1 * (bw + 1) + x0] + integral[y0 * (bw + 1) + x0] === 0;
+  };
+  const confidence = new Float32Array(W * H);
+  for (let p = 0; p < W * H; p++) if (known[p]) confidence[p] = 1;
+  // direction：both 四周往里；down 只从上往下长（这一点的正上方已知才补）；up 只从下往上长
+  const onFront = (p) => {
+    const x = p % W;
+    const y = (p - x) / W;
+    if (direction === 'down') return y > 0 && known[p - W] === 1;
+    if (direction === 'up') return y < H - 1 && known[p + W] === 1;
+    return (x > 0 && known[p - 1]) || (x < W - 1 && known[p + 1]) || (y > 0 && known[p - W]) || (y < H - 1 && known[p + W]);
+  };
+  while (todo > 0) {
+    const before = todo;
+    // 这一圈边上的点，按「周围已知的多不多」排：已知多的先补，补得准
+    const front = [];
+    for (let y = minY; y <= maxY; y++)
+      for (let x = minX; x <= maxX; x++) {
+        const p = y * W + x;
+        if (known[p] || !onFront(p)) continue;
+        let c = 0;
+        for (let dy = -half; dy <= half; dy++)
+          for (let dx = -half; dx <= half; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx >= 0 && ny >= 0 && nx < W && ny < H) c += confidence[ny * W + nx];
+          }
+        front.push({ p, c: c / (patch * patch) });
+      }
+    if (!front.length) break;
+    front.sort((a, b) => b.c - a.c);
+    for (const { p, c } of front) {
+      if (known[p]) continue;
+      const px = p % W;
+      const py = (p - px) / W;
+      // 找最像的样本块（只比目标块里已知的像素），近处的稍微占便宜
+      let best = Infinity;
+      let bx = -1;
+      let by = -1;
+      const qx0 = Math.max(sx0, px - searchX);
+      const qx1 = Math.min(sx1, px + searchX);
+      const qy0 = Math.max(sy0, py - searchY);
+      const qy1 = Math.min(sy1, py + searchY);
+      for (let qy = qy0; qy <= qy1; qy++)
+        for (let qx = qx0; qx <= qx1; qx++) {
+          if (!cleanSource(qx, qy)) continue;
+          let ssd = ((qx - px) * (qx - px) + (qy - py) * (qy - py)) * 2;
+          for (let dy = -half; dy <= half && ssd < best; dy++) {
+            const ty = py + dy;
+            if (ty < 0 || ty >= H) continue;
+            for (let dx = -half; dx <= half; dx++) {
+              const tx = px + dx;
+              if (tx < 0 || tx >= W) continue;
+              const t = ty * W + tx;
+              if (!known[t]) continue;
+              const q = ((qy + dy) * W + qx + dx) * 3;
+              const a = data[t * 3] - data[q];
+              const b = data[t * 3 + 1] - data[q + 1];
+              const d = data[t * 3 + 2] - data[q + 2];
+              ssd += a * a + b * b + d * d;
+            }
+          }
+          if (ssd < best) {
+            best = ssd;
+            bx = qx;
+            by = qy;
+          }
+        }
+      if (bx < 0) continue;
+      for (let dy = -half; dy <= half; dy++) {
+        const ty = py + dy;
+        if (ty < 0 || ty >= H) continue;
+        for (let dx = -half; dx <= half; dx++) {
+          const tx = px + dx;
+          if (tx < 0 || tx >= W) continue;
+          const t = ty * W + tx;
+          if (known[t]) continue;
+          const q = ((by + dy) * W + bx + dx) * 3;
+          data[t * 3] = data[q];
+          data[t * 3 + 1] = data[q + 1];
+          data[t * 3 + 2] = data[q + 2];
+          known[t] = 1;
+          confidence[t] = c;
+          todo -= 1;
+        }
+      }
+    }
+    if (todo === before) break; // 这一圈一个都没补上（附近找不到干净的样本块）：别再转了
+  }
+  // 万一还剩（画面边上、整片都被盖住）：剩下的用四周的颜色补上，不留原来的字
+  if (todo > 0) {
+    const rest = new Uint8Array(W * H);
+    for (let p = 0; p < W * H; p++) if (!known[p]) rest[p] = 1;
+    fillFromNeighbors(image, rest);
+  }
+  return total;
 }
 
-/** 任意图片字节 → width×height 的原始 RGB。 */
-async function decodeRaw(ffmpeg, bytes, width, height, signal) {
-  const data = await ffmpegBuffer(
-    ffmpeg,
-    ['-v', 'error', '-i', 'pipe:0', '-frames:v', '1', '-vf', `scale=${width}:${height}:flags=area`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
-    bytes,
-    signal,
-  );
-  if (data.length !== width * height * 3) throw new Error('作图结果尺寸不对');
-  return data;
+/** 从四周往里一圈圈用已知邻居的平均补满（只给样本块补不到的零星像素兜底）。 */
+function fillFromNeighbors(image, mask) {
+  const { width: W, height: H, data } = image;
+  const known = new Uint8Array(W * H);
+  let pending = [];
+  for (let p = 0; p < W * H; p++) {
+    if (mask[p]) pending.push(p);
+    else known[p] = 1;
+  }
+  while (pending.length) {
+    const ready = [];
+    const waiting = [];
+    for (const p of pending) {
+      const x = p % W;
+      const y = (p - x) / W;
+      let n = 0;
+      const sum = [0, 0, 0];
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || !known[ny * W + nx]) continue;
+        for (let c = 0; c < 3; c++) sum[c] += data[(ny * W + nx) * 3 + c];
+        n += 1;
+      }
+      if (n) ready.push([p, sum.map((v) => v / n)]);
+      else waiting.push(p);
+    }
+    if (!ready.length) break;
+    for (const [p, value] of ready) {
+      for (let c = 0; c < 3; c++) data[p * 3 + c] = value[c];
+      known[p] = 1;
+    }
+    pending = waiting;
+  }
 }
 
-/** 截字幕附近的一块方图：边长 = 图的短边，字幕在方图中间（靠边时贴边）。 */
-function squareAround(cover, W, H) {
+/**
+ * 字幕整行的框：有字的那几行 + 字的左右范围，再往外扩一点（上下各 4 像素加两成行高，左右各半个字宽），
+ * 两头整个字都在白衣服上认不出来的也盖得住。
+ */
+function lineBox(cover, W, H, image = null) {
   let minX = W;
   let maxX = -1;
   let minY = H;
@@ -371,146 +540,240 @@ function squareAround(cover, W, H) {
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
-  const side = Math.min(W, H);
-  const left = Math.max(0, Math.min(W - side, Math.round((minX + maxX) / 2 - side / 2)));
-  const top = Math.max(0, Math.min(H - side, Math.round((minY + maxY) / 2 - side / 2)));
-  return { left, top, side };
-}
-
-function cropRgb(image, { left, top, side }) {
-  const out = Buffer.alloc(side * side * 3);
-  for (let y = 0; y < side; y++) image.data.copy(out, y * side * 3, ((top + y) * image.width + left) * 3, ((top + y) * image.width + left + side) * 3);
-  return out;
-}
-
-/** 3×3 盒式模糊 passes 遍，把 0/1 的盖住区域变成边缘柔和的 0–1。 */
-function softAlpha(cover, W, H, passes) {
-  let alpha = Float32Array.from(cover);
-  for (let pass = 0; pass < passes; pass++) {
-    const next = new Float32Array(W * H);
-    for (let y = 0; y < H; y++)
-      for (let x = 0; x < W; x++) {
-        let sum = 0;
-        let n = 0;
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = x + dx;
-            const ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-            sum += alpha[ny * W + nx];
-            n += 1;
-          }
-        next[y * W + x] = sum / n;
+  if (maxX < 0) return null;
+  const lineHeight = maxY - minY + 1;
+  const padY = 4 + Math.round(lineHeight * 0.2);
+  const padX = Math.round(Math.min(lineHeight, 60) * 0.5);
+  const box = new Uint8Array(W * H);
+  const x0 = Math.max(0, minX - padX);
+  const x1 = Math.min(W - 1, maxX + padX);
+  let y0 = Math.max(0, minY - padY);
+  let y1 = Math.min(H - 1, maxY + padY);
+  if (image) {
+    // 往上下扩的时候碰到一条明显的横边（桌沿、画框、衣服下摆）就停在它前面，别把它框进来、补的时候抄成条纹
+    const { data } = image;
+    const luma = (x, y) => 0.299 * data[(y * W + x) * 3] + 0.587 * data[(y * W + x) * 3 + 1] + 0.114 * data[(y * W + x) * 3 + 2];
+    const edgeAt = (y) => {
+      if (y < 1 || y > H - 2) return 0;
+      let sum = 0;
+      for (let x = x0; x <= x1; x++) sum += Math.abs(luma(x, y + 1) - luma(x, y - 1));
+      return sum / (x1 - x0 + 1);
+    };
+    const near = [];
+    for (let y = Math.max(1, minY - padY * 3); y <= Math.min(H - 2, maxY + padY * 3); y++) if (y < minY - 1 || y > maxY + 1) near.push(edgeAt(y));
+    near.sort((a, b) => a - b);
+    const typical = near.length ? near[Math.floor(near.length / 2)] : 0;
+    const strong = Math.max(10, typical * 4);
+    for (let y = minY - 2; y >= minY - padY && y >= 1; y--)
+      if (edgeAt(y) > strong) {
+        y0 = Math.min(minY - 2, y + 2);
+        break;
       }
-    alpha = next;
+    for (let y = maxY + 2; y <= maxY + padY && y <= H - 2; y++)
+      if (edgeAt(y) > strong) {
+        y1 = Math.max(maxY + 2, y - 2);
+        break;
+      }
   }
-  for (let p = 0; p < W * H; p++) if (cover[p]) alpha[p] = 1; // 字本身一定全换掉
-  return alpha;
+  for (let y = y0; y <= y1; y++) box.fill(1, y * W + x0, y * W + x1 + 1);
+  return { box, x0, x1, y0, y1 };
 }
 
 /**
- * 把作图模型回来的方图贴回原帧：只换字幕笔画那一点（边缘柔化），其余像素不动。
- * 先用字幕四周一圈（没被字盖住的地方）对齐两张图的整体颜色；这一圈差得太多说明模型改了构图，返回 false 不贴。
+ * 补字幕整行的框：从上往下补一份、从下往上补一份，再按高度渐变混在一起——框的上半部分接着框上面的画面，
+ * 下半部分接着框下面的画面，中间慢慢过渡，不会有上下两边碰头的那条横线。原地修改。
  */
-function pasteBack(image, cover, region, ai) {
+function fillBox(image, lb) {
   const { width: W, data } = image;
-  const { left, top, side } = region;
-  const local = new Uint8Array(side * side);
-  for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) local[y * side + x] = cover[(top + y) * W + left + x];
-  const outer = dilate(local, side, side, 6);
-  const inner = dilate(local, side, side, 2);
-  const sum = [0, 0, 0];
-  let count = 0;
-  for (let p = 0; p < side * side; p++) {
-    if (!outer[p] || inner[p]) continue;
-    const q = ((top + Math.floor(p / side)) * W + left + (p % side)) * 3;
-    for (let c = 0; c < 3; c++) sum[c] += ai[p * 3 + c] - data[q + c];
-    count += 1;
-  }
-  if (count < 50) return false;
-  const offset = sum.map((v) => v / count);
-  let mad = 0;
-  for (let p = 0; p < side * side; p++) {
-    if (!outer[p] || inner[p]) continue;
-    const q = ((top + Math.floor(p / side)) * W + left + (p % side)) * 3;
-    for (let c = 0; c < 3; c++) mad += Math.abs(ai[p * 3 + c] - offset[c] - data[q + c]);
-  }
-  if (mad / count / 3 > 14) return false;
-  const alpha = softAlpha(dilate(local, side, side, 1), side, side, 2);
-  for (let p = 0; p < side * side; p++) {
-    const a = alpha[p];
-    if (a <= 0.003) continue;
-    const q = ((top + Math.floor(p / side)) * W + left + (p % side)) * 3;
-    for (let c = 0; c < 3; c++) {
-      const value = Math.max(0, Math.min(255, ai[p * 3 + c] - offset[c]));
-      data[q + c] = Math.round(data[q + c] * (1 - a) + value * a);
+  const down = { ...image, data: Buffer.from(data) };
+  const up = { ...image, data: Buffer.from(data) };
+  patchInpaint(down, lb.box, { patch: 7, search: 32, direction: 'down' });
+  patchInpaint(up, lb.box, { patch: 7, search: 32, direction: 'up' });
+  const h = lb.y1 - lb.y0;
+  for (let y = lb.y0; y <= lb.y1; y++) {
+    const t0 = h ? (y - lb.y0) / h : 0.5;
+    const t = t0 * t0 * (3 - 2 * t0); // 两头平缓
+    for (let x = lb.x0; x <= lb.x1; x++) {
+      const i = (y * W + x) * 3;
+      for (let c = 0; c < 3; c++) data[i + c] = Math.round(down.data[i + c] * (1 - t) + up.data[i + c] * t);
     }
   }
-  return true;
 }
 
-const ERASE_PROMPT = [
-  '这是短剧画面里字幕附近的一块截图。',
-  '只去掉画面里烧进去的字幕文字（亮色的字和它的深色描边），把字后面被挡住的画面按周围的样子自然补全。',
-  '其他所有内容——人物、脸、手、衣服、背景、光线、颜色、清晰度、构图和位置——都保持完全不变，不要移动或重画任何东西，不要加任何文字、水印或新东西。',
-].join('\n');
-const SEND_SIZE = 1024;
+/**
+ * 补字幕整行的框（不抄纹理块）：每一列从框上沿的颜色渐变到框下沿的颜色（上下各取 3 行平均、左右稍微抹匀），
+ * 竖着的线条（领口、树干、门框）能接上，也不会把框边上的东西一块块抄进来变成一道道条纹；
+ * 再把框正上方、正下方原画面的细颗粒（减掉平滑后剩下的那点）按高度渐变叠回去，看着还是原片的质感，不是一块糊。原地修改。
+ */
+function blendBox(image, { x0, x1, y0, y1 }) {
+  const { width: W, height: H, data } = image;
+  const h = y1 - y0 + 1;
+  const w = x1 - x0 + 1;
+  const rows = 3;
+  const edge = (from, step) => {
+    const out = new Float32Array(w * 3);
+    for (let x = 0; x < w; x++)
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        let n = 0;
+        for (let k = 0; k < rows; k++) {
+          const y = from + step * k;
+          if (y < 0 || y >= H) continue;
+          sum += data[(y * W + x0 + x) * 3 + c];
+          n += 1;
+        }
+        out[x * 3 + c] = n ? sum / n : 128;
+      }
+    // 左右抹匀一点，免得一列一列的噪点变成竖条
+    const smooth = new Float32Array(w * 3);
+    for (let x = 0; x < w; x++)
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        let n = 0;
+        for (let k = -2; k <= 2; k++) {
+          const xx = x + k;
+          if (xx < 0 || xx >= w) continue;
+          sum += out[xx * 3 + c];
+          n += 1;
+        }
+        smooth[x * 3 + c] = sum / n;
+      }
+    return smooth;
+  };
+  const top = edge(y0 - 1, -1);
+  const bottom = edge(y1 + 1, 1);
+  // 细颗粒：从框正上方 / 正下方同样高的一块里取「原像素 − 3×3 平均」
+  const grain = (offset) => (x, y) => {
+    const yy = y + offset;
+    if (yy < 1 || yy >= H - 1) return [0, 0, 0];
+    const result = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = Math.max(0, Math.min(W - 1, x + dx));
+          sum += data[((yy + dy) * W + xx) * 3 + c];
+        }
+      result[c] = data[(yy * W + x) * 3 + c] - sum / 9;
+    }
+    // 颗粒只要细小的起伏：大的（某条边、某根线）不是颗粒，不往框里搬
+    if (Math.max(Math.abs(result[0]), Math.abs(result[1]), Math.abs(result[2])) > 18) return [0, 0, 0];
+    return result;
+  };
+  const above = grain(-h);
+  const below = grain(h);
+  const out = new Float32Array(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    const t0 = h > 1 ? y / (h - 1) : 0.5;
+    const t = t0 * t0 * (3 - 2 * t0);
+    for (let x = 0; x < w; x++) {
+      const ga = above(x0 + x, y0 + y);
+      const gb = below(x0 + x, y0 + y);
+      for (let c = 0; c < 3; c++) {
+        const base = top[x * 3 + c] * (1 - t) + bottom[x * 3 + c] * t;
+        out[(y * w + x) * 3 + c] = base + ga[c] * (1 - t) + gb[c] * t;
+      }
+    }
+  }
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      for (let c = 0; c < 3; c++) data[((y0 + y) * W + x0 + x) * 3 + c] = Math.max(0, Math.min(255, Math.round(out[(y * w + x) * 3 + c])));
+}
 
 /**
- * 抽一张关键帧并去字幕。erase({ image, mask, prompt, signal }) → 图片字节（作图模型）；不给 erase 就只检查不去。
- * 去完再在字幕那一条里找一次字：还有就重新去一次；两次都不干净就保留原图。
- * 返回 { bytes, cleaned, clean, reason }：
- *   cleaned 去过字幕；clean 最后这张图里没检测到字幕；
- *   reason 没去成的原因：'none' 这一刻没字幕 / 'noEraser' 没配作图模型 / 'mismatch' 对不齐 / 'residue' 去完还有字 / 'failed' 调用失败。
+ * 字幕整行的框：两种补法都做一遍——抄真实纹理块（fillBox，纹理最自然，但框边上紧挨着一条横线时会抄出一道道条纹）
+ * 和按列渐变加原片颗粒（blendBox，不会出条纹，但复杂纹理处会有竖着的抹痕）。
+ * 再按 24 像素宽一条一条比：哪种补出来的「横竖纹理多少」和框上下真实画面最接近就用哪种，条和条之间渐变着接。原地修改。
  */
-async function aiCleanFrame({ ffmpeg, inputPath, time, band, dims, outWidth, quality, erase, signal, retryWithinMs = 60000 }) {
+function cleanBox(image, lb) {
+  const { width: W, height: H, data } = image;
+  const patchFill = { ...image, data: Buffer.from(data) };
+  const blendFill = { ...image, data: Buffer.from(data) };
+  fillBox(patchFill, lb);
+  blendBox(blendFill, lb);
+  const h = lb.y1 - lb.y0 + 1;
+  const luma = (buf, x, y) => 0.299 * buf[(y * W + x) * 3] + 0.587 * buf[(y * W + x) * 3 + 1] + 0.114 * buf[(y * W + x) * 3 + 2];
+  // 一行（xa–xb）上下方向的平均起伏：一条横线在这里会特别大
+  const rowEdge = (buf, xa, xb, y) => {
+    if (y < 1 || y > H - 2) return 0;
+    let sum = 0;
+    // 和上一行、下一行各比一次取大的：一像素宽的细条纹（上下两行颜色一样）也量得出来
+    for (let x = xa; x <= xb; x++) {
+      const here = luma(buf, x, y);
+      sum += Math.max(Math.abs(luma(buf, x, y + 1) - here), Math.abs(here - luma(buf, x, y - 1)));
+    }
+    return sum / (xb - xa + 1);
+  };
+  const STRIP = 24;
+  const choice = [];
+  for (let xa = lb.x0; xa <= lb.x1; xa += STRIP) {
+    const xb = Math.min(lb.x1, xa + STRIP - 1);
+    // 框上下真实画面每一行的起伏取中位数（上面紧挨着一条横边也不会把它带偏）
+    const context = [];
+    for (let y = lb.y0 - h; y <= lb.y0 - 2; y++) context.push(rowEdge(data, xa, xb, y));
+    for (let y = lb.y1 + 2; y <= lb.y1 + h; y++) context.push(rowEdge(data, xa, xb, y));
+    context.sort((p, q) => p - q);
+    const typical = context.length ? context[Math.floor(context.length / 2)] : 0;
+    // 抄纹理块补出来的这一条里，起伏特别大（比四周平常的大 4 倍以上）的行有几行：三行以上就是抄出了条纹，这一条改用渐变
+    let striped = 0;
+    for (let y = lb.y0; y <= lb.y1; y++) if (rowEdge(patchFill.data, xa, xb, y) > Math.max(12, typical * 4)) striped += 1;
+    choice.push(striped >= 3 ? 0 : 1); // 1 = 抄纹理块
+  }
+  // 每一列用抄纹理块的比例：条中间按这一条的选择，靠近相邻条的 8 像素渐变过去
+  for (let x = lb.x0; x <= lb.x1; x++) {
+    const k = Math.min(choice.length - 1, Math.floor((x - lb.x0) / STRIP));
+    const into = (x - lb.x0) % STRIP;
+    let weight = choice[k];
+    if (into < 8 && k > 0) weight = choice[k - 1] + (choice[k] - choice[k - 1]) * ((into + 0.5) / 8);
+    for (let y = lb.y0; y <= lb.y1; y++) {
+      const i = (y * W + x) * 3;
+      for (let c = 0; c < 3; c++) data[i + c] = Math.round(patchFill.data[i + c] * weight + blendFill.data[i + c] * (1 - weight));
+    }
+  }
+  return choice;
+}
+
+/** 任意图片字节 → width×height 的原始 RGB。 */
+async function decodeRaw(ffmpeg, bytes, width, height, signal) {
+  const data = await ffmpegBuffer(
+    ffmpeg,
+    ['-v', 'error', '-i', 'pipe:0', '-frames:v', '1', '-vf', `scale=${width}:${height}:flags=area`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+    bytes,
+    signal,
+  );
+  if (data.length !== width * height * 3) throw new Error('图片尺寸不对');
+  return data;
+}
+
+/**
+ * 抽一张关键帧并去字幕，按 sizes（[{ width, quality }]）各出一张 JPEG（四宫格用 320 宽；起幅那张顺便出 560 宽给视频首帧）。
+ * 返回 { outputs: [字节…], cleaned, clean, reason }：
+ *   cleaned 补过字幕；clean 最后这张图里检测不到字幕；reason：'none' 这一刻没字幕 / 'residue' 补完还检测到字。
+ */
+async function cleanKeyframe({ ffmpeg, inputPath, time, band, dims, sizes, signal }) {
   const original = await grabRaw(ffmpeg, inputPath, time, dims, signal);
   const cover = subtitleCover(original, band);
   let image = original;
   let cleaned = false;
-  let reason = cover ? (erase ? '' : 'noEraser') : 'none';
-  if (cover && erase) {
-    const region = squareAround(cover, original.width, original.height);
-    const crop = cropRgb(original, region);
-    const maskRgba = Buffer.alloc(region.side * region.side * 4, 255);
-    const editArea = dilate(
-      Uint8Array.from({ length: region.side * region.side }, (_, p) => cover[(region.top + Math.floor(p / region.side)) * original.width + region.left + (p % region.side)]),
-      region.side,
-      region.side,
-      3,
-    );
-    for (let p = 0; p < editArea.length; p++) if (editArea[p]) maskRgba[p * 4 + 3] = 0; // 透明 = 要改
-    try {
-      const [png, mask] = await Promise.all([
-        encodePng(ffmpeg, crop, region.side, region.side, 'rgb24', SEND_SIZE, signal),
-        encodePng(ffmpeg, maskRgba, region.side, region.side, 'rgba', SEND_SIZE, signal),
-      ]);
-      const started = Date.now();
-      for (let attempt = 1; attempt <= 2 && !cleaned; attempt++) {
-        if (attempt > 1 && Date.now() - started > retryWithinMs) break; // 第一次就很慢，不再重试
-        const result = await erase({ image: png, mask, prompt: ERASE_PROMPT, signal, region, time, attempt });
-        const ai = await decodeRaw(ffmpeg, result, region.side, region.side, signal);
-        const candidate = { ...original, data: Buffer.from(original.data) };
-        if (!pasteBack(candidate, cover, region, ai)) {
-          reason = 'mismatch';
-          continue;
-        }
-        if (subtitleCover(candidate, band)) {
-          reason = 'residue'; // 去完那一条里还找得到字
-          continue;
-        }
-        image = candidate;
-        cleaned = true;
-        reason = '';
-      }
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      reason = 'failed';
+  let clean = true;
+  let reason = 'none';
+  if (cover) {
+    const lb = lineBox(cover, original.width, original.height, original);
+    if (lb) {
+      image = { ...original, data: Buffer.from(original.data) };
+      cleanBox(image, lb);
+      cleaned = true;
+      clean = !subtitleCover(image, band);
+      reason = clean ? '' : 'residue';
     }
   }
-  const bytes = await encodeJpeg(ffmpeg, image, outWidth, quality, signal);
-  if (bytes.length < 100) throw new Error('关键帧编码失败');
-  return { bytes, cleaned, clean: !cover || cleaned, reason };
+  const outputs = [];
+  for (const size of sizes) {
+    const bytes = await encodeJpeg(ffmpeg, image, size.width, size.quality, signal);
+    if (bytes.length < 100) throw new Error('关键帧编码失败');
+    outputs.push(bytes);
+  }
+  return { outputs, cleaned, clean, reason };
 }
 
 /** 从列表里均匀挑最多 count 个。 */
@@ -571,7 +834,6 @@ async function detectEpisodeBand({ ffmpeg, inputPath, rows, utterances, size, si
 
 module.exports = {
   WORK_WIDTH,
-  ERASE_PROMPT,
   workSize,
   grabRaw,
   encodeJpeg,
@@ -580,8 +842,11 @@ module.exports = {
   findSubtitleBand,
   sampleTimes,
   subtitleCover,
-  squareAround,
-  pasteBack,
+  patchInpaint,
+  lineBox,
+  fillBox,
+  blendBox,
+  cleanBox,
   detectEpisodeBand,
-  aiCleanFrame,
+  cleanKeyframe,
 };

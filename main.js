@@ -4881,17 +4881,6 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
       title: path.basename(path.resolve(job.dir)),
       maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
       shotLimit: Number.isFinite(Number(settings.video_prompt_shot_limit)) ? Number(settings.video_prompt_shot_limit) : 2,
-      // 四宫格关键帧去字幕：用设置里的作图模型（和重画海报同一个），没配就不去
-      eraseSubtitles: String(settings.ai_image_api_key || settings.ai_api_key || '').trim()
-        ? async ({ image, mask, prompt, signal: eraseSignal }) =>
-            (
-              await openai.editImage(
-                // 一张最多等 90 秒，画质中等（只取字幕那一点，够用，回得快）
-                { image, mask, prompt, size: '1024x1024', quality: 'medium', timeout: 90000, signal: eraseSignal },
-                settings,
-              )
-            ).buffer
-        : null,
       log,
       onProgress: (percent, message) => {
         item.detail = String(message || '').slice(0, 80);
@@ -5128,6 +5117,23 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
     key,
     'info',
     `剪映草稿：开始，共 ${files.length} 集（${DRAFT_MODE_TEXT[kind]}${withPrompts ? '，同时反推视频提示词' : ''}）${lanes > 1 ? `，同时做 ${lanes} 集、每集 ${job.threadsEach} 线程` : ''}`,
+    'side',
+  );
+  // 草稿放哪、为什么放那：每次开始都重新看一下剪映的设置（可能刚改过草稿位置）
+  jianyingLocationCache = null;
+  const where = jianyingLocation();
+  const WHERE_TEXT = {
+    jianying: '剪映「全局设置 → 草稿位置」',
+    setting: '软件设置里填的位置',
+    detected: '找到的剪映草稿文件夹',
+    default: '剪映默认位置',
+  };
+  libLog(
+    key,
+    'info',
+    where.draftRoot
+      ? `剪映草稿：放到 ${where.draftRoot}（${WHERE_TEXT[where.source] || where.source}）`
+      : '剪映草稿：没找到剪映的草稿位置，放到剧文件夹的「剪映草稿」里',
     'side',
   );
   libraryDraftEmit(job);

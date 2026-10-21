@@ -2,7 +2,7 @@
 // 分镜工程图四宫格关键帧去字幕：用真实 FFmpeg 造一段带字幕的视频和一段不带字幕的「原片」逐项对照。
 // - 字幕横带找对位置；没字幕的视频什么都不做
 // - 画面里本来就有的字（浅底深字的招牌）不当成字幕
-// - 作图模型的结果只贴回字幕笔画那一点：字幕那一条接近原片，别处逐像素不变；对不齐、失败就保留原图；没字幕不调作图
+// - 字幕那一行用旁边真实的画面补：补完接近没字幕的原片、检测不到字，框外面逐像素不变；这一刻没字幕不动
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -40,7 +40,7 @@ const font = FONTS.find((file) => fs.existsSync(file));
     ];
     // 背景：缓慢变化的渐变 + 噪点；一块白衣服似的亮块（深色边）；一块浅底深字的招牌（一直在画面里）
     const scene = [
-      `gradients=s=${W}x${H}:speed=0.015:n=4:seed=7,format=yuv420p,noise=alls=5:allf=t:all_seed=3`,
+      `gradients=s=${W}x${H}:speed=0.015:n=4:c0=0x3a5f8a:c1=0xb07a48:c2=0x5f8f4e:c3=0x7a4a6e:seed=7,format=yuv420p,noise=alls=5:allf=t:all_seed=3`,
       `drawbox=x=150:y=500:w=240:h=200:color=0xEEEEEE@1:t=fill,drawbox=x=150:y=500:w=240:h=200:color=0x202020@1:t=4`,
       `drawbox=x=60:y=330:w=420:h=70:color=0xF2F2F2@1:t=fill`,
       `drawtext=fontfile='${fontArg}':text='永和豆浆 全天营业 欢迎光临':fontsize=30:fontcolor=0x222222:x=80:y=348`,
@@ -87,88 +87,80 @@ const font = FONTS.find((file) => fs.existsSync(file));
     // 整集没台词：也不处理
     assert.equal((await sc.detectEpisodeBand({ ffmpeg, inputPath: subbed, rows: rows.map((r) => ({ ...r, dialogue: [] })), size })).band, null);
 
-    // 3) 去字：截字幕附近的方图（1024×1024 的 PNG + 同样大的遮罩）交给作图模型，回来的图只取字幕那一点贴回原帧
-    //    这里用「原片同一块」假装是作图模型的结果（再整体偏亮 6，模拟模型调色），看贴回去的效果
+    // 3) 去字（本机，用旁边真实的画面补）：字幕那一条和没字幕的原片差距大幅缩小；字幕那一行框外面一个像素都不动
     const { jpegSize } = require('../src/native/video-prompt/html');
-    const pngSize = (bytes) => ({ width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) });
-    const calls = [];
-    const shiftBy = (buffer, delta) => Buffer.from(buffer.map((v) => Math.max(0, Math.min(255, v + delta))));
-    const cropOf = (image, region, dy = 0) => {
-      const out = Buffer.alloc(region.side * region.side * 3);
-      for (let y = 0; y < region.side; y++) {
-        const row = Math.max(0, Math.min(image.height - 1, region.top + y + dy));
-        image.data.copy(out, y * region.side * 3, (row * image.width + region.left) * 3, (row * image.width + region.left + region.side) * 3);
-      }
+    const decodeAt = (bytes, w, h) => sc.decodeRaw(ffmpeg, bytes, w, h);
+    const frameOf = (time, sizes = [{ width: 320, quality: 2 }]) => sc.cleanKeyframe({ ffmpeg, inputPath: subbed, time, band, dims, sizes });
+    const plainAt = async (time) => sc.grabRaw(ffmpeg, plain, time, dims);
+    const bandRows = [Math.max(0, band.y0 - 24), Math.min(dims.height - 1, band.y1 + 24)];
+    // 背景是随机噪点：补出来的纹理不可能和原片的噪点一模一样，所以两张都先抹掉噪点（7×7 平均）再比
+    const blurred = (data) => {
+      const W = dims.width;
+      const out = new Float32Array((bandRows[1] - bandRows[0] + 1) * W * 3);
+      for (let y = bandRows[0]; y <= bandRows[1]; y++)
+        for (let x = 0; x < W; x++)
+          for (let c = 0; c < 3; c++) {
+            let sum = 0;
+            let n = 0;
+            for (let dy = -3; dy <= 3; dy++)
+              for (let dx = -3; dx <= 3; dx++) {
+                const yy = y + dy;
+                const xx = x + dx;
+                if (yy < 0 || yy >= dims.height || xx < 0 || xx >= W) continue;
+                sum += data[(yy * W + xx) * 3 + c];
+                n += 1;
+              }
+            out[((y - bandRows[0]) * W + x) * 3 + c] = sum / n;
+          }
       return out;
     };
-    const fakeModel = (mode) => async ({ image, mask, prompt, region, time }) => {
-      calls.push({ mode, image: pngSize(image), mask: pngSize(mask), prompt, time });
-      if (mode === 'fail') throw new Error('作图接口 500');
-      if (mode === 'lazy') {
-        // 模型什么都没改：把原来带字幕的那块原样送回来
-        const same = await sc.grabRaw(ffmpeg, subbed, time, dims);
-        return sc.encodeJpeg(ffmpeg, { width: region.side, height: region.side, data: cropOf(same, region) }, region.side, 2);
-      }
-      const truth = await sc.grabRaw(ffmpeg, plain, time, dims);
-      // moved：模型把画面改了（这里用反色当成一张不一样的图）
-      const crop = mode === 'moved' ? Buffer.from(cropOf(truth, region, 60).map((v) => 255 - v)) : shiftBy(cropOf(truth, region), 6);
-      return sc.encodeJpeg(ffmpeg, { width: region.side, height: region.side, data: crop }, region.side, 2);
-    };
-    const decode320 = (bytes) => sc.decodeRaw(ffmpeg, bytes, 320, 568);
-    const truth320 = async (time) => decode320(await sc.encodeJpeg(ffmpeg, await sc.grabRaw(ffmpeg, plain, time, dims), 320, 2));
-    const frameOf = (time, erase) => sc.aiCleanFrame({ ffmpeg, inputPath: subbed, time, band, dims, outWidth: 320, quality: 2, erase });
-    const scaleY = 568 / dims.height;
-    const bandRows = [Math.floor((band.y0 - 24) * scaleY), Math.ceil((band.y1 + 24) * scaleY)];
-    const error320 = (a, b) => {
+    const errorIn = (a, b) => {
+      const pa = blurred(a.data);
+      const pb = blurred(b.data);
       let sum = 0;
-      for (let y = bandRows[0]; y <= bandRows[1]; y++) for (let x = 0; x < 320 * 3; x++) sum += Math.abs(a[y * 960 + x] - b[y * 960 + x]);
-      return sum / ((bandRows[1] - bandRows[0] + 1) * 960);
+      for (let i = 0; i < pa.length; i++) sum += Math.abs(pa[i] - pb[i]);
+      return sum / pa.length;
     };
     for (const time of [1.5, 4.0, 6.8]) {
-      const plainFrame = await frameOf(time, null);
-      assert.equal(plainFrame.cleaned, false);
-      assert.equal(plainFrame.clean, false, '没配作图模型：这张还有字幕');
-      assert.equal(plainFrame.reason, 'noEraser');
-      const result = await frameOf(time, fakeModel('ok'));
-      assert.equal(result.cleaned, true, `${time}s 有字幕，要去`);
-      assert.equal(result.clean, true, '去完复查没字了');
-      assert.deepEqual(jpegSize(result.bytes), { width: 320, height: 568 }, '和平常截的关键帧一样大');
-      const before = await decode320(plainFrame.bytes);
-      const after = await decode320(result.bytes);
-      const truth = await truth320(time);
-      const was = error320(before, truth);
-      const now = error320(after, truth);
-      assert.ok(now < was * 0.25, `${time}s 字幕那一条和原片的差距缩小七成五以上（${was.toFixed(1)} → ${now.toFixed(1)}）`);
-      // 字幕那一条以外，一个像素都不动（和不去字幕时截的图逐像素一样）
-      for (let y = 0; y < 568; y++) {
-        if (y >= bandRows[0] - 16 && y <= bandRows[1] + 16) continue;
-        assert.ok(after.subarray(y * 960, (y + 1) * 960).equals(before.subarray(y * 960, (y + 1) * 960)), `第 ${y} 行不在字幕那一条，不能动`);
-      }
+      const original = await sc.grabRaw(ffmpeg, subbed, time, dims);
+      const cover = sc.subtitleCover(original, band);
+      assert.ok(cover, `${time}s 有字幕`);
+      const lb = sc.lineBox(cover, dims.width, dims.height, original);
+      const image = { ...original, data: Buffer.from(original.data) };
+      const started = Date.now();
+      sc.cleanBox(image, lb);
+      const ms = Date.now() - started;
+      assert.ok(ms < 8000, `一张不到 8 秒（${ms} ms）`);
+      const truth = await plainAt(time);
+      const was = errorIn(original, truth);
+      const now = errorIn(image, truth);
+      assert.ok(now < was * 0.5, `${time}s 字幕那一条和原片的差距至少缩小一半（${was.toFixed(1)} → ${now.toFixed(1)}）`);
+      assert.equal(sc.subtitleCover(image, band), null, `${time}s 补完检测不到字`);
+      // 框外面一个像素都不动
+      for (let y = 0; y < dims.height; y++)
+        for (let x = 0; x < dims.width; x++) {
+          if (y >= lb.y0 && y <= lb.y1 && x >= lb.x0 && x <= lb.x1) continue;
+          const i = (y * dims.width + x) * 3;
+          if (image.data[i] !== original.data[i] || image.data[i + 1] !== original.data[i + 1] || image.data[i + 2] !== original.data[i + 2])
+            assert.fail(`(${x},${y}) 在字幕框外面，不能动`);
+        }
+      // 整条流程：出 320 宽的四宫格，起幅那张顺便出 560 宽的视频首帧
+      const result = await frameOf(time, [{ width: 320, quality: 2 }, { width: 560, quality: 2 }]);
+      assert.equal(result.cleaned, true);
+      assert.equal(result.clean, true);
+      assert.deepEqual(jpegSize(result.outputs[0]), { width: 320, height: 568 });
+      assert.deepEqual(jpegSize(result.outputs[1]), { width: 540, height: 960 }, '首帧 560 宽（原片只有 540 宽就按原宽）');
+      const small = await decodeAt(result.outputs[0], dims.width, dims.height);
+      assert.ok(errorIn({ data: small }, truth) < was * 0.7, '出来的图里字幕也没了（缩小再放大会糊一点）');
     }
-    assert.ok(calls.every((call) => call.image.width === 1024 && call.image.height === 1024), '发给作图模型的是 1024×1024 方图');
-    assert.ok(calls.every((call) => call.mask.width === 1024 && call.mask.height === 1024), '遮罩和图一样大');
-    assert.ok(calls[0].prompt.includes('只去掉') && calls[0].prompt.includes('保持完全不变'));
 
-    // 4) 作图结果对不齐（模型挪了画面）、去完复查还有字、作图失败：保留原图，不贴半成品，标成不干净
-    for (const [mode, reason, tries] of [
-      ['moved', 'mismatch', 2],
-      ['lazy', 'residue', 2],
-      ['fail', 'failed', 1],
-    ]) {
-      calls.length = 0;
-      const result = await frameOf(4.0, fakeModel(mode));
-      assert.equal(result.cleaned, false, mode);
-      assert.equal(result.clean, false, `${mode}：这张还有字幕`);
-      assert.equal(result.reason, reason);
-      assert.equal(calls.length, tries, `${mode}：不干净就重新去一次，最多两次`);
-      assert.ok(result.bytes.equals((await frameOf(4.0, null)).bytes), `${mode}：和原图一模一样`);
-    }
-    // 这一刻没字幕：不调作图模型
-    calls.length = 0;
-    const quiet = await frameOf(2.9, fakeModel('ok'));
+    // 4) 这一刻没字幕：一个像素不动
+    const quiet = await frameOf(2.9);
     assert.equal(quiet.reason, 'none');
+    assert.equal(quiet.cleaned, false);
     assert.equal(quiet.clean, true, '这一刻本来就没字幕');
-    assert.equal(calls.length, 0, '没字幕的那一帧不花钱调作图');
+    const quietPlain = await sc.encodeJpeg(ffmpeg, await sc.grabRaw(ffmpeg, subbed, 2.9, dims), 320, 2);
+    assert.ok(quiet.outputs[0].equals(quietPlain), '和原图一模一样');
 
     // 4b) 满画面花纹（草地、树叶、噪点）：横带里看着也「像字」，但上方对照那条一样，不当字幕
     {
@@ -188,7 +180,7 @@ const font = FONTS.find((file) => fs.existsSync(file));
     assert.equal(sc.workSize(null), null);
     assert.deepEqual(sc.workSize({ width: 1080, height: 1920 }), { width: 640, height: 1138 });
     assert.deepEqual(sc.workSize({ width: 360, height: 640 }), { width: 360, height: 640 });
-    console.log('PASS keyframe subtitle cleaning: band found, scene text untouched; AI result pasted back only on the subtitle strokes, everything else pixel-identical; mismatch/failure keeps the original');
+    console.log('PASS keyframe subtitle cleaning: band found, scene text untouched; subtitle line filled from real texture around it, nothing outside the box changed, no subtitle left');
   } finally {
     await fsp.rm(dir, { recursive: true, force: true });
   }

@@ -25,7 +25,7 @@ const {
 } = require('./compose');
 const { renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS } = require('./html');
 const { describePhases } = require('./ark');
-const { detectEpisodeBand, aiCleanFrame } = require('./subtitle-clean');
+const { detectEpisodeBand, cleanKeyframe } = require('./subtitle-clean');
 
 const ATTEMPTS = 3;
 
@@ -139,10 +139,8 @@ async function deriveEpisodePrompts({
   // 每集只分析前几个分镜（0 = 全部）：后面的分镜只在页面上占位，不问方舟、不截关键帧，省额度。
   shotLimit = 0,
   fps = 2,
-  // 四宫格关键帧去字幕（视频本身不动）：eraseSubtitles({ image, mask, prompt, signal }) → 去过字的图片字节，
-  // 用设置里的作图模型；不给就不去字幕。
+  // 四宫格关键帧去字幕（视频本身不动；在本机用画面里真实的纹理补，不调接口）
   cleanSubtitles = true,
-  eraseSubtitles = null,
   log = () => {},
   onProgress = () => {},
   signal,
@@ -314,67 +312,63 @@ async function deriveEpisodePrompts({
         jobs.push({ row, kind: 'poster', time: times[0] });
         times.forEach((time, i) => jobs.push({ row, kind: 'grid', index: i, time }));
       }
-      // 四宫格关键帧去字幕：先在整集里找字幕横带；找到了，每张关键帧把字幕附近交给作图模型去字，只把字幕那一点贴回原帧。
+      // 四宫格关键帧去字幕：先在整集里找字幕横带；找到了，每张关键帧把字幕那一行用旁边真实的画面补上。
+      // 视频首帧（播放前显示的那张）就用去过字幕的「起幅」，不另外截。
       let subtitle = { band: null, dims: null };
-      const tally = { cleaned: 0, mismatch: 0, residue: 0, failed: 0, noEraser: 0 };
-      // 没配作图模型也照样找字幕：画面校验里「无字幕水印」要按实际情况显示
+      const tally = { cleaned: 0, residue: 0, failed: 0 };
       if (cleanSubtitles && size) {
         try {
           subtitle = await detectEpisodeBand({ ffmpeg, inputPath, rows, utterances: transcript?.utterances, size, signal });
           if (subtitle.band) {
             const { y0, y1, frameHeight } = subtitle.band;
-            log('info', `关键帧去字幕：字幕在画面 ${Math.round((y0 / frameHeight) * 100)}%–${Math.round((y1 / frameHeight) * 100)}% 高度，${eraseSubtitles ? '四宫格关键帧交给作图模型去字' : '没配作图模型，关键帧保留字幕'}`);
+            log('info', `关键帧去字幕：字幕在画面 ${Math.round((y0 / frameHeight) * 100)}%–${Math.round((y1 / frameHeight) * 100)}% 高度，四宫格关键帧和视频首帧都去掉字幕`);
           } else log('info', '关键帧去字幕：没找到烧在画面里的字幕，关键帧照常截');
         } catch (error) {
           if (signal?.aborted) throw error;
           log('warn', `关键帧去字幕没做成（${error.message}），关键帧照常截`);
-          // 没查成：有没有字幕不知道，画面校验里「无字幕水印」不打勾
+          // 没查成：有没有字幕不知道，画面校验里「无字幕水印」不写
           for (const row of rows) frames[row.no].subtitleFree = false;
         }
       }
-      // 去字幕要等作图模型：每张处理完写一行；一直没回来就每 30 秒报一次还在等，别让人以为卡住了
       const gridTotal = jobs.filter((job) => job.kind === 'grid').length;
       let gridDone = 0;
-      let erasing = 0;
-      const waitStart = Date.now();
-      const heartbeat =
-        subtitle.band && eraseSubtitles
-          ? setInterval(() => {
-              if (erasing > 0)
-                log('info', `关键帧去字幕：还在等作图模型回图（已处理 ${gridDone}/${gridTotal} 张，已等 ${Math.round((Date.now() - waitStart) / 1000)} 秒）`);
-            }, 30000)
-          : null;
-      heartbeat?.unref?.();
-      const REASON = {
-        mismatch: '作图结果和原图对不齐，保留原图',
-        residue: '去了两次还有字，保留原图',
-        failed: '作图没成功（超时或接口出错），保留原图',
-        noEraser: '没配作图模型，保留原图',
-      };
-      try {
       await pool(jobs, 4, async (job) => {
         const wide = job.kind === 'poster';
+        if (wide && subtitle.band) return; // 视频首帧由「起幅」那张一起出
         let frame = null;
         if (!wide && subtitle.band) {
           const started = Date.now();
-          erasing += 1;
           try {
-            const clean = await aiCleanFrame({ ffmpeg, inputPath, time: job.time, band: subtitle.band, dims: subtitle.dims, outWidth: 320, quality: 7, erase: eraseSubtitles, signal });
-            frame = { uri: `data:image/jpeg;base64,${clean.bytes.toString('base64')}`, bytes: clean.bytes };
+            const first = job.index === 0;
+            const clean = await cleanKeyframe({
+              ffmpeg,
+              inputPath,
+              time: job.time,
+              band: subtitle.band,
+              dims: subtitle.dims,
+              sizes: first ? [{ width: 320, quality: 7 }, { width: 560, quality: 4 }] : [{ width: 320, quality: 7 }],
+              signal,
+            });
+            frame = { uri: `data:image/jpeg;base64,${clean.outputs[0].toString('base64')}`, bytes: clean.outputs[0] };
+            if (first) frames[job.row.no].poster = `data:image/jpeg;base64,${clean.outputs[1].toString('base64')}`;
             if (clean.cleaned) tally.cleaned += 1;
-            else if (clean.reason in tally) tally[clean.reason] += 1;
-            if (!clean.clean) frames[job.row.no].subtitleFree = false;
+            if (!clean.clean) {
+              tally.residue += 1;
+              frames[job.row.no].subtitleFree = false;
+            }
             gridDone += 1;
             const where = `镜${job.row.no} ${FRAME_LABELS[job.index] || ''}`.trim();
-            const seconds = Math.round((Date.now() - started) / 1000);
-            if (clean.cleaned) log('info', `关键帧去字幕 ${gridDone}/${gridTotal}：${where} 去掉了（用时 ${seconds} 秒）`);
-            else if (clean.reason && clean.reason !== 'none')
-              log('warn', `关键帧去字幕 ${gridDone}/${gridTotal}：${where} ${REASON[clean.reason] || '没去成'}（用时 ${seconds} 秒）`);
+            const seconds = ((Date.now() - started) / 1000).toFixed(1);
+            if (clean.cleaned)
+              log(
+                clean.clean ? 'info' : 'warn',
+                `关键帧去字幕 ${gridDone}/${gridTotal}：${where} ${clean.clean ? '去掉了' : '补过了，但还检测到字'}（${seconds} 秒）`,
+              );
             onProgress(99, `关键帧去字幕 ${gridDone}/${gridTotal}`);
           } catch (error) {
             if (signal?.aborted) throw error;
-          } finally {
-            erasing -= 1;
+            tally.failed += 1;
+            log('warn', `关键帧去字幕：镜${job.row.no} ${FRAME_LABELS[job.index] || ''} 没做成（${error.message}），用原图`);
           }
           // 去字幕这一步出错退回普通截图：这一刻有没有字幕不知道，不算干净
           if (!frame) frames[job.row.no].subtitleFree = false;
@@ -384,19 +378,15 @@ async function deriveEpisodePrompts({
         if (wide) {
           frames[job.row.no].poster = frame.uri;
           if (!size) size = jpegSize(frame.bytes);
-        } else frames[job.row.no].grid[job.index] = frame.uri;
+        } else {
+          frames[job.row.no].grid[job.index] = frame.uri;
+          // 起幅去字幕没做成：视频首帧也用这张原图
+          if (job.index === 0 && subtitle.band && !frames[job.row.no].poster) frames[job.row.no].poster = frame.uri;
+        }
       });
-      } finally {
-        if (heartbeat) clearInterval(heartbeat);
-      }
       if (subtitle.band) {
-        const kept = [
-          tally.noEraser && `${tally.noEraser} 张有字幕（没配作图模型）`,
-          tally.mismatch && `${tally.mismatch} 张作图结果和原图对不齐`,
-          tally.residue && `${tally.residue} 张去了两次还有字`,
-          tally.failed && `${tally.failed} 张作图没成功`,
-        ].filter(Boolean);
-        log(kept.length ? 'warn' : 'info', `关键帧去字幕：去掉了 ${tally.cleaned} 张${kept.length ? `；${kept.join('、')}，这几张保留原图` : ''}`);
+        const notes = [tally.residue && `${tally.residue} 张补完还检测到字`, tally.failed && `${tally.failed} 张没做成`].filter(Boolean);
+        log(notes.length ? 'warn' : 'info', `关键帧去字幕：去掉了 ${tally.cleaned} 张${notes.length ? `；${notes.join('、')}` : ''}`);
       }
       const thumbs = {};
       await pool(library.characters.filter((c) => c.ref_time != null), 4, async (character) => {

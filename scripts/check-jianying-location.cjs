@@ -42,7 +42,7 @@ try {
     assert.equal(location.userData, null, 'not registered into User Data');
     assert.equal(location.source, 'detected');
   }
-  // 2. 老版本：草稿在 User Data\Projects\com.lveditor.draft，登记到 User Data。
+  // 2. 老版本：草稿在 User Data\Projects\com.lveditor.draft（只有这一个）。Windows 上不登记，剪映自己扫。
   {
     const t = fresh();
     const userData = path.join(t.local, 'JianyingPro', 'User Data');
@@ -50,7 +50,45 @@ try {
     touch(path.join(root, 'root_meta_info.json'));
     const location = win(t);
     assert.equal(location.draftRoot, path.resolve(root));
-    assert.equal(location.userData, userData);
+    assert.equal(location.userData, null);
+  }
+  // 2b. 用户的情况：软件设置里填的是 D:\JianyingPro（里面有上个版本放过草稿的 Projects\com.lveditor.draft），
+  //     剪映自己的「草稿位置」是 D:\JianyingPro Drafts → 一定放 D:\JianyingPro Drafts（剪映只在这里找草稿）。
+  {
+    const t = fresh();
+    const drafts = path.join(t.drive, 'JianyingPro Drafts');
+    touch(path.join(drafts, 'root_meta_info.json'), new Date('2025-01-01'));
+    const wrong = path.join(t.drive, 'JianyingPro');
+    touch(path.join(wrong, 'Projects', 'com.lveditor.draft', 'root_meta_info.json'), new Date('2026-10-21'));
+    fs.writeFileSync(
+      path.join(t.local, 'JianyingPro', 'User Data', 'Config', 'globalSetting'),
+      `[General]\ncurrentCustomDraftPath=${drafts}\nlanguage=zh\n`,
+    );
+    const location = win(t, wrong);
+    assert.equal(location.draftRoot, path.resolve(drafts), '按剪映自己的草稿位置');
+    assert.equal(location.source, 'jianying');
+    assert.equal(location.userData, null);
+    // 剪映配置读不到：用设置里填的文件夹本身，不往下找 Projects\com.lveditor.draft
+    fs.rmSync(path.join(t.local, 'JianyingPro', 'User Data', 'Config', 'globalSetting'));
+    const fromSetting = win(t, wrong);
+    assert.equal(fromSetting.draftRoot, path.resolve(wrong));
+    assert.equal(fromSetting.source, 'setting');
+    // 什么都没填：两个都有 root_meta_info.json 时 JianyingPro Drafts 优先（哪怕另一个更新）
+    assert.equal(win(t).draftRoot, path.resolve(drafts));
+  }
+  // 2c. 剪映配置里中文路径是 Qt 的 \x8349 写法；User Data 不在 C 盘默认位置（装在 D:\JianyingPro\User Data）
+  {
+    const t = fresh();
+    fs.rmSync(path.join(t.local, 'JianyingPro'), { recursive: true });
+    const drafts = path.join(t.drive, '剪映草稿');
+    touch(path.join(drafts, 'root_meta_info.json'));
+    const userData = path.join(t.drive, 'JianyingPro', 'User Data');
+    fs.mkdirSync(path.join(userData, 'Config'), { recursive: true });
+    const qt = path.join(t.drive, '\\x526a\\x6620\\x8349\\x7a3f');
+    fs.writeFileSync(path.join(userData, 'Config', 'globalSetting'), `[General]\ncurrentCustomDraftPath="${qt}"\n`);
+    const location = win(t);
+    assert.equal(location.draftRoot, path.resolve(drafts));
+    assert.equal(location.source, 'jianying');
   }
   // 3. 两个都有：剪映最近用的那个（root_meta_info.json 最近改过）。
   {
