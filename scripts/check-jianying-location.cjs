@@ -84,11 +84,15 @@ try {
     touch(path.join(drafts, 'root_meta_info.json'));
     const userData = path.join(t.drive, 'JianyingPro', 'User Data');
     fs.mkdirSync(path.join(userData, 'Config'), { recursive: true });
-    const qt = path.join(t.drive, '\\x526a\\x6620\\x8349\\x7a3f');
+    // Qt 程序写路径用正斜杠（D:/\x526a\x6620\x8349\x7a3f）
+    const qt = `${t.drive.replace(/\\/g, '/')}/\\x526a\\x6620\\x8349\\x7a3f`;
     fs.writeFileSync(path.join(userData, 'Config', 'globalSetting'), `[General]\ncurrentCustomDraftPath="${qt}"\n`);
     const location = win(t);
     assert.equal(location.draftRoot, path.resolve(drafts));
     assert.equal(location.source, 'jianying');
+    // 反斜杠写成两个的写法（D:\\\\剪映草稿）也认
+    fs.writeFileSync(path.join(userData, 'Config', 'globalSetting'), `[General]\ncurrentCustomDraftPath=${drafts.replace(/\\/g, '\\\\')}\n`);
+    assert.equal(win(t).draftRoot, path.resolve(drafts));
   }
   // 3. 两个都有：剪映最近用的那个（root_meta_info.json 最近改过）。
   {

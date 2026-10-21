@@ -78,9 +78,11 @@ function pathsInJianyingConfig(userData, { maxFiles = 200 } = {}) {
 
 const WIN_DRIVES = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => `${letter}:\\`);
 
-/** Qt 配置文件里非 ASCII 字符写成 \x8349 这种：还原成中文。 */
+/** Qt 配置文件（剪映的 globalSetting）的写法：中文写成 \x8349，反斜杠本身写成两个 \\。还原成原来的字。 */
 function decodeQtString(value) {
-  return String(value).replace(/\\x([0-9a-fA-F]{1,4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  return String(value).replace(/\\(\\|x[0-9a-fA-F]{1,4})/g, (_, code) =>
+    code === '\\' ? '\\' : String.fromCharCode(parseInt(code.slice(1), 16)),
+  );
 }
 
 /**
