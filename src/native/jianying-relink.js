@@ -84,8 +84,17 @@ async function relinkDraft(draftDir, { platform = process.platform } = {}) {
       result.fixed += 1;
     }
   }
-  if (!result.fixed) return { ...result, status: result.missing.length ? 'missing' : 'ok' };
-  await writeJson(contentFile, content);
+  // Windows 版剪映读 draft_content.json（Mac 版读 draft_info.json）：以前的版本只写了 draft_info.json，
+  // Windows 上打开就只剩一整段视频、没有分镜。补一份（剪映自己保存过的不动）。
+  const windowsFile = path.join(dir, 'draft_content.json');
+  const needsWindowsFile = platform === 'win32' && !isFile(windowsFile);
+  if (!result.fixed && !needsWindowsFile) return { ...result, status: result.missing.length ? 'missing' : 'ok' };
+  if (result.fixed) await writeJson(contentFile, content);
+  if (needsWindowsFile || (result.fixed && (await readJson(windowsFile)))) {
+    await writeJson(windowsFile, content);
+    result.windowsFile = true;
+  }
+  if (!result.fixed) return { ...result, status: 'fixed' };
 
   const metaFile = path.join(dir, 'draft_meta_info.json');
   const meta = await readJson(metaFile);
@@ -116,7 +125,7 @@ async function relinkDraftsIn(root, options = {}) {
     const dir = path.join(root, entry.name);
     try {
       const result = await relinkDraft(dir, options);
-      if (result.fixed) fixed.push({ dir, ...result });
+      if (result.fixed || result.windowsFile) fixed.push({ dir, ...result });
     } catch (_) {
       // 修不了的草稿（被剪映占用、没权限）下次再试，不影响别的。
     }

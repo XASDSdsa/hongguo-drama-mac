@@ -143,6 +143,18 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     );
     assert.deepEqual(await relinkDraftsIn(path.join(base, '不存在')), []);
 
+    // 7b. Windows：以前只写了 draft_info.json（Mac 版剪映读的），补一份 draft_content.json（Windows 版剪映读的）。
+    const winDraft = makeDraft(base, 'Windows草稿', { pathOf: (dir, parts) => path.join(dir, ...parts) });
+    const winResult = await relinkDraft(winDraft.dir, { platform: 'win32' });
+    assert.equal(winResult.windowsFile, true);
+    assert.deepEqual(
+      read(path.join(winDraft.dir, 'draft_content.json')),
+      read(path.join(winDraft.dir, 'draft_info.json')),
+      '内容和 draft_info.json 一样',
+    );
+    assert.ok(!(await relinkDraft(winDraft.dir, { platform: 'win32' })).windowsFile, '已经有了就不再写');
+    assert.ok(!fs.existsSync(path.join(intact.dir, 'draft_content.json')), 'Mac / Linux 上不写');
+
     // 8. 路径写法和找回规则。
     assert.equal(nativePath('C:\\Users\\a\\素材\\视频\\1.mp4', 'win32'), 'C:/Users/a/素材/视频/1.mp4');
     assert.equal(nativePath('/Users/a/素材/1.mp4', 'darwin'), '/Users/a/素材/1.mp4');

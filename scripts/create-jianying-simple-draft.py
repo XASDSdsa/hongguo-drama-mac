@@ -266,6 +266,7 @@ def main() -> int:
         },
     }
     (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    base.windows_draft_files(draft_dir)
     base.verify_materials(draft_dir)
     print(json.dumps({
         "success": True,

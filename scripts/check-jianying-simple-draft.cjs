@@ -197,6 +197,31 @@ try {
   }
   if (process.env.GITHUB_ACTIONS)
     console.log(`::notice title=剪映草稿素材路径（${process.platform}）::${materials[0].path}`);
+  // Windows 版剪映读 draft_content.json：Windows 上（或按 Windows 写法生成时）要有一份，内容和 draft_info.json 一样，
+  // 登记信息里的路径用正斜杠。
+  if (process.platform === 'win32') {
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(dir, 'draft_content.json'), 'utf8')),
+      info,
+      'Windows: draft_content.json is written',
+    );
+    const meta = fs.readFileSync(path.join(dir, 'draft_meta_info.json'), 'utf8');
+    assert.ok(!/\\\\/.test(meta), 'Windows: draft_meta_info.json uses forward slashes');
+  } else {
+    assert.ok(!fs.existsSync(path.join(dir, 'draft_content.json')), 'Mac: only draft_info.json');
+    const asWindows = spawnSync(
+      python,
+      [script, project, '--name', 'win-style', '--output-root', path.join(tmp, 'win-style'), '--ffmpeg', ffmpeg],
+      { encoding: 'utf8', env: { ...process.env, JIANYING_DRAFT_PLATFORM: 'win32' } },
+    );
+    assert.equal(asWindows.status, 0, asWindows.stderr);
+    const winDir = path.join(tmp, 'win-style', 'win-style');
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(winDir, 'draft_content.json'), 'utf8')),
+      JSON.parse(fs.readFileSync(path.join(winDir, 'draft_info.json'), 'utf8')),
+      'Windows-style: draft_content.json mirrors draft_info.json',
+    );
+  }
   // 整个草稿文件夹挪到别处（老位置没了）：软件把素材路径改到新位置。
   const movedDir = path.join(tmp, '挪到这里', path.basename(dir));
   fs.mkdirSync(path.dirname(movedDir), { recursive: true });

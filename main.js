@@ -4594,7 +4594,10 @@ function relinkMovedDrafts(seriesDirs = null) {
     for (const [root, seriesDir] of roots) {
       const fixed = await jianyingRelink.relinkDraftsIn(root);
       for (const item of fixed) {
-        const text = `剪映草稿：${path.basename(item.dir)} 挪过位置，已把 ${item.fixed} 个素材的路径改到新位置${
+        const parts = [];
+        if (item.fixed) parts.push(`挪过位置，已把 ${item.fixed} 个素材的路径改到新位置`);
+        if (item.windowsFile) parts.push('补上了 Windows 版剪映读的时间线文件（draft_content.json），重开剪映后分镜就在了');
+        const text = `剪映草稿：${path.basename(item.dir)} ${parts.join('；')}${
           item.missing.length ? `（还有 ${item.missing.length} 个素材找不到）` : ''
         }`;
         console.log(`[Draft] ${text}`);

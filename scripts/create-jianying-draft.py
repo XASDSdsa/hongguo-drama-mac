@@ -295,6 +295,33 @@ def material_path(path: Path) -> str:
     return absolute.replace("\\", "/") if os.name == "nt" else absolute
 
 
+def windows_draft_files(draft_dir: Path, platform: str | None = None) -> bool:
+    """Windows 版剪映读 draft_content.json（Mac 版读 draft_info.json）。
+
+    pyJianYingDraft 这个分支只写 draft_info.json（按 Mac 版剪映测的），Windows 版剪映找不到时间线，
+    打开就只剩一整段视频、没有分镜。Windows 上再写一份内容一样的 draft_content.json；
+    草稿登记信息（draft_meta_info.json）里的路径也改成剪映自己的正斜杠写法。
+    环境变量 JIANYING_DRAFT_PLATFORM=win32 可以在别的系统上按 Windows 的写法生成（测试用）。
+    """
+    platform = platform or os.environ.get("JIANYING_DRAFT_PLATFORM") or sys.platform
+    if platform != "win32":
+        return False
+    info = draft_dir / "draft_info.json"
+    shutil.copyfile(info, draft_dir / "draft_content.json")
+    meta_path = draft_dir / "draft_meta_info.json"
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        for key in ("draft_fold_path", "draft_root_path"):
+            if isinstance(meta.get(key), str):
+                meta[key] = meta[key].replace("\\", "/")
+        for bucket in meta.get("draft_materials") or []:
+            for item in (bucket or {}).get("value") or []:
+                if isinstance(item, dict) and isinstance(item.get("file_Path"), str):
+                    item["file_Path"] = item["file_Path"].replace("\\", "/")
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    return True
+
+
 def verify_materials(draft_dir: Path) -> int:
     """草稿保存后逐个核对：草稿里记的每个视频、音频素材文件都在，而且都在这份草稿自己的文件夹里。
 
@@ -695,6 +722,7 @@ def main() -> int:
         "note": "草稿尚未在目标剪映版本完成打开、播放、保存、重开验收。",
     }
     (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    windows_draft_files(draft_dir)
     verify_materials(draft_dir)
     print(json.dumps({"success": True, "draft_dir": str(draft_dir), "draft_info": str(draft_dir / "draft_info.json"), "manifest": str(draft_dir / "draft-manifest.json"), "fps": fps, "duration_us": duration_us, "clip_count": len(clip_rows), "subtitle_count": len(subtitle_rows), "status": manifest["status"]}, ensure_ascii=False, indent=2))
     return 0
