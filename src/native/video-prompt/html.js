@@ -292,7 +292,8 @@ function matchBadge(shot) {
   if (shot?.match == null) return '';
   const value = shot.match;
   const tone = value >= 85 ? 'hi' : value >= 70 ? 'mid' : 'lo';
-  return `<span class="match ${tone}">已匹配 ${value}%${value < 70 ? '（偏低）' : ''}</span>`;
+  const self = shot.match_source === 'self' ? '（自评）' : '';
+  return `<span class="match ${tone}" title="${self ? '核对没成功，这是方舟写小说原文时的自评分' : '方舟单独对照画面核对人物、动作、场景、对白后给的分'}">已匹配 ${value}%${self}${value < 70 ? '（偏低）' : ''}</span>`;
 }
 
 function shotCard({
@@ -437,7 +438,11 @@ function shotCard({
 <div class="c3">
 <div class="blk novel"><div class="head"><h3>小说原文</h3>${matchBadge(shot)}</div>${
     shot?.novel ? `<p class="novtext">${esc(shot.novel)}</p>` : `<p class="empty">${hasPrompt ? '方舟没有写出这一镜的小说原文' : '本段未生成'}</p>`
-  }${shot?.novel && shot.dialogue_covered != null && shot.dialogue_covered < 70 ? '<p class="novnote">小说原文里缺了这一镜的台词，匹配度最多按 70% 算</p>' : ''}</div>
+  }${shot?.novel && shot.dialogue_covered != null && shot.dialogue_covered < 70 ? '<p class="novnote">小说原文里缺了这一镜的台词，匹配度最多按 70% 算</p>' : ''}${
+    shot?.novel && (shot.mismatch?.length || shot.issue)
+      ? `<p class="novnote">核对：${shot.mismatch?.length ? `${esc(shot.mismatch.join('、'))}对不上` : ''}${shot.mismatch?.length && shot.issue ? '；' : ''}${esc(shot.issue || '')}</p>`
+      : ''
+  }</div>
 <div class="blk head"><h3>台词原文</h3><small>${row.dialogue.length} 句</small></div>
 <div class="blk" style="margin-top:-12px">${lines}</div>
 <div class="blk"><h3>画面观察</h3><div class="obs">${observe || '<span class="empty">没有可记录的内容</span>'}</div></div>

@@ -18,6 +18,8 @@ const {
   segmentInstruction,
   normalizeLibrary,
   normalizeSegmentResult,
+  verifyInstruction,
+  applyVerification,
   composeSegmentPrompt,
   renderEpisodeFile,
 } = require('./compose');
@@ -229,10 +231,35 @@ async function deriveEpisodePrompts({
           },
           { signal, sleep, label: `第 ${segment.index} 段`, log },
         );
-        cache.segments[segment.index] = shots;
+        // 小说原文写好后，单独再问一次方舟：对照画面核对人物、动作、场景、对白，按核对结果给匹配度。
+        // 核对失败（不是账号问题）就保留写的那一次的自评分，页面上标「自评」。
+        let checked = shots.map((shot) => ({ ...shot, match_source: shot.novel ? 'self' : 'none' }));
+        if (shots.some((shot) => shot.novel)) {
+          try {
+            checked = await withRetries(
+              async () =>
+                applyVerification(
+                  shots,
+                  parseJsonLoose(
+                    await client.askAboutVideo(clip, verifyInstruction({ segment, shots }), {
+                      fps,
+                      signal,
+                      onTimings: (t) => log('info', `第 ${segment.index} 段核对小说原文：方舟用时 ${describePhases(t)}`),
+                    }),
+                  ),
+                  segment,
+                ),
+              { signal, sleep, label: `第 ${segment.index} 段核对`, log },
+            );
+          } catch (error) {
+            if (signal?.aborted || error?.fatal) throw error;
+            log('warn', `第 ${segment.index} 段小说原文没核对成功，匹配度先用方舟自评：${error.message}`);
+          }
+        }
+        cache.segments[segment.index] = checked;
         await saveCache();
         await fsp.rm(clip, { force: true });
-        results.push({ segment, shots });
+        results.push({ segment, shots: checked });
       } catch (error) {
         if (signal?.aborted || error?.fatal) throw error; // 账号问题：后面的段也一样会失败，整集直接停
         failed += 1;

@@ -116,7 +116,8 @@ async function main() {
     scenes: [{ id: 'S1', name: '老街路口', desc: '雨夜，路灯暖黄' }],
     props: [],
   };
-  const shot = (no, extra = {}) => ({ no, camera: '中景，缓慢推近', action: `林夏站在路口${no}`, expression: '', sound: '雨声', music: '无', assets: ['C1', 'S1'], end_state: `林夏站在路口${no}`, ...extra });
+  const shot = (no, extra = {}) => ({ no, camera: '中景，缓慢推近', action: `林夏站在路口${no}`, expression: '', sound: '雨声', music: '无', assets: ['C1', 'S1'], end_state: `林夏站在路口${no}`, novel: `夜雨落在老街路口，林夏站在那里${no}。`, match: 99, ...extra });
+  let verifyMode = 'ok'; // ok：核对给 88 分；broken：核对一直返回坏内容 → 退回自评
   const mockFetch = async (url, init = {}) => {
     const json = (body, status = 200) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
     assert.equal(init.headers.Authorization, 'Bearer ark-secret');
@@ -145,6 +146,12 @@ async function main() {
       assert.ok(content[0].file_id.startsWith('file-'));
       const text = content[1].text;
       if (text.includes('建立固定的素材库')) return json({ output_text: '```json\n' + JSON.stringify(library) + '\n```' });
+      if (text.includes('请你对照视频逐个核对')) {
+        calls.verify = (calls.verify || 0) + 1;
+        if (verifyMode === 'broken') return json({ output_text: '不好意思' });
+        const nos = [...text.matchAll(/^镜(\d+)：/gm)].map((m) => Number(m[1]));
+        return json({ output_text: JSON.stringify({ checks: nos.map((no, i) => ({ no, people: true, action: i !== 0, scene: true, dialogue: true, score: i === 0 ? 72 : 88, issue: i === 0 ? '画面里林夏没有站着，是在走' : '' })) }) });
+      }
       const count = (text.match(/^镜\d+：/gm) || []).length;
       const first = Number(text.match(/^镜(\d+)：/m)[1]);
       if (count === 1 && breakSegment2Once) {
@@ -205,7 +212,7 @@ async function main() {
   assert.ok(page.includes('你还是来了。') && page.includes('林夏') && page.includes('老街路口'));
   assert.ok(page.includes('写实电影质感，冷蓝夜色'));
   assert.ok(!page.includes('ark-secret') && !page.includes('doubao-test-model'), '页面里没有 Key 和模型名');
-  assert.ok(!/GPU|渲染引擎|已匹配|一致性|重试视频/.test(page.replace(/data:image\/jpeg;base64,[A-Za-z0-9+/=]+/g, '')), '没有数据来源的状态不显示');
+  assert.ok(!/GPU|渲染引擎|一致性|重试视频/.test(page.replace(/data:image\/jpeg;base64,[A-Za-z0-9+/=]+/g, '')), '没有数据来源的状态不显示');
   const embedded = JSON.parse(page.match(/<script type="application\/json" id="data">([\s\S]*?)<\/script>/)[1]);
   assert.equal(embedded.segments.length, 2);
   assert.equal(embedded.all, text, '“复制全部”就是 txt 的内容');
@@ -218,7 +225,7 @@ async function main() {
     const limited = await deriveEpisodePrompts({ ...options, shotLimit: 2, outDir: path.join(dir, 'out-limit'), cacheFile: path.join(dir, 'cache', 'limit.json'), sourceKey: 'hash-limit' });
     assert.equal(limited.placeholders, 3, '5 个分镜分析 2 个，3 个占位');
     assert.equal(limited.segments, 1);
-    assert.equal(calls.ask - asksBefore, 2, '只问两次方舟：素材库 + 前两个分镜那一段');
+    assert.equal(calls.ask - asksBefore, 3, '只问三次方舟：素材库 + 前两个分镜那一段 + 核对小说原文');
     const limitedPage = await fsp.readFile(limited.htmlFile, 'utf8');
     assert.equal((limitedPage.match(/<article class="shot"/g) || []).length, 2);
     assert.equal((limitedPage.match(/class="phcard"/g) || []).length, 3);
@@ -226,6 +233,21 @@ async function main() {
     assert.match(limitedPage, /1 段 · 2 镜（另有 3 镜占位）/);
     assert.ok(!limitedPage.includes('本段未生成'), '生成记录只记成功的');
     assert.match(await fsp.readFile(limited.file, 'utf8'), /只分析了前 2 个分镜；镜 3–5 共 3 个分镜占位/);
+  }
+
+  // ---- 小说原文的匹配度来自单独的核对，不用写的那一次的自评（99）；核对失败才退回自评并标出来 ----
+  {
+    const verifiedPage = await fsp.readFile(first.htmlFile, 'utf8');
+    assert.ok(verifiedPage.includes('已匹配 88%') && verifiedPage.includes('已匹配 72%'), '用核对分');
+    assert.ok(!verifiedPage.includes('已匹配 99%'), '不用自评分');
+    assert.ok(verifiedPage.includes('核对：动作对不上；画面里林夏没有站着，是在走'));
+    assert.ok(!verifiedPage.includes('（自评）'));
+    verifyMode = 'broken';
+    const selfOnly = await deriveEpisodePrompts({ ...options, outDir: path.join(dir, 'out-self'), cacheFile: path.join(dir, 'cache', 'self.json'), sourceKey: 'hash-self' });
+    verifyMode = 'ok';
+    const selfPage = await fsp.readFile(selfOnly.htmlFile, 'utf8');
+    assert.ok(selfPage.includes('已匹配 99%（自评）'), '核对没成功：退回自评并标出来');
+    assert.ok(logs.some(([level, message]) => level === 'warn' && /小说原文没核对成功，匹配度先用方舟自评/.test(message)));
   }
 
   // ---- 页面上的数字和名称要和真实数据逐项对上 ----
@@ -388,7 +410,7 @@ async function main() {
     assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'preload.js'), 'utf8'), /arkTest: \(draft\) => ipcRenderer\.invoke\('ark-test', draft\)/);
     assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'src/components/Settings.jsx'), 'utf8'), /测试方舟视频理解/);
     const deriveSource = fsx.readFileSync(pathx.join(__dirname, '..', 'src/native/video-prompt/derive.js'), 'utf8');
-    assert.equal((deriveSource.match(/onTimings:/g) || []).length, 2, '素材库和每一段都写用时');
+    assert.equal((deriveSource.match(/onTimings:/g) || []).length, 3, '素材库、每一段、核对都写用时');
   }
   // 账号层面的问题（额度用完、Key 不对、模型没开通）：说清楚原因，不重试。
   {
@@ -475,8 +497,8 @@ async function main() {
     const { renderEpisodeHtml } = require('../src/native/video-prompt/html');
     const html = renderEpisodeHtml({ title: '新剧', label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib,
       segments: [{ ...segment, prompt: 'p', shotLines: ['a', 'b'], shots }], frames: {}, thumbs: {}, videoRel: '', size: { width: 720, height: 1280 }, generatedAt: new Date(0), allText: '' });
-    assert.match(html, /<h3>小说原文<\/h3><span class="match hi">已匹配 93%<\/span>/);
-    assert.match(html, /<span class="match mid">已匹配 70%<\/span>/);
+    assert.match(html, /<h3>小说原文<\/h3><span class="match hi"[^>]*>已匹配 93%<\/span>/);
+    assert.match(html, /<span class="match mid"[^>]*>已匹配 70%<\/span>/);
     assert.match(html, /小说原文里缺了这一镜的台词/);
     assert.match(html, /小说匹配 82%/, '段落标题显示平均匹配度');
   }

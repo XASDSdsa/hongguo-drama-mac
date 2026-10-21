@@ -2,8 +2,8 @@
 // 视频反推提示词：分段、给模型的指令、模型结果校验、按 Seedance 2.5 阶段法拼提示词、输出文件格式。
 // 这个文件没有任何网络或文件操作，全部是纯函数，方便单独测试。
 
-// v2：每个分镜多写一段「小说原文」和它与画面的匹配度（旧缓存里没有，所以换版本号重新看）。
-const TEMPLATE_VERSION = 'seedance-2.5-stage-v2-novel';
+// v3：每个分镜写一段「小说原文」，再单独请方舟对照画面核对打分（旧缓存里没有，所以换版本号重新看）。
+const TEMPLATE_VERSION = 'seedance-2.5-stage-v3-novel-verified';
 const DEFAULT_MAX_SEGMENT_SECONDS = 15;
 const MAX_SEGMENT_SECONDS = 30; // Seedance 2.5 单次最长
 const QUIET = /^(无|没有|无声|看不清|听不清|不详)$/;
@@ -301,6 +301,54 @@ function composeSegmentPrompt({ segment, shots, library, refImages = {}, previou
   return { text: lines.join('\n'), images, endState, shotLines };
 }
 
+// ===== 小说原文核对（单独一次请求，不让写的那一次给自己打分） =====
+
+function verifyInstruction({ segment, shots }) {
+  const items = segment.rows
+    .map((row, index) => {
+      const shot = shots[index];
+      const talk = row.dialogue.length ? `\n  台词：「${row.dialogue.join(' ')}」` : '';
+      return `镜${row.no}：${sec(row.start - segment.start)}–${sec(row.end - segment.start)} 秒${talk}\n  小说原文：${shot?.novel || '（无）'}`;
+    })
+    .join('\n');
+  return [
+    `这是一段 ${sec(segment.dur)} 秒的真实视频，已经按画面切成 ${segment.rows.length} 个分镜（时间相对本段开头）。`,
+    '下面是别人根据这段视频给每个分镜写的「小说原文」。请你对照视频逐个核对，不要改写，只检查：',
+    '人物（人数、性别、外貌是否和画面一致）、动作（写的动作画面里有没有）、场景（地点、道具）、对白（台词是否写对、是不是这个分镜说的）。',
+    `分镜：\n${items}`,
+    '只返回 JSON，不要任何解释，格式：',
+    '{"checks":[{"no":分镜序号,"people":true或false,"action":true或false,"scene":true或false,"dialogue":true或false（没有台词写 true）,"score":0到100的整数,"issue":"对不上的地方，一句话；都对就写空字符串"}]}',
+    '打分要严格：四项全对、细节也准确才给 90 以上；有一项不对最多 75；两项以上不对最多 50；小说原文是空的给 0。',
+  ].join('\n\n');
+}
+
+/** 把核对结果合进分镜：匹配度用核对分（再按台词封顶），记下哪几项对不上。核对结果不对就原样返回（保留自评）。 */
+function applyVerification(shots, raw, segment) {
+  const list = Array.isArray(raw) ? raw : raw?.checks;
+  if (!Array.isArray(list) || list.length !== shots.length) fail('核对结果的分镜数量对不上');
+  return shots.map((shot, index) => {
+    const check = list[index] || {};
+    if (!shot.novel) return { ...shot, match: null, match_source: 'none' };
+    const failedItems = [
+      ['people', '人物'],
+      ['action', '动作'],
+      ['scene', '场景'],
+      ['dialogue', '对白'],
+    ]
+      .filter(([key]) => check[key] === false)
+      .map(([, name]) => name);
+    const { match, dialogue_covered } = novelMatch(shot.novel, check.score, segment.rows[index].dialogue);
+    return {
+      ...shot,
+      match,
+      dialogue_covered,
+      match_source: 'verified',
+      mismatch: failedItems,
+      issue: clean(check.issue),
+    };
+  });
+}
+
 // ===== Seedance 生成设置 =====
 
 /** 生成用的分辨率和比例：统一 720p；比例看原片，竖屏 9:16、横屏 16:9（读不到画幅按竖屏）。 */
@@ -365,6 +413,8 @@ module.exports = {
   novelMatch,
   dialogueCoverage,
   seedanceFormat,
+  verifyInstruction,
+  applyVerification,
   clock,
   sec,
 };
