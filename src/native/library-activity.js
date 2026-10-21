@@ -60,7 +60,8 @@ function createActivityLog({ file, perDir = 300, maxDirs = 100, now = Date.now, 
         t: now(),
         level: LEVELS.has(level) ? level : 'info',
         text: String(text).slice(0, 600),
-        channel: channel === 'side' ? 'side' : 'main',
+        // main 主任务；side 支线（剪映草稿、海报）；storyboard 分镜工程图
+        channel: channel === 'side' || channel === 'storyboard' ? channel : 'main',
       };
       entry.lines.push(line);
       if (entry.lines.length > perDir) entry.lines.splice(0, entry.lines.length - perDir);

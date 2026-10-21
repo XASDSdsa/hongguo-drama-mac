@@ -55,6 +55,7 @@ const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
 const jianyingLocator = require('./src/native/jianying-location');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
+const storyboardSnapshot = require('./src/native/video-prompt/snapshot');
 const { seedanceFormat } = require('./src/native/video-prompt/compose');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
@@ -4428,8 +4429,7 @@ function normalizeDraftMode(value) {
 }
 
 function draftCurrentText(job) {
-  const drafting = [...job.active.values()].map((item) => item.label);
-  return (drafting.length ? drafting : [...(job.promptActive?.values() || [])].map((item) => item.label)).join('、');
+  return [...job.active.values()].map((item) => item.label).join('、');
 }
 /** 正在做的各集进度之和（每集 0–100），界面用「已完成集数 + 这个和 / 100」算总进度条。 */
 function draftProgressPercent(job) {
@@ -4439,9 +4439,28 @@ function draftMessage(job) {
   const items = [...job.active.values()];
   if (items.length === 1) return items[0].message;
   if (items.length) return `同时做 ${items.length} 集`;
-  const prompts = (job.promptActive?.size || 0) + (job.promptQueue?.length || 0);
-  if (prompts) return `草稿已做完，分镜工程图还剩 ${prompts} 集（在等方舟看视频）`;
   return job.waitingReason || '';
+}
+
+/** 分镜工程图自己的进度（和剪映草稿分开显示）。 */
+function storyboardSnapshotOf(job) {
+  const total = job.promptTotal || 0;
+  if (!total) return null;
+  const active = [...(job.promptActive?.values() || [])];
+  const failed = (job.promptFailed || 0) + (job.promptSkipped?.length || 0);
+  const running = active.length > 0 || (job.promptQueue?.length || 0) > 0;
+  return {
+    status: running ? 'running' : failed ? 'failed' : 'completed',
+    total,
+    done: job.promptDone || 0,
+    failed,
+    queued: job.promptQueue?.length || 0,
+    current: active.map((item) => item.label).join('、'),
+    message: active.length === 1 ? active[0].message : active.length ? `同时做 ${active.length} 集` : '',
+    detail: active.length === 1 ? active[0].detail : '',
+    progress: Math.floor(active.reduce((sum, item) => sum + (item.progress || 0), 0)),
+    stageStartedAt: active.length === 1 ? active[0].stageStartedAt : null,
+  };
 }
 
 function libraryDraftSnapshot(job) {
@@ -4458,6 +4477,9 @@ function libraryDraftSnapshot(job) {
     current: draftCurrentText(job),
     progress: draftProgressPercent(job),
     message: draftMessage(job),
+    // 剪映草稿这部分还在做（分镜工程图可能还在后台问方舟，单独看 storyboard）
+    drafting: job.active.size > 0 || job.queue.length > 0,
+    storyboard: storyboardSnapshotOf(job),
     detail: job.active.size === 1 ? [...job.active.values()][0].detail : '',
     stageStartedAt: job.active.size === 1 ? [...job.active.values()][0].stageStartedAt : null,
     lanes: job.lanes || 1,
@@ -4803,23 +4825,37 @@ async function loadDraftResult(projectId, file, mode) {
   }
 }
 
+// 分镜工程图截图：一次只截一张（每张开一个隐藏的离屏窗口，一两秒）。
+let storyboardSnapshotChain = Promise.resolve();
+function snapshotStoryboard(htmlFile) {
+  const run = storyboardSnapshotChain.then(() =>
+    storyboardSnapshot.captureStoryboard({ driver: storyboardSnapshot.electronSnapshotDriver(BrowserWindow), htmlFile }),
+  );
+  storyboardSnapshotChain = run.catch(() => {});
+  return run;
+}
+
 async function deriveLibraryPrompts(job, file, item, { alignment, transcript, sourceKey }) {
   const key = path.resolve(job.dir);
   const label = path.basename(file, path.extname(file));
   const settings = getCurrentSettings();
   const model = String(settings.ark_video_model || '').trim();
+  // 分镜工程图的日志单独一栏（和剪映草稿分开）
   const log = (level, text) =>
     libLog(
       key,
-      level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info',
-      `视频提示词：${label}：${text}`,
-      'side',
+      level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'ok' ? 'ok' : 'info',
+      `${label}：${text}`,
+      'storyboard',
     );
-  item.message = '反推视频提示词';
+  item.message = '看视频、写提示词';
   item.detail = '';
+  item.progress = 0;
   item.stageStartedAt = Date.now();
-  libLog(key, 'info', `视频提示词：${label} 开始`, 'side');
+  libLog(key, 'info', `${label} 开始${item.fresh ? '（重新生成，不用上次的结果）' : ''}`, 'storyboard');
   libraryDraftEmit(job);
+  const cacheFile = path.join(app.getPath('userData'), 'video-prompt-cache', `${item.projectId}.json`);
+  if (item.fresh) await fsp.rm(cacheFile, { force: true }).catch(() => {});
   try {
     const result = await deriveEpisodePrompts({
       ffmpeg: resolveFfmpeg('ffmpeg'),
@@ -4834,7 +4870,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
       }),
       model,
       outDir: path.join(job.dir, '视频提示词'),
-      cacheFile: path.join(app.getPath('userData'), 'video-prompt-cache', `${item.projectId}.json`),
+      cacheFile,
       sourceKey,
       title: path.basename(path.resolve(job.dir)),
       maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
@@ -4851,8 +4887,9 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
             ).buffer
         : null,
       log,
-      onProgress: (_percent, message) => {
+      onProgress: (percent, message) => {
         item.detail = String(message || '').slice(0, 80);
+        if (Number.isFinite(Number(percent))) item.progress = Math.max(0, Math.min(100, Number(percent)));
         libraryDraftEmit(job);
       },
       signal: job.controller.signal,
@@ -4863,8 +4900,21 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
         `共 ${result.segments} 段，有 ${result.failed} 段没有生成，重新开始一次会只补这几段 → ${result.file}`,
       );
     } else log('ok', `已生成 → ${result.htmlFile || result.file}`);
+    // 页头 + 前两个分镜截成一张图，管理剧集里按集显示
+    if (result.htmlFile) {
+      item.detail = '截图';
+      libraryDraftEmit(job);
+      try {
+        await snapshotStoryboard(result.htmlFile);
+        log('ok', '截图已生成（页头 + 前两个分镜）');
+      } catch (error) {
+        log('warn', `截图没出来（${error?.message || error}），可以在管理剧集里点这一集的「重新出图」`);
+      }
+    }
+    job.promptDone = (job.promptDone || 0) + 1;
   } catch (error) {
     if (job.cancelled || job.controller.signal.aborted) throw Object.assign(new Error('已停止'), { stopped: true });
+    job.promptFailed = (job.promptFailed || 0) + 1;
     const message = openai.redactError(error, settings.ark_api_key);
     log('error', `没有生成：${message}`);
     // 额度用完、Key 不对这类账号问题：这次任务里排着的其他集也不再去问方舟。
@@ -4885,10 +4935,13 @@ function queueLibraryPrompts(job, file, item, data) {
     label: item.label || path.basename(file, path.extname(file)),
     projectId: item.projectId,
     mode: item.mode,
-    message: '排队反推视频提示词',
+    fresh: item.fresh === true,
+    message: '排队',
     detail: '',
+    progress: 0,
     stageStartedAt: Date.now(),
   };
+  job.promptTotal = (job.promptTotal || 0) + 1;
   job.promptQueue.push({ file, entry, data });
   pumpLibraryPrompts(job);
 }
@@ -4961,8 +5014,8 @@ async function generateLibraryDraft(job, file, item) {
         libLog(
           path.resolve(job.dir),
           'error',
-          `视频提示词：${label}：没有生成：读不到分镜结果（${error?.message || error}）`,
-          'side',
+          `${label}：没有生成：读不到分镜结果（${error?.message || error}）`,
+          'storyboard',
         );
     }
     // 分镜工程图在后台做（只等方舟、几乎不占电脑），这一路马上接着做下一集的草稿。
@@ -5008,7 +5061,7 @@ function startLibraryDrafts(args) {
   return run;
 }
 
-async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prompts = false, partial = false }) {
+async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prompts = false, partial = false, fresh = false }) {
   const key = path.resolve(dir);
   if (!candidates.length)
     return { success: false, error: '还没有去重成品，没法生成剪映草稿。请先勾选「去重」再开始。' };
@@ -5035,7 +5088,7 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
       ),
     );
     const added = files.filter((file) => !queued.has(file));
-    for (const file of added) running.queue.push({ file, mode: kind, prompts: withPrompts });
+    for (const file of added) running.queue.push({ file, mode: kind, prompts: withPrompts, fresh: fresh === true });
     running.total += added.length;
     libLog(key, 'info', `剪映草稿：正在生成，这 ${added.length} 集排到后面接着做`, 'side');
     libraryDraftEmit(running);
@@ -5052,7 +5105,7 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
     mode: kind,
     prompts: withPrompts,
     controller: new AbortController(),
-    queue: files.map((file) => ({ file, mode: kind, prompts: withPrompts })),
+    queue: files.map((file) => ({ file, mode: kind, prompts: withPrompts, fresh: fresh === true })),
     active: new Map(), // 正在做的集：projectId -> { file, label, mode, progress, message, detail, stageStartedAt, lastStage }
     status: 'running',
     total: files.length,
@@ -5090,6 +5143,7 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
         label,
         mode: item.mode,
         prompts: item.prompts === true,
+        fresh: item.fresh === true,
         progress: 0,
         message: '',
         detail: '',
@@ -5131,8 +5185,8 @@ async function startLibraryDraftsNow({ dir, files: candidates, mode, scope, prom
       libLog(
         key,
         'error',
-        `视频提示词：剩下 ${job.promptSkipped.length} 集（${job.promptSkipped.join('、')}）没有做：${job.promptFatal}`,
-        'side',
+        `剩下 ${job.promptSkipped.length} 集（${job.promptSkipped.join('、')}）没有做：${job.promptFatal}`,
+        'storyboard',
       );
     }
     job.status = job.cancelled ? 'stopped' : job.failed ? 'failed' : 'completed';
@@ -5284,7 +5338,15 @@ ipcMain.handle('library-storyboards', async (_event, payload = {}) => {
         continue;
       }
       const stat = await fsp.stat(target.html).catch(() => null);
-      items.push({ number, label: target.label, state: stat ? 'ready' : 'none', updatedAt: stat?.mtimeMs || 0 });
+      const shot = stat ? await fsp.stat(storyboardSnapshot.snapshotFile(target.html)).catch(() => null) : null;
+      items.push({
+        number,
+        label: target.label,
+        state: stat ? 'ready' : 'none',
+        updatedAt: stat?.mtimeMs || 0,
+        // 截图比页面旧（页面重新生成过）就当没有，界面会重新出图
+        image: shot && shot.mtimeMs >= stat.mtimeMs - 1000 ? `${localAssetUrl(storyboardSnapshot.snapshotFile(target.html))}?v=${Math.round(shot.mtimeMs)}` : '',
+      });
     }
     return { success: true, items };
   } catch (error) {
@@ -5321,6 +5383,44 @@ ipcMain.handle('library-storyboard-open', async (_event, payload = {}) => {
     await refreshStoryboardResolution(target);
     const error = await shell.openPath(target.html);
     return error ? { success: false, error } : { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 按已有的分镜工程图页面重新截图（老的工程图没有截图、截图没出来时用）。 */
+ipcMain.handle('library-storyboard-shot', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const target = storyboardTarget(dir, Number(payload.number));
+    if (!target || !fs.existsSync(target.html)) return { success: false, error: '这一集的分镜工程图还没有生成' };
+    await refreshStoryboardResolution(target);
+    const file = await snapshotStoryboard(target.html);
+    const stat = await fsp.stat(file);
+    return { success: true, image: `${localAssetUrl(file)}?v=${Math.round(stat.mtimeMs)}` };
+  } catch (error) {
+    return { success: false, error: `截图没出来：${error?.message || error}` };
+  }
+});
+
+/** 重新生成某一集的分镜工程图：不用上次问方舟的结果，重新看视频、写提示词、去字幕、截图。 */
+ipcMain.handle('library-storyboard-regenerate', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const busy = libraryBusyReason(dir);
+    if (busy) return { success: false, error: busy };
+    const number = Number(payload.number);
+    if (!storyboardTarget(dir, number)) return { success: false, error: '去重成品里没有这一集' };
+    return await startLibraryDrafts({
+      dir,
+      files: libraryDedupOutputs(dir),
+      mode: payload.mode,
+      scope: { numbers: [number] },
+      prompts: true,
+      fresh: true,
+    });
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

@@ -81,12 +81,16 @@ function ghostLabel(item) {
   return item.text;
 }
 
-/** 所选几集的整个分镜工程图：按集切换，原样显示分镜头脚本页面（三栏分镜卡片）。 */
-function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
+/**
+ * 所选几集的分镜工程图：每集一张截图（页头 + 前两个分镜），固定大小横排一行、不换行；点图看大图。
+ * 每集可以单独「重新生成」（重新看视频写提示词，不用上次的结果）；完整的交互页面点「网页」打开。
+ */
+function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, storyboardRunning }) {
   const [items, setItems] = useState([]);
-  const [current, setCurrent] = useState(null);
-  const [page, setPage] = useState({ html: '', error: '', loading: false });
-  const [openError, setOpenError] = useState('');
+  const [busy, setBusy] = useState({}); // 集号 -> { kind: 'shot' | 'regen', since: 页面当时的修改时间 }
+  const [errors, setErrors] = useState({});
+  const [reload, setReload] = useState(0);
+  const tried = useRef(new Set());
   const numbersKey = numbers.join(',');
 
   useEffect(() => {
@@ -99,76 +103,133 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dir, numbersKey, refreshKey]);
+  }, [dir, numbersKey, refreshKey, reload]);
 
-  const ready = items.filter((item) => item.state === 'ready');
-  const selected = ready.find((item) => item.number === current) || ready[0] || null;
-  const selectedNumber = selected?.number;
-  const selectedStamp = selected?.updatedAt;
-  useEffect(() => {
-    if (selectedNumber == null) return undefined;
-    let alive = true;
-    setPage((previous) => ({ ...previous, loading: true, error: '' }));
-    window.electronAPI
-      .libraryStoryboardHtml({ dir, number: selectedNumber })
-      .then((result) => {
-        if (!alive) return;
-        setPage(
-          result?.success
-            ? { html: result.html, error: '', loading: false }
-            : { html: '', error: result?.error || '打不开', loading: false },
-        );
-      })
-      .catch(() => alive && setPage({ html: '', error: '打不开', loading: false }));
-    return () => {
-      alive = false;
-    };
-  }, [dir, selectedNumber, selectedStamp]);
+  const setFor = (setter, number, value) =>
+    setter((previous) => {
+      const next = { ...previous };
+      if (value == null) delete next[number];
+      else next[number] = value;
+      return next;
+    });
 
-  if (!selected) {
-    return enabled ? <p className="sb-hint">分镜处理完、提示词写好后，所选集的整个分镜工程图会出现在这里。</p> : null;
-  }
-  const open = async () => {
-    setOpenError('');
-    const result = await window.electronAPI.libraryStoryboardOpen({ dir, number: selected.number });
-    if (!result?.success) setOpenError(result?.error || '打开失败');
+  const makeShot = async (number) => {
+    setFor(setErrors, number, null);
+    setFor(setBusy, number, { kind: 'shot' });
+    const result = await window.electronAPI.libraryStoryboardShot?.({ dir, number }).catch(() => null);
+    setFor(setBusy, number, null);
+    if (!result?.success) setFor(setErrors, number, result?.error || '截图没出来');
+    setReload((value) => value + 1);
   };
+
+  // 老的工程图没有截图（或页面重新生成过）：自动补出一张，每个版本只试一次
+  useEffect(() => {
+    for (const item of items) {
+      const key = `${item.number}-${item.updatedAt}`;
+      if (item.state !== 'ready' || item.image || busy[item.number] || tried.current.has(key)) continue;
+      tried.current.add(key);
+      makeShot(item.number);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
+  // 重新生成：页面更新了（修改时间变了）或者分镜工程图任务停了，就不再显示「正在重新生成」
+  useEffect(() => {
+    for (const item of items) {
+      const state = busy[item.number];
+      if (state?.kind !== 'regen') continue;
+      if (item.updatedAt > state.since || (!storyboardRunning && state.started)) setFor(setBusy, item.number, null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, storyboardRunning]);
+  useEffect(() => {
+    if (!storyboardRunning) return;
+    setBusy((previous) => {
+      const next = { ...previous };
+      for (const key of Object.keys(next)) if (next[key].kind === 'regen') next[key] = { ...next[key], started: true };
+      return next;
+    });
+  }, [storyboardRunning]);
+
+  const regenerate = async (item) => {
+    setFor(setErrors, item.number, null);
+    setFor(setBusy, item.number, { kind: 'regen', since: item.updatedAt || 0 });
+    const result = await window.electronAPI.libraryStoryboardRegenerate?.({ dir, number: item.number, mode }).catch(() => null);
+    if (!result?.success) {
+      setFor(setBusy, item.number, null);
+      setFor(setErrors, item.number, result?.error || '没能开始重新生成');
+    }
+  };
+
+  const open = async (number) => {
+    setFor(setErrors, number, null);
+    const result = await window.electronAPI.libraryStoryboardOpen({ dir, number });
+    if (!result?.success) setFor(setErrors, number, result?.error || '打开失败');
+  };
+
+  if (!items.length || (!enabled && !items.some((item) => item.state === 'ready'))) {
+    return enabled ? <p className="sb-hint">分镜处理完、提示词写好后，所选集的分镜工程图会出现在这里。</p> : null;
+  }
   return (
-    <div className="sb-results">
-      <div className="sb-tabs" role="tablist" aria-label="分镜工程图">
-        {items.map((item) => (
-          <button
-            key={item.number}
-            role="tab"
-            aria-selected={item.number === selected.number}
-            className={`sb-tab ${item.number === selected.number ? 'is-active' : ''}`}
-            disabled={item.state !== 'ready'}
-            title={
-              item.state === 'no-episode' ? '去重成品里还没有这一集' : item.state === 'none' ? '这一集还没有生成' : ''
-            }
-            onClick={() => setCurrent(item.number)}
-          >
-            第 {item.number} 集{item.state === 'none' && <em>未生成</em>}
-            {item.state === 'no-episode' && <em>无成品</em>}
-          </button>
-        ))}
-        <button className="btn btn-sm sb-open" onClick={open}>
-          在浏览器中打开
-        </button>
-      </div>
-      {page.error ? (
-        <p className="sb-hint is-error">{page.error}</p>
-      ) : (
-        <iframe
-          key={`${selected.number}-${selected.updatedAt}`}
-          className="sb-frame"
-          title={`第 ${selected.number} 集分镜工程图`}
-          sandbox="allow-scripts"
-          allowFullScreen
-          srcDoc={page.html}
-        />
-      )}
-      {openError && <p className="sb-hint is-error">{openError}</p>}
+    <div className="sb-row" role="list" aria-label="分镜工程图">
+      {items.map((item) => {
+        const state = busy[item.number];
+        const placeholder =
+          state?.kind === 'regen'
+            ? '正在重新生成…'
+            : state?.kind === 'shot'
+              ? '正在出图…'
+              : item.state === 'no-episode'
+                ? '去重成品里没有这一集'
+                : item.state === 'none'
+                  ? '还没生成'
+                  : '截图没出来';
+        return (
+          <div key={item.number} className="sb-card" role="listitem">
+            <button
+              type="button"
+              className="sb-thumb"
+              disabled={!item.image || state?.kind === 'regen'}
+              onClick={() => onView?.({ url: item.image, title: `第 ${item.number} 集分镜工程图`, wide: true })}
+              title={item.image ? '点击查看大图' : undefined}
+            >
+              {item.image && state?.kind !== 'regen' ? (
+                <img src={item.image} alt={`第 ${item.number} 集分镜工程图`} loading="lazy" />
+              ) : (
+                <span className={state ? 'is-busy' : ''}>
+                  {state && <RefreshCw size={14} className="spin" />}
+                  {placeholder}
+                </span>
+              )}
+            </button>
+            <div className="sb-card-foot">
+              <b>第 {item.number} 集</b>
+              <span className="sb-card-btns">
+                {item.state === 'ready' && !item.image && !state && (
+                  <button type="button" className="btn btn-sm" onClick={() => makeShot(item.number)}>
+                    重新出图
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => regenerate(item)}
+                  disabled={item.state === 'no-episode' || !!state}
+                  title="重新看视频、写提示词、去字幕、截图（不用上次的结果）"
+                >
+                  {item.state === 'ready' ? '重新生成' : '生成'}
+                </button>
+                {item.state === 'ready' && (
+                  <button type="button" className="btn btn-sm" onClick={() => open(item.number)} title="在浏览器里打开完整的分镜工程图页面">
+                    网页
+                  </button>
+                )}
+              </span>
+            </div>
+            {errors[item.number] && <p className="sb-card-error">{errors[item.number]}</p>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1024,7 +1085,10 @@ export default function SeriesDetail({ folder, active = true }) {
                 dir={detail.dir}
                 numbers={draftNumbers}
                 enabled={draftOn && draftPrompts}
-                refreshKey={`${activity?.draft?.status || ''}-${activity?.draft?.done || 0}-${activity?.draft?.failed || 0}`}
+                mode={draftMode}
+                onView={setViewing}
+                storyboardRunning={activity?.draft?.storyboard?.status === 'running'}
+                refreshKey={`${activity?.draft?.status || ''}-${activity?.draft?.storyboard?.done || 0}-${activity?.draft?.storyboard?.failed || 0}-${activity?.draft?.storyboard?.status || ''}`}
               />
             </div>
 
@@ -1144,7 +1208,7 @@ export default function SeriesDetail({ folder, active = true }) {
       {viewing && (
         <div className="lib-mask lib-mask-top lib-viewer" onClick={() => setViewing(null)}>
           <div
-            className="lib-viewer-box"
+            className={`lib-viewer-box ${viewing.wide ? 'is-wide' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-label={viewing.title}
@@ -1156,7 +1220,9 @@ export default function SeriesDetail({ folder, active = true }) {
                 ×
               </button>
             </div>
-            <img src={viewing.url} alt={viewing.title} />
+            <div className="lib-viewer-scroll">
+              <img src={viewing.url} alt={viewing.title} />
+            </div>
           </div>
         </div>
       )}

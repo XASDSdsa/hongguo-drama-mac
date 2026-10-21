@@ -99,13 +99,19 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
   const jobs = (activity?.jobs || []).filter((job) => ['waiting', 'starting', 'failed'].includes(job.status));
   const planning = activity?.planning;
   const logs = activity?.logs || [];
-  const mainLogs = useMemo(() => logs.filter((line) => line.channel !== 'side'), [logs]);
+  const mainLogs = useMemo(() => logs.filter((line) => line.channel !== 'side' && line.channel !== 'storyboard'), [logs]);
   const sideLogs = useMemo(() => logs.filter((line) => line.channel === 'side'), [logs]);
+  const storyboardLogs = useMemo(() => logs.filter((line) => line.channel === 'storyboard'), [logs]);
   const overall = overallProgress(batches);
   const activeBatches = batches.filter(isActiveBatch);
   const draft = activity?.draft;
   const draftRunning = draft?.status === 'running';
-  const stepElapsed = useElapsed(draft?.stageStartedAt, draftRunning);
+  // 剪映草稿和分镜工程图各算各的：草稿做完了、分镜工程图还在问方舟时，草稿那一行不再显示「正在做」
+  const drafting = draftRunning && draft?.drafting !== false;
+  const stepElapsed = useElapsed(draft?.stageStartedAt, drafting);
+  const board = draft?.storyboard;
+  const boardRunning = board?.status === 'running';
+  const boardElapsed = useElapsed(board?.stageStartedAt, boardRunning);
 
   const act = async (fn) => {
     setError('');
@@ -179,22 +185,47 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
       <p className="act-status">{statusText}</p>
 
       {draft && (draftRunning || draft.status === 'failed') && (
-        <div className={`act-draft is-${draft.status}`}>
+        <div className={`act-draft is-${drafting ? 'running' : draft.failed ? 'failed' : 'completed'}`}>
           <div className="act-draft-line">
             <span>
-              剪映草稿（{draft.modeText}）：已完成 {draft.done}/{draft.total} 集
+              剪映草稿（{draft.modeText}）：{drafting ? '已完成' : '做完了'} {draft.done}/{draft.total} 集
               {draft.failed ? `，失败 ${draft.failed} 集` : ''}
-              {draftRunning && draft.current ? ` · 正在做 ${draft.current}` : ''}
-              {draftRunning && draft.message
+              {drafting && draft.current ? ` · 正在做 ${draft.current}` : ''}
+              {drafting && draft.message
                 ? `（${draft.message}${draft.detail ? ` · ${draft.detail}` : ''}${stepElapsed ? ` · 已 ${stepElapsed}` : ''}）`
                 : ''}
             </span>
           </div>
-          {draftRunning && (
+          {drafting && (
             <div className="act-bar is-live" aria-hidden="true">
               <i
                 style={{
                   width: `${Math.floor(((draft.done + draft.progress / 100) / Math.max(1, draft.total)) * 100)}%`,
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {board && (boardRunning || board.status === 'failed') && (
+        <div className={`act-draft act-board is-${board.status}`}>
+          <div className="act-draft-line">
+            <span>
+              分镜工程图：已完成 {board.done}/{board.total} 集
+              {board.failed ? `，失败 ${board.failed} 集` : ''}
+              {boardRunning && board.current ? ` · 正在做 ${board.current}` : ''}
+              {boardRunning && board.message
+                ? `（${board.message}${board.detail ? ` · ${board.detail}` : ''}${boardElapsed ? ` · 已 ${boardElapsed}` : ''}）`
+                : ''}
+              {boardRunning && board.queued ? ` · 还有 ${board.queued} 集排队` : ''}
+            </span>
+          </div>
+          {boardRunning && (
+            <div className="act-bar is-live" aria-hidden="true">
+              <i
+                style={{
+                  width: `${Math.floor(((board.done + board.progress / 100) / Math.max(1, board.total)) * 100)}%`,
                 }}
               />
             </div>
@@ -221,7 +252,8 @@ export default function SeriesProgress({ dir, activity, onChanged }) {
 
       <div className="act-logs">
         <LogBox title="主任务日志" lines={mainLogs} empty="暂无日志。" />
-        <LogBox title="支线任务日志（海报、剪映草稿等）" lines={sideLogs} empty="暂无日志。" />
+        <LogBox title="剪映草稿、海报日志" lines={sideLogs} empty="暂无日志。" />
+        <LogBox title="分镜工程图日志" lines={storyboardLogs} empty="暂无日志。" />
       </div>
     </section>
   );

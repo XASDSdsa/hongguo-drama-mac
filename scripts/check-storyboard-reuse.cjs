@@ -54,7 +54,7 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   context.resolveFfmpeg = (name) => name;
   context.libraryReleaseTitle = (dir) => path.basename(dir);
   context.libraryDraftReadiness = async () => '';
-  context.libLog = (_dir, level, text) => logs.push(`${level} ${text}`);
+  context.libLog = (_dir, level, text, channel = 'main') => logs.push(`${level} [${channel}] ${text}`);
   return { context, logs };
 }
 
@@ -142,8 +142,8 @@ function makeMain(root, userData, storeExtra, modules = {}) {
     isActive: () => false,
   });
 
-  async function draft({ prompts, mode = 'simple' }) {
-    const started = await context.startLibraryDrafts({ dir, files: [file], mode, scope: { numbers: [1] }, prompts });
+  async function draft({ prompts, mode = 'simple', fresh = false }) {
+    const started = await context.startLibraryDrafts({ dir, files: [file], mode, scope: { numbers: [1] }, prompts, fresh });
     assert.equal(started.success, true, JSON.stringify(started));
     const jobs = vm.runInContext('libraryDraftJobs', context);
     const deadline = Date.now() + 10000;
@@ -176,10 +176,28 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   assert.equal(promptCalls[0].inputPath, file);
   assert.equal(promptCalls[0].model, 'm');
   assert.ok(promptCalls[0].client, 'an Ark client is made');
-  assert.ok(!logs.some((line) => /视频提示词.*没有生成/.test(line)), logs.filter((l) => /视频提示词/.test(l)).join('\n'));
-  assert.ok(logs.some((line) => /视频提示词：.*已生成/.test(line)), 'the storyboard step reports success');
+  assert.ok(!logs.some((line) => /\[storyboard\].*没有生成/.test(line)), logs.filter((l) => /\[storyboard\]/.test(l)).join('\n'));
+  assert.ok(logs.some((line) => /^ok \[storyboard\] .*已生成/.test(line)), 'the storyboard step reports success, in its own log column');
   assert.ok(logs.some((line) => /沿用它的 3 个分镜，只补做分镜工程图/.test(line)));
   console.log('PASS storyboard later: reuses the draft shots, no re-analysis, no second draft');
+
+  // 2b. 单集「重新生成」：还是用草稿当时的分镜（不重新分析、不再做草稿），但不用上次问方舟的结果（缓存删掉）
+  const cacheFile = path.join(tmp, 'ud', 'video-prompt-cache', `${projectId}.json`);
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fs.writeFileSync(cacheFile, '{"key":"old"}');
+  await draft({ prompts: true, fresh: true });
+  assert.equal(pipelineStarts, 1, 'regenerate: no new analysis');
+  assert.equal(draftsMade, 1, 'regenerate: no second draft');
+  assert.equal(promptCalls.length, 2);
+  assert.equal(promptCalls[1].cacheFile, cacheFile);
+  assert.ok(!fs.existsSync(cacheFile), 'regenerate: last answers from Ark are not reused');
+  assert.ok(logs.some((line) => /\[storyboard\] .*开始（重新生成，不用上次的结果）/.test(line)));
+  // 平常补做（不是重新生成）：缓存留着
+  fs.writeFileSync(cacheFile, '{"key":"old"}');
+  await draft({ prompts: true });
+  assert.ok(fs.existsSync(cacheFile), 'a normal run keeps the cache');
+  promptCalls.splice(1);
+  console.log('PASS regenerate one episode: same shots, no new draft, fresh answers from Ark');
 
   // 3. 成品重新做过（文件变了）：按老办法重新分析。
   fs.writeFileSync(file, Buffer.alloc(5000, 2));
@@ -232,7 +250,11 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   await until(() => job2.done === 2 && job2.active.size === 0, 'both drafts are made while the storyboards still wait for Ark');
   assert.equal(pipelineStarts - startsBefore, 2);
   assert.equal(job2.status, 'running', 'the job is not finished while storyboards are still being made');
-  assert.match(context.libraryDraftSnapshot(job2).message, /分镜工程图还剩 \d 集/);
+  const snap2 = context.libraryDraftSnapshot(job2);
+  assert.equal(snap2.drafting, false, '剪映草稿这部分做完了');
+  assert.equal(snap2.message, '', '草稿那一行不再写分镜工程图的事');
+  assert.equal(snap2.storyboard.status, 'running', '分镜工程图单独一行，还在做');
+  assert.equal(snap2.storyboard.total, 2);
   assert.ok(promptCalls.length - callsBefore >= 1);
   release();
   promptGate = null;
@@ -257,10 +279,10 @@ function makeMain(root, userData, storeExtra, modules = {}) {
   assert.equal(job3.status, 'completed', 'the drafts themselves are fine');
   assert.equal(job3.done, 3);
   assert.equal(promptCalls.length - callsBefore3, 1, 'only the first episode asked Ark');
-  assert.ok(logs.some((line) => /视频提示词：.*没有生成：方舟账号这个模型的用量到了设定上限/.test(line)));
+  assert.ok(logs.some((line) => /\[storyboard\] .*没有生成：方舟账号这个模型的用量到了设定上限/.test(line)));
   assert.ok(
-    logs.some((line) => /视频提示词：剩下 2 集（剧三_第002集、剧三_第003集）没有做：方舟账号这个模型的用量到了设定上限/.test(line)),
-    logs.filter((line) => /视频提示词/.test(line)).slice(-4).join('\n'),
+    logs.some((line) => /\[storyboard\] 剩下 2 集（剧三_第002集、剧三_第003集）没有做：方舟账号这个模型的用量到了设定上限/.test(line)),
+    logs.filter((line) => /\[storyboard\]/.test(line)).slice(-4).join('\n'),
   );
   promptFatal = '';
   console.log('PASS account problem (usage limit): the other episodes skip Ark with one clear log line');

@@ -123,7 +123,7 @@
 }
 .act-logs {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  grid-template-columns: minmax(0, 4fr) minmax(0, 3fr) minmax(0, 3fr);
   gap: 14px;
   margin-top: 4px;
 }

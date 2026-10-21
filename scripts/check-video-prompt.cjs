@@ -349,8 +349,17 @@ async function main() {
   assert.match(detail, /const TRASH = .*'废纸篓' : '回收站'/);
   assert.match(preload, /libraryStoryboardHtml:/);
   assert.match(preload, /libraryStoryboardOpen:/);
-  assert.match(detail, /<iframe/, '分镜工程图原样显示在界面里');
-  assert.match(detail, /srcDoc=/);
+  // 界面里按集显示截图（页头 + 前两个分镜），固定大小横排；点开看大图；完整页面点「网页」打开；每集能单独重新生成
+  assert.match(detail, /className="sb-row"/, '分镜工程图截图横排');
+  assert.match(detail, /onView\?\.\(\{ url: item\.image/, '点截图看大图');
+  assert.match(detail, /libraryStoryboardRegenerate/, '单集重新生成');
+  assert.match(preload, /libraryStoryboardShot:/);
+  assert.match(preload, /libraryStoryboardRegenerate:/);
+  assert.match(main, /ipcMain\.handle\('library-storyboard-regenerate'/);
+  assert.match(main, /fresh: true/, '重新生成不用上次的结果');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'SeriesDetail.css'), 'utf8');
+  assert.match(css, /\.sb-row \{[^}]*flex-wrap: nowrap/, '一行不换行');
+  assert.match(css, /\.sb-thumb \{[^}]*width: 232px;[^}]*height: 290px/, '截图固定大小');
   const settingsUi = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Settings.jsx'), 'utf8');
   for (const key of ['ark_base_url', 'ark_api_key', 'ark_video_model', 'video_prompt_max_seconds']) assert.ok(settingsUi.includes(`'${key}'`), `设置页要保存 ${key}`);
 
