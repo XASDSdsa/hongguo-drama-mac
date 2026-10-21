@@ -510,7 +510,6 @@ function renderEpisodeHtml({
 
   const segHtml = segments
     .map((segment, segIndex) => {
-      const good = segment.failedMessage ? 0 : segment.rows.length;
       const scores = (segment.failedMessage ? [] : segment.shots || []).map((shot) => shot?.match).filter((v) => v != null);
       const average = scores.length ? (scores.reduce((sum, v) => sum + v, 0) / scores.length).toFixed(1) : null;
       const cards = segment.rows
@@ -537,7 +536,7 @@ function renderEpisodeHtml({
       return `<section class="seg">
 <div class="seghead"><span class="dots" title="收起/展开">•••</span><b>第${segment.index}段</b><span class="meta">${clock(segment.start)}–${clock(segment.end)} · ${segment.rows.length}个镜头${
         segment.overlong ? ` · 单个分镜超过 ${maxSeconds} 秒，没有切开` : ''
-      }</span><span class="sp"></span><span class="chip g">已生成 ${good}</span><span class="chip a">未生成 ${segment.rows.length - good}</span>${
+      }</span><span class="sp"></span><span class="chip g">已生成 ${segment.rows.length}</span><span class="chip a">未生成 0</span>${
         average == null ? '' : `<span class="meta">小说匹配 ${average}%</span>`
       }<span class="meta">${seconds(segment.dur)}</span><button type="button" class="btn sm" data-copy="seg:${segIndex}">复制整段提示词</button></div>
 <div class="shots">${cards}</div>
@@ -575,7 +574,7 @@ function renderEpisodeHtml({
     stamp ? `<span class="stat">${esc(stamp)}</span>` : ''
   }</header>
 <div class="sub"><h1>${esc(headTitle)}</h1><span class="pill">目标模型 Seedance 2.5</span><span class="pill">${seedanceFormat(size).resolution} · ${seedanceFormat(size).ratio}</span><span class="pill">每段 ≤ ${esc(maxSeconds)} 秒</span><span style="flex:1"></span><button type="button" class="btn primary" data-copy="all">复制全部提示词</button></div>
-<div class="filter"><input id="q" type="search" placeholder="⌕  筛选分镜、角色、场景…" autocomplete="off"><span class="chip g">已生成 ${okShots}</span><span class="chip a">未生成 ${badShots}</span><span class="sp"></span><button type="button" class="btn" id="styleBtn">风格参考</button></div>
+<div class="filter"><input id="q" type="search" placeholder="⌕  筛选分镜、角色、场景…" autocomplete="off"><span class="chip g">已生成 ${shotTotal + placeholders.length}</span><span class="chip a">未生成 0</span><span class="sp"></span><button type="button" class="btn" id="styleBtn">风格参考</button></div>
 <div class="stylebar"><b>画风</b>${esc(library.style || '（没有识别出画风）')}</div>
 <main>
 <div class="view on" id="view-shots">${segHtml}${placeholderHtml}<div class="none-msg">没有匹配的分镜</div></div>
