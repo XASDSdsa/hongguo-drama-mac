@@ -101,8 +101,55 @@ jobs:
 
   # 快速更新包：只有软件代码（resources/app.asar + 剪映草稿脚本），几分钟出包，用户解压后双击 update.cmd 替换。
   # 运行库（FFmpeg、剪映运行时、模型）没变时用它；运行库变了要出完整安装包。
+  # 快速更新也要在真 Windows 上过一遍剪映草稿：用打包时同一个 pyJianYingDraft 和发布过的 Windows FFmpeg，
+  # 实际生成一份三分轨草稿（中文路径），核对 Windows 版剪映读的 draft_content.json 等。几分钟，不打安装包。
+  quick-windows-check:
+    if: inputs.quick == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Install pyJianYingDraft and the bundled Windows FFmpeg
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q -r scripts/jianying-requirements.txt
+          mkdir -p "$RUNNER_TEMP/ff"
+          gh release download v1.2.6 --repo "${{ github.repository }}" -p 'ffmpeg-*-win-x64.zip' -D "$RUNNER_TEMP/ff"
+          (cd "$RUNNER_TEMP/ff" && 7z x -y -bd ffmpeg-*-win-x64.zip > /dev/null)
+          ff=$(find "$RUNNER_TEMP/ff" -iname ffmpeg.exe | head -n 1)
+          [ -n "$ff" ] || { echo "::error title=没有 FFmpeg::release zip 里没找到 ffmpeg.exe"; exit 1; }
+          echo "FFMPEG_PATH=$(cygpath -w "$ff")" >> "$GITHUB_ENV"
+
+      - name: Jianying draft checks on Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_check() { if ! "$@" > "$RUNNER_TEMP/c.log" 2>&1; then echo "::error title=Windows 检查没过：$*::$(tail -n 25 "$RUNNER_TEMP/c.log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; exit 1; fi; tail -n 3 "$RUNNER_TEMP/c.log"; }
+          run_check node scripts/check-jianying-relink.cjs
+          run_check node scripts/check-jianying-location.cjs
+          run_check env PYTHON=python REQUIRE_JIANYING=1 node scripts/check-jianying-simple-draft.cjs
+          run_check node scripts/check-undefined-names.cjs
+
   quick-update:
     if: inputs.quick == 'true'
+    needs: quick-windows-check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
