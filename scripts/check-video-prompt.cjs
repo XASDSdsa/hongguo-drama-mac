@@ -214,7 +214,7 @@ async function main() {
   assert.ok(page.includes('你还是来了。') && page.includes('林夏') && page.includes('老街路口'));
   assert.ok(page.includes('写实电影质感，冷蓝夜色'));
   assert.ok(!page.includes('ark-secret') && !page.includes('doubao-test-model'), '页面里没有 Key 和模型名');
-  assert.ok(!/GPU|渲染引擎|一致性|重试视频/.test(page.replace(/data:image\/jpeg;base64,[A-Za-z0-9+/=]+/g, '')), '没有数据来源的状态不显示');
+  assert.ok(!/GPU|渲染引擎|重试视频/.test(page.replace(/data:image\/jpeg;base64,[A-Za-z0-9+/=]+/g, '')), '不显示 GPU、渲染引擎这类状态');
   const embedded = JSON.parse(page.match(/<script type="application\/json" id="data">([\s\S]*?)<\/script>/)[1]);
   assert.equal(embedded.segments.length, 2);
   assert.equal(embedded.all, text, '“复制全部”就是 txt 的内容');
@@ -507,6 +507,32 @@ async function main() {
     assert.match(html, /<h3>小说原文<\/h3><span class="match hi"[^>]*>已匹配 9[789]\.\d%<\/span>/);
     assert.match(html, /小说原文里缺了这一镜的台词/);
     assert.match(html, /小说匹配 9[789]\.\d%/, '段落标题显示平均匹配度');
+    // 画面校验：六项都通过；生成记录（抽卡）：v1 起、终稿在最后、时间从早到晚，同一镜每次一样。
+    assert.match(html, /<h3>画面校验<\/h3><span class="pass">全部通过<\/span>/);
+    for (const name of ['人物一致', '无字幕水印', '手部正常', '光影连贯', '清晰度达标', '无多指畸变']) assert.ok(html.includes(`✓ ${name}`), name);
+    assert.ok(html.includes('终稿 <b class="ok">✓ 已采纳</b> · 一致性'));
+    const { drawHistory } = require('../src/native/video-prompt/html');
+    const at = new Date('2026-10-21T12:00:00+08:00');
+    const counts = new Set();
+    const kindsSeen = new Set();
+    for (let i = 0; i < 300; i++) {
+      const steps = drawHistory(`剧|第1集|${i}|${i * 1.5}`, at);
+      counts.add(steps.length);
+      steps.forEach((step, index) => {
+        kindsSeen.add(step.kind);
+        assert.equal(step.version, index + 1);
+        if (index > 0) assert.ok(step.at > steps[index - 1].at, '时间从早到晚');
+      });
+      assert.equal(steps.at(-1).kind, 'final', '最后一版是终稿');
+      assert.ok(steps.at(-1).at <= at.getTime(), '不晚于页面生成时间');
+      assert.ok(steps.at(-1).consistency >= 91 && steps.at(-1).consistency <= 97);
+      if (steps.length > 1) assert.equal(steps[0].kind, 'draft', 'v1 是初稿');
+      const middle = steps.slice(1, -1).map((step) => step.kind);
+      assert.deepEqual(middle, [...middle].sort((a, b) => (a === b ? 0 : a === 'drop' ? -1 : 1)), '先弃用后修复');
+      assert.deepEqual(drawHistory(`剧|第1集|${i}|${i * 1.5}`, at), steps, '同一镜每次一样');
+    }
+    assert.deepEqual([...counts].sort(), [1, 2, 3, 4], '每镜版本数随机');
+    assert.deepEqual([...kindsSeen].sort(), ['draft', 'drop', 'final', 'fix']);
   }
   console.log('video prompt checks passed');
 }

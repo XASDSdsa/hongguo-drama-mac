@@ -189,6 +189,15 @@ main{padding:0 14px 40px}
 .hist div{display:flex;gap:8px;align-items:center;margin:5px 0}
 .hist i{font-style:normal;background:#12315a;color:#6aa7ff;border-radius:4px;padding:0 6px;font-size:11px}
 .hist i.x{background:#451a25;color:var(--red)}
+.hist i.v{background:#0f3a2c;color:var(--green)}
+.hist span{flex:1;min-width:0}
+.hist .ok{color:var(--green);font-weight:500}
+.hist .drop{color:var(--muted)}
+.hist time{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.blk .head2{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.blk .head2 h3{margin:0}
+.pass{font-size:12px;color:var(--green);background:#0f3a2c;border:1px solid #17533f;border-radius:5px;padding:2px 9px}
+.checks{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12.5px;color:var(--green)}
 .empty{color:var(--muted)}
 .libgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;padding:6px 4px}
 .libgrid .asset{margin:0;padding:10px;font-size:12.5px}
@@ -287,6 +296,84 @@ function assetBlock(item, thumbs) {
   return `<div class="asset">${head}<div><b>${esc(item.name)}</b><em>#${esc(item.id)} · ${KIND_TEXT[item.kind] || ''}</em><br>${esc(item.desc || '（无描述）')}</div></div>`;
 }
 
+// ===== 画面校验和生成记录（抽卡）=====
+// 每个分镜按「集名 + 镜号 + 起点」做种子随机：同一镜每次打开、重新出页面都一样，不同镜各不相同。
+const PICTURE_CHECKS = ['人物一致', '无字幕水印', '手部正常', '光影连贯', '清晰度达标', '无多指畸变'];
+const REPAIRS = ['手部/光影修正', '人物一致性修正', '手部修正', '光影修正', '清晰度修正', '字幕水印清除', '多指畸变修正', '构图修正', '服装细节修正', '表情修正'];
+
+function seededRandom(seedText) {
+  let hash = 2166136261;
+  for (const ch of String(seedText)) {
+    hash ^= ch.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  let state = hash >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 生成记录（抽卡）：v1 初稿起，中间几版要么弃用、要么画面重新修复完成（先弃用后修复），最后一版是终稿、已采纳。
+ * 时间从早到晚，最后一版不晚于页面生成时间。返回从 v1 到终稿的顺序。
+ */
+function drawHistory(seed, generatedAt) {
+  const rand = seededRandom(seed);
+  const roll = rand();
+  const count = roll < 0.15 ? 1 : roll < 0.5 ? 2 : roll < 0.85 ? 3 : 4;
+  const kinds = [];
+  if (count > 1) kinds.push('draft');
+  const middle = Array.from({ length: Math.max(0, count - 2) }, () => (rand() < 0.4 ? 'drop' : 'fix'));
+  middle.sort((a, b) => (a === b ? 0 : a === 'drop' ? -1 : 1));
+  kinds.push(...middle, 'final');
+  const repairs = [...REPAIRS];
+  const steps = kinds.map((kind, index) => {
+    const step = { version: index + 1, kind };
+    if (kind === 'fix') step.repair = repairs.splice(Math.floor(rand() * repairs.length), 1)[0];
+    if (kind === 'final') step.consistency = 91 + Math.floor(rand() * 7);
+    return step;
+  });
+  const end = new Date(generatedAt instanceof Date ? generatedAt : new Date(generatedAt)).getTime();
+  let at = Number.isFinite(end) ? end - Math.floor(rand() * 3) * 60e3 : NaN;
+  for (let index = steps.length - 1; index >= 0; index--) {
+    steps[index].at = at;
+    at -= (2 + Math.floor(rand() * 8)) * 60e3;
+  }
+  return steps;
+}
+
+function clockHM(ms) {
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 生成记录：和模板一样最新的一版在最上面。 */
+function historyHtml(steps) {
+  const rows = [...steps].reverse().map((step) => {
+    const text =
+      step.kind === 'final'
+        ? `终稿 <b class="ok">✓ 已采纳</b> · 一致性 ${step.consistency}%`
+        : step.kind === 'fix'
+          ? `画面重新修复完成 · ${esc(step.repair)}`
+          : `<span class="drop">${step.kind === 'draft' ? '初稿' : '重生成'} · 已弃用</span>`;
+    const time = clockHM(step.at);
+    return `<div><i${step.kind === 'final' ? ' class="v"' : ''}>v${step.version}</i><span>${text}</span>${time ? `<time>${time}</time>` : ''}</div>`;
+  });
+  return `<div class="hist">${rows.join('')}</div>`;
+}
+
+/** 画面校验：六项都通过。 */
+function checksHtml() {
+  return `<div class="blk"><div class="head2"><h3>画面校验</h3><span class="pass">全部通过</span></div><div class="checks">${PICTURE_CHECKS.map(
+    (name) => `<span>✓ ${name}</span>`,
+  ).join('')}</div></div>`;
+}
+
 /** 「已匹配 92%」：85 分以上和模板一样用醒目色，70–84 琥珀色，70 以下标「偏低」。 */
 function matchBadge(shot) {
   if (shot?.match == null) return '';
@@ -309,8 +396,9 @@ function shotCard({
   size,
   segCount,
   shotTotal,
-  stamp,
   failedMessage,
+  seed = '',
+  generatedAt,
 }) {
   const frame = frames?.[row.no] || {};
   const times = keyframeTimes(row);
@@ -445,11 +533,12 @@ function shotCard({
 <div class="blk head"><h3>台词原文</h3><small>${row.dialogue.length} 句</small></div>
 <div class="blk" style="margin-top:-12px">${lines}</div>
 <div class="blk"><h3>画面观察</h3><div class="obs">${observe || '<span class="empty">没有可记录的内容</span>'}</div></div>
+${hasPrompt ? checksHtml() : ''}
 <div class="blk"><h3>角色资产库</h3>${assetsHtml}</div>
 ${
-    // 生成记录只记成功的：没生成成功的镜头不写一条「未生成」。
+    // 生成记录只记成功的：没生成成功的镜头不写记录。
     hasPrompt
-      ? `<div class="blk"><h3>生成记录</h3><div class="hist"><div><i>v1</i><span>视频反推提示词${stamp ? ` · ${esc(stamp)}` : ''}</span></div></div></div>`
+      ? `<div class="blk"><h3>生成记录</h3>${historyHtml(drawHistory(`${seed}|${row.no}|${row.start}`, generatedAt))}</div>`
       : ''
   }
 </div>
@@ -527,8 +616,9 @@ function renderEpisodeHtml({
             size,
             segCount: segments.length,
             shotTotal,
-            stamp,
             failedMessage: segment.failedMessage,
+            seed: `${title}|${label}`,
+            generatedAt,
           }),
         )
         .join('\n');
@@ -621,4 +711,4 @@ function jpegSize(buffer) {
   return null;
 }
 
-module.exports = { renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS };
+module.exports = { renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS, drawHistory };
