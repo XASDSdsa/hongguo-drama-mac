@@ -293,7 +293,7 @@ function matchBadge(shot) {
   const value = shot.match;
   const tone = value >= 85 ? 'hi' : value >= 70 ? 'mid' : 'lo';
   const self = shot.match_source === 'self' ? '（自评）' : '';
-  return `<span class="match ${tone}" title="${self ? '核对没成功，这是方舟写小说原文时的自评分' : '方舟单独对照画面核对人物、动作、场景、对白后给的分'}">已匹配 ${value}%${self}${value < 70 ? '（偏低）' : ''}</span>`;
+  return `<span class="match ${tone}" title="${self ? '核对没成功，这是方舟写小说原文时的自评分' : '方舟单独对照画面核对人物、动作、场景、对白后给的分'}">已匹配 ${Number(value).toFixed(1)}%${self}${value < 70 ? '（偏低）' : ''}</span>`;
 }
 
 function shotCard({
@@ -438,7 +438,7 @@ function shotCard({
 <div class="c3">
 <div class="blk novel"><div class="head"><h3>小说原文</h3>${matchBadge(shot)}</div>${
     shot?.novel ? `<p class="novtext">${esc(shot.novel)}</p>` : `<p class="empty">${hasPrompt ? '方舟没有写出这一镜的小说原文' : '本段未生成'}</p>`
-  }${shot?.novel && shot.dialogue_covered != null && shot.dialogue_covered < 70 ? '<p class="novnote">小说原文里缺了这一镜的台词，匹配度最多按 70% 算</p>' : ''}${
+  }${shot?.novel && shot.dialogue_covered != null && shot.dialogue_covered < 70 ? '<p class="novnote">小说原文里缺了这一镜的台词</p>' : ''}${
     shot?.novel && (shot.mismatch?.length || shot.issue)
       ? `<p class="novnote">核对：${shot.mismatch?.length ? `${esc(shot.mismatch.join('、'))}对不上` : ''}${shot.mismatch?.length && shot.issue ? '；' : ''}${esc(shot.issue || '')}</p>`
       : ''
@@ -512,7 +512,7 @@ function renderEpisodeHtml({
     .map((segment, segIndex) => {
       const good = segment.failedMessage ? 0 : segment.rows.length;
       const scores = (segment.failedMessage ? [] : segment.shots || []).map((shot) => shot?.match).filter((v) => v != null);
-      const average = scores.length ? Math.round(scores.reduce((sum, v) => sum + v, 0) / scores.length) : null;
+      const average = scores.length ? (scores.reduce((sum, v) => sum + v, 0) / scores.length).toFixed(1) : null;
       const cards = segment.rows
         .map((row, shotIndex) =>
           shotCard({

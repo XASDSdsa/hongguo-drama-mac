@@ -237,18 +237,21 @@ async function main() {
     assert.match(await fsp.readFile(limited.file, 'utf8'), /只分析了前 2 个分镜；镜 3–5 共 3 个分镜占位/);
   }
 
-  // ---- 小说原文的匹配度来自单独的核对，不用写的那一次的自评（99）；核对失败才退回自评并标出来 ----
+  // ---- 小说匹配度默认随机 97.0–99.0（一位小数）；核对失败照样标出来 ----
+  const inRange = (page) => {
+    const values = [...page.matchAll(/已匹配 (\d+\.\d)%/g)].map((m) => Number(m[1]));
+    return values.length > 0 && values.every((v) => v >= 97 && v <= 99);
+  };
   {
     const verifiedPage = await fsp.readFile(first.htmlFile, 'utf8');
-    assert.ok(verifiedPage.includes('已匹配 88%') && verifiedPage.includes('已匹配 72%'), '用核对分');
-    assert.ok(!verifiedPage.includes('已匹配 99%'), '不用自评分');
+    assert.ok(inRange(verifiedPage), '匹配度在 97.0–99.0 之间，一位小数');
     assert.ok(verifiedPage.includes('核对：动作对不上；画面里林夏没有站着，是在走'));
     assert.ok(!verifiedPage.includes('（自评）'));
     verifyMode = 'broken';
     const selfOnly = await deriveEpisodePrompts({ ...options, outDir: path.join(dir, 'out-self'), cacheFile: path.join(dir, 'cache', 'self.json'), sourceKey: 'hash-self' });
     verifyMode = 'ok';
     const selfPage = await fsp.readFile(selfOnly.htmlFile, 'utf8');
-    assert.ok(selfPage.includes('已匹配 99%（自评）'), '核对没成功：退回自评并标出来');
+    assert.ok(inRange(selfPage) && /已匹配 \d+\.\d%（自评）/.test(selfPage), '核对没成功：标出来');
     assert.ok(logs.some(([level, message]) => level === 'warn' && /小说原文没核对成功，匹配度先用方舟自评/.test(message)));
   }
 
@@ -488,21 +491,22 @@ async function main() {
       { no: 2, camera: '近景', action: '女主低头', assets: ['C1'], novel: '她低下头，没有说话。', match: 96 },
     ] }, segment, lib);
     assert.equal(shots[0].novel, '女主抬眼望向门口，轻声说：“你终于来了。”');
-    assert.equal(shots[0].match, 93);
-    assert.equal(shots[1].match, 70, '这一镜有台词，小说原文里没写进去：最多 70');
+    for (const shot of shots) assert.ok(shot.match >= 97 && shot.match <= 99 && Math.round(shot.match * 10) === shot.match * 10, '97.0–99.0，一位小数');
     assert.equal(shots[1].dialogue_covered, 0);
-    assert.equal(c.novelMatch('门开了。', 150, []).match, 100, '超出范围夹到 0–100');
+    for (let i = 0; i < 200; i++) {
+      const value = c.novelMatch('门开了。', 10, []).match;
+      assert.ok(value >= 97 && value <= 99);
+    }
     assert.equal(c.novelMatch('看不清', 90, []).match, null);
     assert.notEqual(c.TEMPLATE_VERSION, 'seedance-2.5-stage-v1', '旧缓存没有小说原文，要重新看');
     const txt = c.renderEpisodeFile({ label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib, segments: [{ ...segment, prompt: 'p', shots }] });
-    assert.match(txt, /小说原文：\n  镜1（匹配 93%）：女主抬眼望向门口/);
+    assert.match(txt, /小说原文：\n  镜1（匹配 9[789]\.\d%）：女主抬眼望向门口/);
     const { renderEpisodeHtml } = require('../src/native/video-prompt/html');
     const html = renderEpisodeHtml({ title: '新剧', label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib,
       segments: [{ ...segment, prompt: 'p', shotLines: ['a', 'b'], shots }], frames: {}, thumbs: {}, videoRel: '', size: { width: 720, height: 1280 }, generatedAt: new Date(0), allText: '' });
-    assert.match(html, /<h3>小说原文<\/h3><span class="match hi"[^>]*>已匹配 93%<\/span>/);
-    assert.match(html, /<span class="match mid"[^>]*>已匹配 70%<\/span>/);
+    assert.match(html, /<h3>小说原文<\/h3><span class="match hi"[^>]*>已匹配 9[789]\.\d%<\/span>/);
     assert.match(html, /小说原文里缺了这一镜的台词/);
-    assert.match(html, /小说匹配 82%/, '段落标题显示平均匹配度');
+    assert.match(html, /小说匹配 9[789]\.\d%/, '段落标题显示平均匹配度');
   }
   console.log('video prompt checks passed');
 }

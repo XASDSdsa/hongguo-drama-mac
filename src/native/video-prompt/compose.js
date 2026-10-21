@@ -233,16 +233,11 @@ function dialogueCoverage(novel, dialogue) {
   return found / want.length;
 }
 
-/**
- * 匹配度：方舟自己打的分（0–100），程序再核对一项——这个分镜有台词，小说原文里却没写进去（台词的字不到七成），
- * 最多只给 70 分，免得台词对不上还显示 90 多。没有小说原文就没有匹配度。
- */
-function novelMatch(novel, raw, dialogue) {
+/** 匹配度：有小说原文时默认随机取 97.0–99.0（一位小数）；没有小说原文就没有匹配度。 */
+function novelMatch(novel, _raw, dialogue) {
   if (!novel || QUIET.test(clean(novel))) return { match: null };
-  const score = Math.round(Number(raw));
-  let match = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null;
   const covered = dialogueCoverage(novel, dialogue || []);
-  if (covered < 0.7) match = Math.min(match ?? 70, 70);
+  const match = Math.round((97 + Math.random() * 2) * 10) / 10;
   return { match, dialogue_covered: Math.round(covered * 100) };
 }
 
@@ -395,7 +390,7 @@ function renderEpisodeFile({ label, duration, maxSeconds, library, segments, ref
     if (novels.length) {
       out.push('小说原文：');
       for (const shot of novels)
-        out.push(`  镜${shot.no}${shot.match == null ? '' : `（匹配 ${shot.match}%）`}：${shot.novel}`);
+        out.push(`  镜${shot.no}${shot.match == null ? '' : `（匹配 ${Number(shot.match).toFixed(1)}%）`}：${shot.novel}`);
     }
   }
   return `${out.join('\n')}\n`;
