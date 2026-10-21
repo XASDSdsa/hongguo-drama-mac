@@ -2034,7 +2034,9 @@ async function executeHongguoDownload(task, attempt = 0) {
       sendToRenderer('download-completed', { id, path: finalPath });
       return;
     }
-    const playInfo = checkedPlayInfo || (await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id));
+    // 下载要清晰：红果优先取 App 的 1080p（官网直链只有 360p）。
+    const playInfo =
+      checkedPlayInfo || (await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id, { best: true }));
     source.token.throwIfRequested();
     if (!playInfo?.url) throw new Error(playInfo?.error || '未获取到有效播放地址');
     tmpPath = finalPath + '.enc.tmp';

@@ -424,31 +424,50 @@ function parseModelVideo(vm) {
 /** 这集的播放直链下载失败（过期、节点没有）后，把缓存的旧地址作废，下次取址一定重新拿。 */
 function invalidatePlayUrl(vid, sid) {
   responseCache.delete(`play:${sid || ''}:${vid}`);
+  responseCache.delete(`play-best:${sid || ''}:${vid}`);
 }
 
 /**
  * 获取单集播放直链与 spade_a 加密 key
  */
-async function fetchPlayUrlSingle(vid, sid) {
+async function fetchPlayUrlSingle(vid, sid, options = {}) {
   if (String(vid).startsWith('hema:') || String(sid).startsWith('hema:'))
     return require('./hema').fetchPlayUrlSingle(vid, sid);
   if (String(vid).startsWith('xifan:') || String(sid).startsWith('xifan:'))
     return require('./xifan').fetchPlayUrlSingle(vid, sid);
+  const best = options?.best === true;
   try {
-    return await cachedRequest(`play:${sid || ''}:${vid}`, 30000, () => fetchPlayUrlFresh(vid, sid));
+    return await cachedRequest(`play${best ? '-best' : ''}:${sid || ''}:${vid}`, 30000, () =>
+      fetchPlayUrlFresh(vid, sid, { appFirst: best }),
+    );
   } catch (error) {
     return { url: null, spadeA: null, codec: null, error: error.message };
   }
 }
 
-async function fetchPlayUrlFresh(vid, sid) {
+/**
+ * 取一集的片源地址。
+ *   官网直链：明文 H.264，可以边下边播，但只有 360p（竖屏 360×640 / 横屏 640×360）。
+ *   App 接口：1080p（1080×1920，HEVC，加密，下载完要解密）。
+ * 在线播放要快，先用官网；下载（appFirst）要清晰，先用 App 的 1080p，取不到再退回官网 360p。
+ */
+async function fetchPlayUrlFresh(vid, sid, { appFirst = false } = {}) {
+  if (appFirst) {
+    try {
+      return await require('./app-source').fetchAppPlayUrl(String(vid));
+    } catch (_) {
+      // 取不到 1080p 就用官网 360p，至少能下下来。
+    }
+  }
   const web = await fetchPlayUrlFromWeb(vid, sid);
   if (web && web.url) return web;
 
-  try {
-    return await require('./app-source').fetchAppPlayUrl(String(vid));
-  } catch (_) {
-    // 保留旧接口回退；取址错误不可包含签名地址或媒体密钥。
+  if (!appFirst) {
+    try {
+      return await require('./app-source').fetchAppPlayUrl(String(vid));
+    } catch (_) {
+      // 保留旧接口回退；取址错误不可包含签名地址或媒体密钥。
+    }
   }
 
   const body = {

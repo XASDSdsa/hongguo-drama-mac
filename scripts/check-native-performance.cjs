@@ -74,6 +74,21 @@ function fixture({ web = true, api = false, app = false, blockedVids = [], html 
 
 const checks = [
   [
+    '下载优先取 App 的 1080p；在线播放仍先用官网直链；App 取不到时下载退回官网',
+    async () => {
+      const both = fixture({ web: true, app: true });
+      const download = await both.native.fetchPlayUrlSingle('11', '1', { best: true });
+      assert.equal(download.source, 'app', '下载先走 App（1080p）');
+      assert.equal(download.url, 'https://media.example/app.mp4');
+      const play = await both.native.fetchPlayUrlSingle('11', '1');
+      assert.equal(play.source, 'web', '在线播放仍先走官网直链（不用等整集下载解密）');
+      const noApp = fixture({ web: true, app: false });
+      const fallback = await noApp.native.fetchPlayUrlSingle('11', '1', { best: true });
+      assert.equal(fallback.source, 'web', 'App 取不到时下载退回官网');
+      assert.equal(noApp.state.appCalls, 1);
+    },
+  ],
+  [
     'App 源补齐网页缺失分集并复用短缓存',
     async () => {
       const { native, state } = fixture({ web: false, app: true });

@@ -125,6 +125,40 @@ if (spawnSync(ffmpeg, ['-version']).status === 0) {
         const kbps = (fs.statSync(dst).size * 8) / 1000 / info.duration;
         assert.ok(kbps >= 4000, `${w}x${h} 码率 ${Math.round(kbps)}kbps`);
       }
+      // 同一部剧里前几集是 360p、后几集是 1080p：拼成一集时按 1080p，不把清晰的集缩成 360p。
+      const low = path.join(dir, 'low.mp4');
+      const high = path.join(dir, 'high.mp4');
+      for (const [file, size] of [
+        [low, '360x640'],
+        [high, '1080x1920'],
+      ]) {
+        const made = spawnSync(ffmpeg, [
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          `testsrc2=size=${size}:rate=24`,
+          '-t',
+          '1.5',
+          '-pix_fmt',
+          'yuv420p',
+          file,
+        ]);
+        assert.equal(made.status, 0, String(made.stderr));
+      }
+      const mixed = path.join(dir, 'mixed.mp4');
+      await quchong.runJob({
+        ffmpegPath: ffmpeg,
+        ffprobePath: ffprobe,
+        dst: mixed,
+        segments: [
+          { src: low, start: 0, duration: 1, speed: 1 },
+          { src: high, start: 0, duration: 1, speed: 1 },
+        ],
+        opts: { ...quchong.DEFAULTS, encoder: 'cpu' },
+      });
+      const mixedInfo = await quchong.probeMedia(ffprobe, mixed);
+      assert.equal(`${mixedInfo.video_width}x${mixedInfo.video_height}`, '1080x1920', '按最清晰的那集');
       console.log('PASS dedup output: below 720p is scaled up to 720p keeping the aspect ratio; bitrate ≥ 4Mbps');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

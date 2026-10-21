@@ -1362,7 +1362,16 @@ async function runJob(args) {
   // 个别集没有音轨时，那几段补静音（见 buildPrepareCommand），不让整集失败。
   const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
   for (const part of parts) part.has_audio = probed.get(part.src).has_audio;
-  const first = probed.get(parts[0].src);
+  // 成片画幅按第一段的比例；同比例的集里有更清晰的（比如前几集是以前下的 360p、后面是 1080p），按最清晰的那集的尺寸，
+  // 不把 1080p 的集缩成 360p。
+  const first0 = probed.get(parts[0].src);
+  const ratio = first0.video_width / first0.video_height;
+  const first = [...probed.values()]
+    .filter((info) => Math.abs(info.video_width / info.video_height - ratio) < 0.02 * ratio)
+    .reduce(
+      (best, info) => (info.video_width * info.video_height > best.video_width * best.video_height ? info : best),
+      first0,
+    );
   const mergeStart = Date.now();
   await fsp.mkdir(path.dirname(dst), { recursive: true });
   const middle = path.join(path.dirname(dst), `.ai-drama-quchong-pre-${randomUUID()}.mkv`);
