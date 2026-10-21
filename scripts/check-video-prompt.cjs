@@ -339,7 +339,7 @@ async function main() {
   const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   assert.match(preload, /libraryStoryboards:/);
   assert.match(main, /outputCount: libraryDedupOutputs\(folder\)\.length/, '剧详情带上「去重」里已有的成品数');
-  assert.match(detail, /已经去重过：「去重」里有 \{detail\.outputCount\}(\{' '\})?\s*集成品/, '已经去重过要提醒');
+  assert.match(detail, /已经去重过：「去重」里有 \{outputs\.length\}(\{' '\})?\s*集成品/, '已经去重过要提醒');
   assert.match(detail, /这部剧已经去重过：「去重」里现在有/, '再次去重的确认窗要强提醒');
   assert.match(detail, /不重新去重，只做后面的/, '确认窗里给出不重新去重的出口');
   assert.match(detail, /仍然重新去重（旧成品移到\$\{TRASH\}）/);

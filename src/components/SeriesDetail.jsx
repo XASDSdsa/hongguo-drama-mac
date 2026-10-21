@@ -161,49 +161,6 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey }) {
   );
 }
 
-/** 「去重处理后」：最近一次去重用了原剧第几集到第几集、多少集参与去重、生成了多少集。 */
-function DedupResult({ record, outputCount, running }) {
-  const done = running.reduce((n, batch) => n + (batch.done || 0), 0);
-  const planned = running.reduce((n, batch) => n + (batch.total || 0), 0);
-  if (!record && !outputCount)
-    return (
-      <p className="dedup-result-empty">还没有去重。勾选上面的「视频去重」开始处理后，这里显示去重的范围和结果。</p>
-    );
-  const range = (from, to) =>
-    from != null && to != null ? (from === to ? `第 ${from} 集` : `第 ${from}–${to} 集`) : '—';
-  const tiles = record
-    ? [
-        ['原剧范围', range(record.sourceFrom, record.sourceTo)],
-        ['已去重', `${record.sourceCount} 集`, '原剧参与去重的集数'],
-        [
-          '结果',
-          `${record.resultCount} 集`,
-          `${range(record.resultFrom, record.resultTo)} · 每集 ${Math.round(record.minSeconds)}–${Math.round(record.maxSeconds)} 秒`,
-        ],
-        [
-          '「去重」文件夹',
-          planned ? `${done}/${planned} 集` : `${outputCount} 集`,
-          planned
-            ? '正在去重'
-            : outputCount < record.resultCount
-              ? `比结果少 ${record.resultCount - outputCount} 集（没做完或被删了）`
-              : '都已生成',
-        ],
-      ]
-    : [['「去重」文件夹', `${outputCount} 集`, '以前的版本做的，没有记录范围和参数']];
-  return (
-    <div className="dedup-result">
-      {tiles.map(([label, value, hint]) => (
-        <div key={label} className="dedup-result-tile">
-          <span>{label}</span>
-          <b>{value}</b>
-          {hint && <em>{hint}</em>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、AI 发布素材、要做的处理（去重、剪映草稿）和进度日志。 */
 export default function SeriesDetail({ folder, active = true }) {
   const [detail, setDetail] = useState(null);
@@ -235,6 +192,7 @@ export default function SeriesDetail({ folder, active = true }) {
   const [outputCount, setOutputCount] = useState(0); // 「去重」里已有的成品集数（再次去重会全部换掉）
   const [estimate, setEstimate] = useState({ loading: false, data: null, error: '' });
   const [page, setPage] = useState(1);
+  const [outPage, setOutPage] = useState(1); // 「去重处理后」的页码
   const [pageSize, setPageSize] = useState(
     EPISODE_PAGE_SIZES.includes(view.episodePageSize) ? view.episodePageSize : 60,
   );
@@ -313,6 +271,7 @@ export default function SeriesDetail({ folder, active = true }) {
             coverUrl: result.coverUrl,
             outputCount: result.outputCount,
             lastDedup: result.lastDedup,
+            outputs: result.outputs,
           }
         : previous,
     );
@@ -530,6 +489,13 @@ export default function SeriesDetail({ folder, active = true }) {
         : activity?.draft?.status === 'running'
           ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
           : '';
+  // 正在去重时，做好的集陆续出现在「去重处理后」：每 5 秒刷新一次。
+  const dedupRunning = activeBatches.length > 0;
+  useEffect(() => {
+    if (!dedupRunning) return undefined;
+    const timer = setInterval(reload, 5000);
+    return () => clearInterval(timer);
+  }, [dedupRunning, reload]);
   // 去重或草稿跑完后，刷新一次「去重」里的成品数。
   const activitySignal = `${activeBatches.length}-${activity?.draft?.status || ''}`;
   useEffect(() => {
@@ -545,6 +511,24 @@ export default function SeriesDetail({ folder, active = true }) {
     .map((item) => item.task.id);
   const draftNumbers = [...new Set(draftNums.map((n) => Math.floor(Number(n))).filter((n) => n >= 1 && n < 10000))];
   const draftScopeValue = { numbers: draftNumbers };
+  // 「去重处理后」：和原剧一样按集显示「去重」里的成品；做剪映草稿时点集数选（最多 4 集）。
+  const outputs = detail?.outputs || [];
+  const record = detail?.lastDedup || null;
+  const runningDone = activeBatches.reduce((n, batch) => n + (batch.done || 0), 0);
+  const runningTotal = activeBatches.reduce((n, batch) => n + (batch.total || 0), 0);
+  const currentOutPage = clampPage(outPage, outputs.length, pageSize);
+  const visibleOutputs = slicePage(outputs, currentOutPage, pageSize);
+  const toggleDraftEpisode = (number) => {
+    if (number == null || submitting) return;
+    const chosen = draftNumbers.includes(number)
+      ? draftNumbers.filter((n) => n !== number)
+      : draftNumbers.length < 4
+        ? [...draftNumbers, number].sort((a, b) => a - b)
+        : draftNumbers;
+    if (chosen === draftNumbers) return setNotice('剪映草稿最多做 4 集：先点掉一集再选');
+    setNotice('');
+    setDraftNums([0, 1, 2, 3].map((i) => (chosen[i] != null ? String(chosen[i]) : '')));
+  };
   const nothingToDo = dedupOn ? !selectedCount : !draftOn;
   // 成品用「AI 发布素材」里选定的新剧名命名：没选定不能开始去重。
   const releaseTitle = (publish?.title || '').trim();
@@ -772,8 +756,96 @@ export default function SeriesDetail({ folder, active = true }) {
             />
           </section>
 
-          <section className="proc-panel" aria-label="处理整部">
-            <h3>处理整部</h3>
+          <section className="lib-section" aria-label="去重处理后">
+            <div className="lib-toolbar">
+              <span>
+                去重处理后（{outputs.length} 集）
+                {record && (
+                  <em className="lib-toolbar-note">
+                    原剧{' '}
+                    {record.sourceFrom != null && record.sourceTo != null
+                      ? `第 ${record.sourceFrom}–${record.sourceTo} 集`
+                      : `${record.sourceCount} 集`}{' '}
+                    · 已去重 {record.sourceCount} 集 · 结果 {record.resultCount} 集
+                    {runningTotal > 0 && ` · 正在去重 ${runningDone}/${runningTotal} 集`}
+                  </em>
+                )}
+              </span>
+              <span className="lib-toolbar-btns">
+                {draftOn && outputs.length > 0 && (
+                  <span className="lib-toolbar-hint">点集数选做剪映草稿的集（最多 4 集）</span>
+                )}
+                {record && (
+                  <button className="btn btn-sm" onClick={() => setShowSaved(true)}>
+                    查看处理参数
+                  </button>
+                )}
+              </span>
+            </div>
+            {!outputs.length && (
+              <div className="lib-empty">
+                {runningTotal > 0
+                  ? '正在去重，做好的集会出现在这里。'
+                  : '还没有去重。勾选下面的「视频去重」开始处理后，成品按集显示在这里。'}
+              </div>
+            )}
+            {!record && outputs.length > 0 && (
+              <div className="lib-remote-note">
+                这些成品是以前的版本做的，没有记录原剧范围和处理参数；下次去重后会显示。
+              </div>
+            )}
+            <div className="lib-eps">
+              {visibleOutputs.map((output) => {
+                const on = draftOn && output.index != null && draftNumbers.includes(output.index);
+                return (
+                  <div key={output.path} className="lib-ep-cell">
+                    <button
+                      type="button"
+                      className={`lib-ep ${on ? 'is-selected' : ''}`}
+                      aria-pressed={on}
+                      onClick={() => draftOn && toggleDraftEpisode(output.index)}
+                      title={`${output.name}（${formatSize(output.size)}）${draftOn ? (on ? '，点一下不做剪映草稿' : '，点一下做剪映草稿') : ''}`}
+                    >
+                      <span className="lib-ep-no">
+                        {output.index != null ? `第${output.index}集` : output.name.replace(/\.[^.]+$/, '')}
+                      </span>
+                    </button>
+                    {on && (
+                      <span className="lib-ep-check">
+                        <Check size={11} />
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="lib-ep-reveal"
+                      aria-label={`定位${output.name}`}
+                      title="在文件管理器里定位这个成品"
+                      onClick={() => window.electronAPI.showInFolder(output.path)}
+                    >
+                      <Folder size={15} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {outputs.length > 0 && (
+              <Pager
+                total={outputs.length}
+                page={currentOutPage}
+                pageSize={pageSize}
+                onPage={setOutPage}
+                onPageSize={(size) => {
+                  setPageSize(size);
+                  setOutPage(1);
+                }}
+                sizes={EPISODE_PAGE_SIZES}
+                unit="集"
+              />
+            )}
+          </section>
+
+          <section className="proc-panel" aria-label="处理">
+            <h3>处理</h3>
 
             <div className="proc-item">
               <div className="proc-line">
@@ -791,15 +863,15 @@ export default function SeriesDetail({ folder, active = true }) {
                     ? `${selectedCount === episodes.length ? `整部 ${selectedCount} 集` : `前 ${selectedCount} 集`} · ${
                         estimateText || `每集 ${split.min_len}–${split.max_len} 秒`
                       }`
-                    : '不去重：直接用「去重」里已有的成品做下面的剪映草稿 / 分镜工程图'}
+                    : '不去重：直接用「去重处理后」里已有的成品做剪映草稿 / 分镜工程图'}
                 </span>
                 <button className="btn btn-sm proc-more" onClick={() => setShowParams(true)} disabled={!opts}>
                   去重参数
                 </button>
               </div>
-              {dedupOn && (detail?.outputCount || 0) > 0 && (
+              {dedupOn && outputs.length > 0 && (
                 <p className="proc-name is-missing">
-                  已经去重过：「去重」里有 {detail.outputCount}{' '}
+                  已经去重过：「去重」里有 {outputs.length}{' '}
                   集成品。再次去重会把它们全部换掉；只想做剪映草稿或分镜工程图，请取消勾选「视频去重」。
                 </p>
               )}
@@ -816,18 +888,6 @@ export default function SeriesDetail({ folder, active = true }) {
                 </p>
               )}
             </div>
-          </section>
-
-          <section className="proc-panel proc-after" aria-label="去重处理后">
-            <div className="proc-head">
-              <h3>去重处理后</h3>
-              {detail.lastDedup && (
-                <button className="btn btn-sm" onClick={() => setShowSaved(true)}>
-                  查看处理参数
-                </button>
-              )}
-            </div>
-            <DedupResult record={detail.lastDedup} outputCount={detail.outputCount || 0} running={activeBatches} />
 
             <div className="proc-item">
               <div className="proc-line">

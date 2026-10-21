@@ -3798,6 +3798,15 @@ function libraryEpisodeDetail(dir) {
     outputDir: path.join(folder, '去重'),
     // 「去重」里已有多少集成品：再次去重会把它们全部换掉，界面要据此提醒。
     outputCount: libraryDedupOutputs(folder).length,
+    // 「去重」里的成品，按集号排好：管理剧集「去重处理后」和原剧一样按集显示。
+    outputs: libraryDedupOutputs(folder).map((file) => {
+      const name = path.basename(file);
+      let size = 0;
+      try {
+        size = fs.statSync(file).size;
+      } catch (_) {}
+      return { name, path: file, size, index: seriesLibrary.parseEpisodeIndex(name) };
+    }),
     // 最近一次去重：原剧第几集到第几集、生成了多少集、当时的参数。
     lastDedup: libraryDedupRecord(folder),
     episodes,
