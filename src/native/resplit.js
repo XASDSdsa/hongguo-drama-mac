@@ -90,66 +90,82 @@ async function detectPauses(ffmpegPath, file, signal) {
   return pauses.filter((item) => item.end > item.start);
 }
 
+const SCENE_FILTER = "select='gt(scene,0.35)',metadata=print:file=-";
+
 /**
- * 缩小画面后找镜头切换，速度比整帧检测快得多。
- * 解码交给显卡（Windows 的 NVIDIA / AMD / Intel、Mac 的苹果芯片）：以前全靠 CPU 解码整集视频，
- * 分析切点时 CPU 占满、显卡闲着。显卡解码不了（老显卡、驱动问题、特殊编码）就用 CPU 再做一遍，不会少切点。
+ * 找镜头切换的几种做法，按顺序试，前一种失败就换下一种（切点一个不少）：
+ * - d3d11（Windows）：显卡解码 + 显卡缩小，只把 160 宽的小图拷回内存，CPU 几乎不动；
+ * - hwaccel：显卡解码、CPU 缩小（-hwaccel auto；Mac 是苹果芯片的硬件解码）；
+ * - cpu：全用 CPU 解码，跳过去块滤波（快两三成，找镜头切换不受影响）。
+ * 以前只有后两种：Windows 上 -hwaccel auto 显卡用不上时会悄悄改回 CPU 解码，不报错，分析切点时 CPU 占满。
  */
-async function detectScenes(ffmpegPath, file, signal, { hwaccel = true } = {}) {
-  const run = (hw) =>
-    capture(
-      ffmpegPath,
-      [
-        '-hide_banner',
-        '-nostdin',
-        ...(hw ? ['-hwaccel', 'auto'] : []),
-        '-i',
-        file,
-        '-an',
-        '-vf',
-        "scale=160:-2,select='gt(scene,0.35)',metadata=print:file=-",
-        '-f',
-        'null',
-        '-',
-      ],
-      signal,
-      'stdout',
-    );
-  let text;
-  if (hwaccel) {
+function sceneMethods(platform = process.platform, hwaccel = true) {
+  const methods = [];
+  if (hwaccel && platform === 'win32')
+    methods.push({
+      name: 'd3d11',
+      input: ['-hwaccel', 'd3d11va', '-hwaccel_output_format', 'd3d11'],
+      vf: `scale_d3d11=width=160:height=-2:format=nv12,hwdownload,format=nv12,${SCENE_FILTER}`,
+    });
+  if (hwaccel) methods.push({ name: 'hwaccel', input: ['-hwaccel', 'auto'], vf: `scale=160:-2,${SCENE_FILTER}` });
+  methods.push({ name: 'cpu', input: ['-skip_loop_filter', 'all'], vf: `scale=160:-2,${SCENE_FILTER}` });
+  return methods;
+}
+
+const SCENE_METHOD_TEXT = { d3d11: '显卡解码 + 显卡缩小', hwaccel: '显卡解码', cpu: 'CPU' };
+
+/** 缩小画面后找镜头切换，速度比整帧检测快得多。返回切换时间（秒）的数组，数组上带 method（用的哪种做法）。 */
+async function detectScenes(ffmpegPath, file, signal, { hwaccel = true, platform = process.platform } = {}) {
+  const methods = sceneMethods(platform, hwaccel);
+  let lastError = null;
+  for (const method of methods) {
     try {
-      text = await run(true);
+      const text = await capture(
+        ffmpegPath,
+        ['-hide_banner', '-nostdin', ...method.input, '-i', file, '-an', '-vf', method.vf, '-f', 'null', '-'],
+        signal,
+        'stdout',
+      );
+      const scenes = [];
+      for (const match of text.matchAll(/pts_time:\s*([\d.]+)/g)) scenes.push(Number(match[1]));
+      scenes.method = method.name;
+      return scenes;
     } catch (error) {
       if (signal?.aborted) throw error;
-      text = await run(false);
+      lastError = error;
     }
-  } else text = await run(false);
-  const scenes = [];
-  for (const match of text.matchAll(/pts_time:\s*([\d.]+)/g)) scenes.push(Number(match[1]));
-  return scenes;
+  }
+  throw lastError;
 }
 
 async function detectOne(ffmpegPath, file, signal) {
   // 某一项检测失败（比如没有音轨）不影响另一项，只是少一类切点。
   let failed = false;
+  let method = '';
   const [pauses, scenes] = await Promise.all([
     detectPauses(ffmpegPath, file, signal).catch((error) => {
       if (signal?.aborted) throw error;
       failed = true;
       return [];
     }),
-    detectScenes(ffmpegPath, file, signal).catch((error) => {
-      if (signal?.aborted) throw error;
-      failed = true;
-      return [];
-    }),
+    detectScenes(ffmpegPath, file, signal)
+      .then((found) => {
+        method = found.method || '';
+        return [...found];
+      })
+      .catch((error) => {
+        if (signal?.aborted) throw error;
+        failed = true;
+        return [];
+      }),
   ]);
-  return { pauses, scenes, failed };
+  return { pauses, scenes, failed, method };
 }
 
 /** 检测结果缓存在应用私有目录（按文件路径+大小+修改时间），同一批视频换参数重排时不用重新分析。 */
 async function analyzeSources({ ffmpegPath, files, cacheDir, concurrency = 3, signal, onProgress }) {
   const result = new Map();
+  result.methods = {}; // 这一次实际用哪种做法找的镜头切换：{ d3d11: 集数, hwaccel: …, cpu: … }（用缓存的不算）
   const queue = [...files];
   let done = 0;
   const worker = async () => {
@@ -169,7 +185,8 @@ async function analyzeSources({ ffmpegPath, files, cacheDir, concurrency = 3, si
         } catch (_) {}
       }
       if (!result.has(file)) {
-        const { failed, ...found } = await detectOne(ffmpegPath, file, signal);
+        const { failed, method, ...found } = await detectOne(ffmpegPath, file, signal);
+        if (method) result.methods[method] = (result.methods[method] || 0) + 1;
         result.set(file, found);
         // 检测出错（FFmpeg 临时失败等）时不缓存：下次重新分析，不让一次失败永远变成「没有切点」。
         if (cacheFile && !failed) {
@@ -419,6 +436,8 @@ module.exports = {
   validateSplit,
   detectPauses,
   detectScenes,
+  sceneMethods,
+  SCENE_METHOD_TEXT,
   analyzeSources,
   cutCandidates,
   planPieces,

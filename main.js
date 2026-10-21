@@ -3418,7 +3418,13 @@ async function planAndQueueResplit({
   libLog(
     dir,
     'info',
-    `切点分析完成：${ordered.length} 集，用时 ${Math.max(1, Math.round((Date.now() - analyzeStart) / 1000))} 秒（找停顿和镜头切换，结果有缓存，同一批再排不用重做）`,
+    `切点分析完成：${ordered.length} 集，用时 ${Math.max(1, Math.round((Date.now() - analyzeStart) / 1000))} 秒（找停顿和镜头切换，结果有缓存，同一批再排不用重做）${
+      Object.keys(analysis.methods || {}).length
+        ? `；镜头切换用${Object.entries(analysis.methods)
+            .map(([name, count]) => `${resplit.SCENE_METHOD_TEXT[name] || name} ${count} 集`)
+            .join('、')}`
+        : ''
+    }`,
   );
   const sources = ordered.map((item, position) => {
     const duration = durations.get(item.file);

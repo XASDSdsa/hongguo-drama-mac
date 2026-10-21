@@ -147,6 +147,9 @@ jobs:
           run_check node scripts/check-jianying-location.cjs
           run_check env PYTHON=python REQUIRE_JIANYING=1 node scripts/check-jianying-simple-draft.cjs
           run_check python scripts/check-dialogue-draft.py
+          # 分析切点的镜头切换检测：D3D11（显卡解码 + 显卡缩小）→ -hwaccel auto → CPU，用真的 ffmpeg.exe 走一遍
+          run_check node scripts/check-scene-hwaccel.cjs
+          grep '^::notice' "$RUNNER_TEMP/c.log" || true
 
   quick-update:
     if: inputs.quick == 'true'
