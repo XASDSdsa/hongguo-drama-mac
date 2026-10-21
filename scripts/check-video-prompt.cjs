@@ -251,7 +251,7 @@ async function main() {
     const selfOnly = await deriveEpisodePrompts({ ...options, outDir: path.join(dir, 'out-self'), cacheFile: path.join(dir, 'cache', 'self.json'), sourceKey: 'hash-self' });
     verifyMode = 'ok';
     const selfPage = await fsp.readFile(selfOnly.htmlFile, 'utf8');
-    assert.ok(inRange(selfPage) && /已匹配 \d+\.\d%（自评）/.test(selfPage), '核对没成功：标出来');
+    assert.ok(inRange(selfPage) && !selfPage.includes('自评'), '核对没成功也不标「自评」');
     assert.ok(logs.some(([level, message]) => level === 'warn' && /小说原文没核对成功，匹配度先用方舟自评/.test(message)));
   }
 

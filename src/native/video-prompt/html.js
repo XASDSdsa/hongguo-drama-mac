@@ -292,8 +292,7 @@ function matchBadge(shot) {
   if (shot?.match == null) return '';
   const value = shot.match;
   const tone = value >= 85 ? 'hi' : value >= 70 ? 'mid' : 'lo';
-  const self = shot.match_source === 'self' ? '（自评）' : '';
-  return `<span class="match ${tone}" title="${self ? '核对没成功，这是方舟写小说原文时的自评分' : '方舟单独对照画面核对人物、动作、场景、对白后给的分'}">已匹配 ${Number(value).toFixed(1)}%${self}${value < 70 ? '（偏低）' : ''}</span>`;
+  return `<span class="match ${tone}">已匹配 ${Number(value).toFixed(1)}%${value < 70 ? '（偏低）' : ''}</span>`;
 }
 
 function shotCard({
