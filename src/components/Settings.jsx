@@ -551,14 +551,30 @@ function SettingsPage({ active = true }) {
                 placeholder="留空自动查找"
               />
             </label>
-            <label className="settings-field">
-              <span>剪映草稿目录（可选）</span>
-              <input
-                className="input-field"
-                value={settings.jianying_user_data_path || ''}
-                onChange={(e) => update('jianying_user_data_path', e.target.value)}
-                placeholder="留空使用剪映默认目录"
-              />
+            <label className="settings-field settings-field-wide">
+              <span>剪映草稿位置（可选）</span>
+              <div className="folder-row">
+                <input
+                  type="text"
+                  className="input-field"
+                  aria-label="剪映草稿位置"
+                  value={settings.jianying_user_data_path || ''}
+                  onChange={(e) => update('jianying_user_data_path', e.target.value)}
+                  placeholder="留空使用剪映默认的草稿位置"
+                />
+                <button
+                  className="btn btn-outline"
+                  type="button"
+                  onClick={() => selectFolder('jianying_user_data_path')}
+                >
+                  <Folder size={16} />
+                  选择
+                </button>
+              </div>
+              <em>
+                在剪映「全局设置 → 草稿位置」里改过位置的，填那个文件夹，草稿直接生成在那里。草稿挪过位置也没关系：
+                打开软件或进「管理剧集」时会自动把素材路径改到新位置。
+              </em>
             </label>
           </div>
           <details className="settings-advanced">

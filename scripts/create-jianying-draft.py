@@ -283,6 +283,41 @@ def _probe_duration_us(metadata: dict, stream: dict, path: Path) -> int:
     return duration_us
 
 
+def material_path(path: Path) -> str:
+    """素材在草稿里记的路径：剪映自己的写法。
+
+    - 用绝对路径但不做 resolve：Windows 上 resolve 会把映射的网络盘、subst 盘换成 \\\\服务器\\共享 这类路径，
+      剪映按原盘符找不到文件。
+    - Windows 上统一用正斜杠（C:/Users/.../素材/视频/第1集.mp4），和剪映自己保存的草稿一致。
+    """
+    absolute = os.path.abspath(str(path))
+    return absolute.replace("\\", "/") if os.name == "nt" else absolute
+
+
+def verify_materials(draft_dir: Path) -> int:
+    """草稿保存后逐个核对：草稿里记的每个视频、音频素材文件都在，而且都在这份草稿自己的文件夹里。
+
+    素材都在草稿文件夹里，草稿才不依赖原视频、拆解中间文件和去重成品，删了它们剪映也照样能打开。
+    """
+    content = json.loads((draft_dir / "draft_info.json").read_text(encoding="utf-8"))
+    root = os.path.normcase(os.path.abspath(str(draft_dir)))
+    count = 0
+    for kind in ("videos", "audios"):
+        for material in (content.get("materials") or {}).get(kind) or []:
+            value = str(material.get("path") or "")
+            if not value or value.startswith("<cloud://") or material.get("type") == "music":
+                continue
+            file = os.path.abspath(value)
+            if not os.path.isfile(file):
+                raise RuntimeError(f"草稿素材不存在：{value}")
+            if os.path.commonpath([root, os.path.normcase(file)]) != root:
+                raise RuntimeError(f"草稿素材不在草稿文件夹里：{value}")
+            count += 1
+    if not count:
+        raise RuntimeError("草稿里没有任何视频、音频素材")
+    return count
+
+
 def video_material_from_ffprobe(path: Path, ffprobe: Path, cache: dict[str, dict]):
     """Construct a VideoMaterial without calling its libmediainfo parser."""
     metadata = probe_media(ffprobe, path, cache)
@@ -301,7 +336,7 @@ def video_material_from_ffprobe(path: Path, ffprobe: Path, cache: dict[str, dict
     material.local_material_id = ""
     material.check_flag = 63487
     material.material_name = path.name
-    material.path = str(path.resolve())
+    material.path = material_path(path)
     material.duration = _probe_duration_us(metadata, stream, path)
     material.width = width
     material.height = height
@@ -325,7 +360,7 @@ def audio_material_from_ffprobe(path: Path, ffprobe: Path, cache: dict[str, dict
     material = object.__new__(draft.AudioMaterial)
     material.material_id = uuid.uuid4().hex
     material.material_name = path.name
-    material.path = str(path.resolve())
+    material.path = material_path(path)
     material.duration = _probe_duration_us(metadata, stream, path)
     return material
 
@@ -521,12 +556,12 @@ def main() -> int:
     ffprobe = resolve_ffprobe(ffmpeg)
     probe_cache: dict[str, dict] = {}
 
-    output_root = (args.output_root or project_dir / "jianying" / "draft").resolve()
+    output_root = Path(os.path.abspath(args.output_root or project_dir / "jianying" / "draft"))
     output_root.mkdir(parents=True, exist_ok=True)
     draft_dir = output_root / args.name
     draft_folder = draft.DraftFolder(
         str(output_root),
-        user_data_path=str(args.jianying_user_data.resolve()) if args.jianying_user_data else None,
+        user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data else None,
     )
     if draft_folder.has_draft(args.name):
         if not args.force:
@@ -656,6 +691,7 @@ def main() -> int:
         "note": "草稿尚未在目标剪映版本完成打开、播放、保存、重开验收。",
     }
     (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    verify_materials(draft_dir)
     print(json.dumps({"success": True, "draft_dir": str(draft_dir), "draft_info": str(draft_dir / "draft_info.json"), "manifest": str(draft_dir / "draft-manifest.json"), "fps": fps, "duration_us": duration_us, "clip_count": len(clip_rows), "subtitle_count": len(subtitle_rows), "status": manifest["status"]}, ensure_ascii=False, indent=2))
     return 0
 

@@ -52,6 +52,7 @@ const { createVideoStructurePipeline } = require('./src/native/video-structure/p
 const { createJianyingDraft } = require('./src/native/video-structure/jianying');
 const arkVideo = require('./src/native/video-prompt/ark');
 const { draftCapacity } = require('./src/native/draft-capacity');
+const jianyingRelink = require('./src/native/jianying-relink');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
@@ -1240,9 +1241,7 @@ function getReconstructionPipeline() {
           executable: resolveJianyingRuntime()?.executable,
           createScript: resolveJianyingScript(simple ? 'create-jianying-simple-draft.py' : 'create-jianying-draft.py'),
           checkScript: resolveJianyingScript('check-jianying-draft.py'),
-          outputRoot: userData
-            ? path.join(userData, 'Projects', 'com.lveditor.draft')
-            : plan.fallbackRoot || path.join(ctx.projectDir, '剪映草稿'),
+          outputRoot: resolveJianyingDraftRoot() || plan.fallbackRoot || path.join(ctx.projectDir, '剪映草稿'),
           name,
           userData,
           // 三分轨草稿结构简单，由脚本自己核对；多分轨照旧走完整校验。
@@ -1488,14 +1487,36 @@ function resolveJianyingScript(name) {
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
+/** 设置里「剪映草稿位置」填的文件夹；没填返回 ''。 */
+function configuredJianyingDir() {
+  return String(getCurrentSettings().jianying_user_data_path || '').trim();
+}
+
+/** 剪映的 User Data 文件夹（草稿登记到剪映用）。设置里填的是 User Data 就用它，否则找剪映默认位置。 */
 function resolveJianyingUserData() {
-  const configured = String(getCurrentSettings().jianying_user_data_path || '').trim();
+  const configured = configuredJianyingDir();
   const candidates = [];
-  if (configured) candidates.push(configured);
+  if (configured && fs.existsSync(path.join(configured, 'Projects', 'com.lveditor.draft'))) candidates.push(configured);
   if (process.platform === 'darwin')
     candidates.push(path.join(app.getPath('home'), 'Movies', 'JianyingPro', 'User Data'));
   if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'JianyingPro', 'User Data'));
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+/**
+ * 草稿放在哪：剪映打开时读这个文件夹。
+ * 设置里可以填剪映「全局设置 → 草稿位置」显示的文件夹（很多人改到了 D 盘），也可以填 User Data；
+ * 没填就用剪映默认的草稿位置。都没有（没装剪映）返回 null。
+ */
+function resolveJianyingDraftRoot() {
+  const configured = configuredJianyingDir();
+  if (configured) {
+    const inUserData = path.join(configured, 'Projects', 'com.lveditor.draft');
+    if (fs.existsSync(inUserData)) return inUserData;
+    if (fs.existsSync(configured)) return configured;
+  }
+  const userData = resolveJianyingUserData();
+  return userData ? path.join(userData, 'Projects', 'com.lveditor.draft') : null;
 }
 
 function workflowError(message, code = 'WORKFLOW_FAILED') {
@@ -3747,6 +3768,7 @@ function libraryEpisodeDetail(dir) {
 
 ipcMain.handle('library-episodes', (_event, dir) => {
   try {
+    if (dir) relinkMovedDrafts([String(dir)]);
     return libraryEpisodeDetail(dir);
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
@@ -4498,6 +4520,46 @@ async function libraryDraftReadiness(mode) {
     return error?.message || '内置结构化拆解运行时没准备好';
   }
   return '';
+}
+
+/**
+ * 剪映草稿挪过位置（整个剧文件夹换了盘、草稿文件夹拷进剪映草稿目录…）时，把草稿里的素材路径改到新位置，
+ * 剪映打开不会「资源未找到」。看剪映的草稿目录和每部剧的「剪映草稿」文件夹；没挪过的草稿不改动。
+ */
+let draftRelinkRunning = null;
+function relinkMovedDrafts(seriesDirs = null) {
+  if (draftRelinkRunning) return draftRelinkRunning;
+  draftRelinkRunning = (async () => {
+    const roots = new Map(); // 草稿所在的文件夹 -> 属于哪部剧（写日志用）
+    const draftRoot = resolveJianyingDraftRoot();
+    if (draftRoot) roots.set(draftRoot, null);
+    const userData = resolveJianyingUserData();
+    if (userData) roots.set(path.join(userData, 'Projects', 'com.lveditor.draft'), null);
+    let dirs = seriesDirs;
+    if (!dirs) {
+      try {
+        dirs = libraryFolderRecordsCached().map((folder) => folder.path);
+      } catch (_) {
+        dirs = [];
+      }
+    }
+    for (const dir of dirs) roots.set(path.join(path.resolve(dir), '剪映草稿'), path.resolve(dir));
+    for (const [root, seriesDir] of roots) {
+      const fixed = await jianyingRelink.relinkDraftsIn(root);
+      for (const item of fixed) {
+        const text = `剪映草稿：${path.basename(item.dir)} 挪过位置，已把 ${item.fixed} 个素材的路径改到新位置${
+          item.missing.length ? `（还有 ${item.missing.length} 个素材找不到）` : ''
+        }`;
+        console.log(`[Draft] ${text}`);
+        if (seriesDir) libLog(seriesDir, item.missing.length ? 'warn' : 'ok', text, 'side');
+      }
+    }
+  })()
+    .catch((error) => console.warn('[Draft] 检查草稿素材路径失败:', error?.message || error))
+    .finally(() => {
+      draftRelinkRunning = null;
+    });
+  return draftRelinkRunning;
 }
 
 function libraryDraftProjectId(file) {
@@ -9053,6 +9115,8 @@ app.whenReady().then(async () => {
   }
   createWindow();
   startSleepBlockerWatch();
+  // 草稿挪过位置的话把素材路径改过来（后台做，不耽误启动）。
+  setTimeout(() => relinkMovedDrafts(), 8000).unref?.();
   // Mac 关机、重启时同样直接退出，不用确认框拦住关机。
   try {
     powerMonitor?.on?.('shutdown', () => {

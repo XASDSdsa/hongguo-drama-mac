@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -154,12 +155,12 @@ def main() -> int:
     ffprobe = base.resolve_ffprobe(ffmpeg)
     probe_cache: dict[str, dict] = {}
 
-    output_root = (args.output_root or project_dir / "jianying" / "draft").resolve()
+    output_root = Path(os.path.abspath(args.output_root or project_dir / "jianying" / "draft"))
     output_root.mkdir(parents=True, exist_ok=True)
     draft_dir = output_root / args.name
     folder = draft.DraftFolder(
         str(output_root),
-        user_data_path=str(args.jianying_user_data.resolve()) if args.jianying_user_data else None,
+        user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data else None,
     )
     if folder.has_draft(args.name):
         if not args.force:
@@ -261,6 +262,7 @@ def main() -> int:
         },
     }
     (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    base.verify_materials(draft_dir)
     print(json.dumps({
         "success": True,
         "draft_dir": str(draft_dir),

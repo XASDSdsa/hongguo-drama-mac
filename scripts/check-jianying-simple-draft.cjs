@@ -82,7 +82,17 @@ try {
   const run = (extra = []) =>
     spawnSync(
       python,
-      [script, project, '--name', 'ep1', '--output-root', path.join(tmp, 'drafts'), '--ffmpeg', ffmpeg, ...extra],
+      [
+        script,
+        project,
+        '--name',
+        'ep1',
+        '--output-root',
+        path.join(tmp, '短剧', '剪映草稿'),
+        '--ffmpeg',
+        ffmpeg,
+        ...extra,
+      ],
       {
         encoding: 'utf8',
       },
@@ -172,6 +182,44 @@ try {
   // 同名草稿不覆盖，--force 才覆盖。
   assert.notEqual(run().status, 0, 'an existing draft is not overwritten silently');
   assert.equal(run(['--force']).status, 0);
+
+  // 草稿里记的每个素材都在、都在草稿自己的文件夹里；Windows 上是剪映自己的写法（正斜杠）。
+  const materials = [...info.materials.videos, ...info.materials.audios].filter((item) => item.path);
+  assert.ok(materials.length >= 2, 'video and audio materials');
+  for (const material of materials) {
+    assert.ok(fs.statSync(material.path).isFile(), `material exists: ${material.path}`);
+    const relative = path.relative(dir, material.path);
+    assert.ok(
+      relative && !relative.startsWith('..') && !path.isAbsolute(relative),
+      `inside the draft: ${material.path}`,
+    );
+    if (process.platform === 'win32') assert.ok(!material.path.includes('\\'), `forward slashes: ${material.path}`);
+  }
+  if (process.env.GITHUB_ACTIONS)
+    console.log(`::notice title=剪映草稿素材路径（${process.platform}）::${materials[0].path}`);
+  // 整个草稿文件夹挪到别处（老位置没了）：软件把素材路径改到新位置。
+  const movedDir = path.join(tmp, '挪到这里', path.basename(dir));
+  fs.mkdirSync(path.dirname(movedDir), { recursive: true });
+  fs.cpSync(dir, movedDir, { recursive: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+  const relink = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `require(${JSON.stringify(path.join(__dirname, '..', 'src', 'native', 'jianying-relink.js'))}).relinkDraft(process.argv[1]).then((r) => console.log(JSON.stringify(r)))`,
+      movedDir,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(relink.status, 0, relink.stderr);
+  const relinked = JSON.parse(relink.stdout.trim());
+  assert.equal(relinked.status, 'fixed');
+  assert.equal(relinked.fixed, materials.length);
+  const movedInfo = JSON.parse(fs.readFileSync(path.join(movedDir, 'draft_info.json'), 'utf8'));
+  for (const material of [...movedInfo.materials.videos, ...movedInfo.materials.audios].filter((item) => item.path)) {
+    assert.ok(fs.statSync(material.path).isFile(), `relinked material exists: ${material.path}`);
+    assert.ok(!path.relative(movedDir, material.path).startsWith('..'), `relinked inside: ${material.path}`);
+  }
 
   // 分镜有缺口时拒绝生成，不出半成品。
   const broken = JSON.parse(fs.readFileSync(path.join(project, 'modules', 'clips', 'clips.json'), 'utf8'));

@@ -309,6 +309,7 @@ jobs:
           run_check node scripts/check-resplit.cjs
           run_check node scripts/check-dedup-timestamps.cjs
           run_check node scripts/check-scene-hwaccel.cjs
+          run_check node scripts/check-jianying-relink.cjs
           run_check node scripts/check-separation-ascii.cjs
           run_check env REQUIRE_STRUCTURE_RUNTIME=1 node scripts/check-separation-real.cjs
           # 端到端：原剧 → 重新拆分去重 → 分析 → 三分轨 / 多分轨剪映草稿，中文剧名和文件夹，全用打包进软件的组件。
