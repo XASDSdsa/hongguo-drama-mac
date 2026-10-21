@@ -295,6 +295,8 @@ function getDefaultSettings() {
     ark_api_key: '',
     ark_video_model: '',
     video_prompt_max_seconds: 15,
+    // 分镜工程图每集只分析前几个分镜（0 = 全部），后面的分镜占位、不问方舟。
+    video_prompt_shot_limit: 2,
     // 本地视频结构化拆解。
     // 0 = 自动（按本机核心数选择）。
     structure_threads: 0,
@@ -4714,6 +4716,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
       sourceKey,
       title: path.basename(path.resolve(job.dir)),
       maxSeconds: Number(settings.video_prompt_max_seconds) || 15,
+      shotLimit: Number.isFinite(Number(settings.video_prompt_shot_limit)) ? Number(settings.video_prompt_shot_limit) : 2,
       log,
       onProgress: (_percent, message) => {
         item.detail = String(message || '').slice(0, 80);

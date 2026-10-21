@@ -204,6 +204,22 @@ async function main() {
   assert.ok(embedded.segments[0].shots[1].line.startsWith('3–7 秒：'));
   assert.ok(!page.slice(page.indexOf('<script>')).includes('${'), '页面脚本里没有没替换的模板占位');
 
+  // ---- 每集只分析前几个分镜：后面的只占位，不问方舟、不截关键帧；生成记录只记成功的 ----
+  {
+    const asksBefore = calls.ask;
+    const limited = await deriveEpisodePrompts({ ...options, shotLimit: 2, outDir: path.join(dir, 'out-limit'), cacheFile: path.join(dir, 'cache', 'limit.json'), sourceKey: 'hash-limit' });
+    assert.equal(limited.placeholders, 3, '5 个分镜分析 2 个，3 个占位');
+    assert.equal(limited.segments, 1);
+    assert.equal(calls.ask - asksBefore, 2, '只问两次方舟：素材库 + 前两个分镜那一段');
+    const limitedPage = await fsp.readFile(limited.htmlFile, 'utf8');
+    assert.equal((limitedPage.match(/<article class="shot"/g) || []).length, 2);
+    assert.equal((limitedPage.match(/class="phcard"/g) || []).length, 3);
+    assert.match(limitedPage, /每集只分析前 2 个分镜，这些先占位、不处理/);
+    assert.match(limitedPage, /1 段 · 2 镜（另有 3 镜占位）/);
+    assert.ok(!limitedPage.includes('本段未生成'), '生成记录只记成功的');
+    assert.match(await fsp.readFile(limited.file, 'utf8'), /只分析了前 2 个分镜；镜 3–5 共 3 个分镜占位/);
+  }
+
   // ---- 页面上的数字和名称要和真实数据逐项对上 ----
   const named = await deriveEpisodePrompts({ ...options, label: '测试剧_第005集', outDir: path.join(dir, 'out5'), cacheFile: path.join(dir, 'cache', 'named.json'), sourceKey: 'hash-5' });
   const namedPage = await fsp.readFile(named.htmlFile, 'utf8');

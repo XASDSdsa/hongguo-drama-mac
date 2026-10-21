@@ -211,6 +211,7 @@ function SettingsPage({ active = true }) {
         'ark_api_key',
         'ark_video_model',
         'video_prompt_max_seconds',
+        'video_prompt_shot_limit',
         'structure_threads',
         'structure_cleanup',
         'structure_device',
@@ -828,6 +829,19 @@ function SettingsPage({ active = true }) {
                 onChange={(e) => update('video_prompt_max_seconds', Number(e.target.value) || 15)}
               />
               <em>相邻分镜合并成一段，不会把单个分镜切开；Seedance 2.5 单次最长 30 秒。</em>
+            </label>
+            <label className="ai-field">
+              <span>每集只分析前几个分镜</span>
+              <input
+                className="input-field"
+                type="number"
+                min="0"
+                max="999"
+                aria-label="每集只分析前几个分镜"
+                value={settings.video_prompt_shot_limit ?? 2}
+                onChange={(e) => update('video_prompt_shot_limit', Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              />
+              <em>后面的分镜在分镜工程图里只占位、不问方舟，省额度；填 0 = 整集都分析。</em>
             </label>
           </div>
           <div className="preset-row">

@@ -89,6 +89,12 @@ main{padding:0 14px 40px}
 .seghead b{color:#fff}
 .seghead .meta{color:var(--muted)}
 .seghead .sp{flex:1}
+.seg.pending .seghead{border-left-color:var(--line2)}
+.phgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-top:12px}
+.phcard{display:flex;flex-direction:column;gap:4px;border:1px dashed var(--line2);border-radius:8px;padding:12px 14px;background:var(--panel);color:var(--muted);font-size:12px}
+.phcard b{color:#c6d0e0;font-size:13px}
+.phcard em{font-style:normal;color:#5d6a80}
+.phcard[hidden]{display:none}
 .blk.novel .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
 .blk.novel .head h3{margin:0}
 .match{font-weight:700;font-size:13px}
@@ -266,7 +272,7 @@ var q=$('#q');
 q.addEventListener('input',function(){
   var k=q.value.trim().toLowerCase(),total=0;
   $$('.seg').forEach(function(seg){
-    var n=0;$$('.shot',seg).forEach(function(s){var ok=!k||s.getAttribute('data-q').indexOf(k)>=0;s.hidden=!ok;if(ok)n++});
+    var n=0;$$('.shot,.phcard',seg).forEach(function(s){var ok=!k||s.getAttribute('data-q').indexOf(k)>=0;s.hidden=!ok;if(ok)n++});
     seg.style.display=n?'':'none';total+=n});
   $('.none-msg').style.display=total?'none':'block';
 });
@@ -434,7 +440,12 @@ function shotCard({
 <div class="blk" style="margin-top:-12px">${lines}</div>
 <div class="blk"><h3>画面观察</h3><div class="obs">${observe || '<span class="empty">没有可记录的内容</span>'}</div></div>
 <div class="blk"><h3>角色资产库</h3>${assetsHtml}</div>
-<div class="blk"><h3>生成记录</h3><div class="hist"><div><i${hasPrompt ? '' : ' class="x"'}>v1</i><span>${hasPrompt ? '视频反推提示词' : '本段未生成'}${stamp ? ` · ${esc(stamp)}` : ''}</span></div></div></div>
+${
+    // 生成记录只记成功的：没生成成功的镜头不写一条「未生成」。
+    hasPrompt
+      ? `<div class="blk"><h3>生成记录</h3><div class="hist"><div><i>v1</i><span>视频反推提示词${stamp ? ` · ${esc(stamp)}` : ''}</span></div></div></div>`
+      : ''
+  }
 </div>
 </article>`;
 }
@@ -468,12 +479,27 @@ function renderEpisodeHtml({
   size = null,
   generatedAt = new Date(),
   allText = '',
+  placeholders = [],
+  shotLimit = 0,
 }) {
   const byId = new Map(libraryEntries(library).map((item) => [item.id, item]));
   const stamp = localStamp(generatedAt);
   const shotTotal = segments.reduce((sum, segment) => sum + segment.rows.length, 0);
   const okShots = segments.reduce((sum, segment) => sum + (segment.failedMessage ? 0 : segment.rows.length), 0);
   const badShots = shotTotal - okShots;
+
+  // 每集只分析前几个分镜时，后面的分镜只占位：不问方舟、不截关键帧。
+  const placeholderHtml = placeholders.length
+    ? `<section class="seg pending">
+<div class="seghead"><b>未分析</b><span class="meta">镜 ${placeholders[0].no}–${placeholders.at(-1).no} · 共 ${placeholders.length} 个镜头 · 每集只分析前 ${esc(shotLimit)} 个分镜，这些先占位、不处理</span><span class="sp"></span><span class="chip m">占位 ${placeholders.length}</span></div>
+<div class="phgrid">${placeholders
+        .map(
+          (row) =>
+            `<div class="phcard" data-q="${esc(`镜头${pad2(row.no)} ${row.dialogue.join(' ')}`)}"><b>镜头 ${pad2(row.no)}</b><span>${clockPrecise(row.start)} – ${clockPrecise(row.end)} · ${seconds(row.dur)}</span><em>占位，未分析</em></div>`,
+        )
+        .join('')}</div>
+</section>`
+    : '';
 
   const segHtml = segments
     .map((segment, segIndex) => {
@@ -538,14 +564,14 @@ function renderEpisodeHtml({
     badShots
       ? `<span class="stat"><i class="warn"></i>${badShots} 镜没有生成提示词</span>`
       : '<span class="stat"><i></i>提示词已生成</span>'
-  }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜</span>${
+  }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜${placeholders.length ? `（另有 ${placeholders.length} 镜占位）` : ''}</span>${
     stamp ? `<span class="stat">${esc(stamp)}</span>` : ''
   }</header>
 <div class="sub"><h1>${esc(headTitle)}</h1><span class="pill">目标模型 Seedance 2.5</span><span class="pill">每段 ≤ ${esc(maxSeconds)} 秒</span><span style="flex:1"></span><button type="button" class="btn primary" data-copy="all">复制全部提示词</button></div>
 <div class="filter"><input id="q" type="search" placeholder="⌕  筛选分镜、角色、场景…" autocomplete="off"><span class="chip g">已生成 ${okShots}</span><span class="chip a">未生成 ${badShots}</span><span class="sp"></span><button type="button" class="btn" id="styleBtn">风格参考</button></div>
 <div class="stylebar"><b>画风</b>${esc(library.style || '（没有识别出画风）')}</div>
 <main>
-<div class="view on" id="view-shots">${segHtml}<div class="none-msg">没有匹配的分镜</div></div>
+<div class="view on" id="view-shots">${segHtml}${placeholderHtml}<div class="none-msg">没有匹配的分镜</div></div>
 <div class="view" id="view-library">${libraryHtml}</div>
 </main>
 <div class="toast"></div>

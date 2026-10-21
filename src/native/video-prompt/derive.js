@@ -133,6 +133,8 @@ async function deriveEpisodePrompts({
   sourceKey,
   title = '',
   maxSeconds = DEFAULT_MAX_SEGMENT_SECONDS,
+  // 每集只分析前几个分镜（0 = 全部）：后面的分镜只在页面上占位，不问方舟、不截关键帧，省额度。
+  shotLimit = 0,
   fps = 2,
   log = () => {},
   onProgress = () => {},
@@ -141,7 +143,12 @@ async function deriveEpisodePrompts({
   tempRoot = os.tmpdir(),
 }) {
   const duration = Number(alignment?.duration ?? transcript?.duration ?? alignment?.shots?.at(-1)?.end);
-  const rows = buildShotRows(alignment, transcript);
+  const allRows = buildShotRows(alignment, transcript);
+  const limit = Math.max(0, Math.floor(Number(shotLimit) || 0));
+  const rows = limit > 0 ? allRows.slice(0, limit) : allRows;
+  const placeholders = allRows.slice(rows.length);
+  // 素材库也只看要分析的这几个分镜（从开头到最后一个分析的分镜结束）。
+  const analyzedEnd = placeholders.length ? rows.at(-1).end : duration;
   const segments = buildSegments(rows, maxSeconds);
   const key = crypto
     .createHash('sha256')
@@ -160,11 +167,11 @@ async function deriveEpisodePrompts({
       const proxy = path.join(temp, 'episode.mp4');
       await runFfmpeg(
         ffmpeg,
-        ['-y', '-i', inputPath, '-vf', scaleFilter(360), '-r', '8', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '32', '-c:a', 'aac', '-b:a', '48k', '-ac', '1', '-movflags', '+faststart', proxy],
+        ['-y', '-i', inputPath, ...(placeholders.length ? ['-t', String(analyzedEnd)] : []), '-vf', scaleFilter(360), '-r', '8', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '32', '-c:a', 'aac', '-b:a', '48k', '-ac', '1', '-movflags', '+faststart', proxy],
         signal,
       );
       cache.library = await withRetries(
-        async () => normalizeLibrary(parseJsonLoose(await client.askAboutVideo(proxy, libraryInstruction({ duration, rows }), { fps, signal, onTimings: (t) => log('info', `素材库：方舟用时 ${describePhases(t)}`) })), duration),
+        async () => normalizeLibrary(parseJsonLoose(await client.askAboutVideo(proxy, libraryInstruction({ duration: analyzedEnd, rows }), { fps, signal, onTimings: (t) => log('info', `素材库：方舟用时 ${describePhases(t)}`) })), analyzedEnd),
         { signal, sleep, label: '素材库', log },
       );
       await saveCache();
@@ -172,6 +179,7 @@ async function deriveEpisodePrompts({
     }
     const library = cache.library;
     log('info', `素材库：${library.characters.length} 个人物、${library.scenes.length} 个场景、${library.props.length} 个物品`);
+    if (placeholders.length) log('info', `只分析前 ${rows.length} 个分镜，后面 ${placeholders.length} 个分镜占位、不处理`);
 
     // 2) 人物参考图：从原视频里抽出该人物最清晰的一帧
     const refDirName = `${label}-参考图`;
@@ -252,7 +260,9 @@ async function deriveEpisodePrompts({
 
     const maxLimit = Math.min(30, Math.max(2, Number(maxSeconds) || DEFAULT_MAX_SEGMENT_SECONDS));
     const allSegments = results.map((item) => item.segment);
-    const text = renderEpisodeFile({ label, duration, maxSeconds: maxLimit, library, segments: allSegments, refPaths });
+    let text = renderEpisodeFile({ label, duration, maxSeconds: maxLimit, library, segments: allSegments, refPaths });
+    if (placeholders.length)
+      text += `\n（只分析了前 ${rows.length} 个分镜；镜 ${placeholders[0].no}–${placeholders.at(-1).no} 共 ${placeholders.length} 个分镜占位，没有处理）\n`;
     const file = path.join(outDir, `${label}.txt`);
     await writeAtomic(file, text);
 
@@ -302,6 +312,8 @@ async function deriveEpisodePrompts({
         size,
         generatedAt: new Date(),
         allText: text,
+        placeholders,
+        shotLimit: limit,
       });
       htmlFile = path.join(outDir, `${label}.html`);
       await writeAtomic(htmlFile, html);
@@ -311,7 +323,7 @@ async function deriveEpisodePrompts({
       log('warn', `分镜头脚本页面没有生成：${error.message}（提示词文本已经写好）`);
     }
     onProgress(100, '提示词已生成');
-    return { file, htmlFile, segments: segments.length, failed };
+    return { file, htmlFile, segments: segments.length, failed, placeholders: placeholders.length };
   } finally {
     await fsp.rm(temp, { recursive: true, force: true }).catch(() => {});
   }
