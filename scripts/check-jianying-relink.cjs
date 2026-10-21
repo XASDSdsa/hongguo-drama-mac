@@ -46,6 +46,8 @@ function makeDraft(root, name, { manifest = true, pathOf } = {}) {
   return { dir, video, audio };
 }
 
+// 通用情况不补 Windows 的 draft_content.json（那一条在 7b 单独测），这样在 Windows 打包机上结果也一样。
+const generic = { windowsTimeline: false };
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
 (async () => {
@@ -59,7 +61,7 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     // 1. 正常的草稿（没挪过）：一个字都不改。
     const intact = makeDraft(newRoot, '没挪过', { pathOf: (dir, parts) => path.join(dir, ...parts) });
     const before = fs.readFileSync(path.join(intact.dir, 'draft_info.json'), 'utf8');
-    const intactResult = await relinkDraft(intact.dir);
+    const intactResult = await relinkDraft(intact.dir, generic);
     assert.equal(intactResult.status, 'ok');
     assert.equal(intactResult.fixed, 0);
     assert.equal(fs.readFileSync(path.join(intact.dir, 'draft_info.json'), 'utf8'), before);
@@ -68,7 +70,7 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     const moved = makeDraft(oldRoot, '挪过的草稿', { pathOf: (dir, parts) => path.join(dir, ...parts) });
     const movedDir = path.join(newRoot, '挪过的草稿');
     fs.renameSync(moved.dir, movedDir);
-    const movedResult = await relinkDraft(movedDir);
+    const movedResult = await relinkDraft(movedDir, generic);
     assert.equal(movedResult.status, 'fixed');
     assert.equal(movedResult.fixed, 2);
     const content = read(path.join(movedDir, 'draft_info.json'));
@@ -88,7 +90,7 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
       [content.materials.videos[0].path, content.materials.audios[0].path],
     );
     // 再跑一次：已经修好，不再改。
-    assert.equal((await relinkDraft(movedDir)).fixed, 0);
+    assert.equal((await relinkDraft(movedDir, generic)).fixed, 0);
 
     // 3. Windows 生成、路径是 C:/… 或 C:\… 写法，拿到别的电脑上：按「素材/…」找回来。
     for (const [label, pathOf] of [
@@ -97,7 +99,7 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
       ['Mac', (_dir, parts) => ['', 'Users', 'me', 'Movies', '某草稿', ...parts].join('/')],
     ]) {
       const other = makeDraft(newRoot, `别的电脑-${label}`, { pathOf });
-      const result = await relinkDraft(other.dir);
+      const result = await relinkDraft(other.dir, generic);
       assert.equal(result.status, 'fixed', label);
       const fixed = read(path.join(other.dir, 'draft_info.json'));
       assert.ok(fs.existsSync(fixed.materials.videos[0].path), label);
@@ -108,7 +110,7 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     const original = makeDraft(oldRoot, '拷贝来源', { pathOf: (dir, parts) => path.join(dir, ...parts) });
     const copyDir = path.join(newRoot, '拷贝来源');
     fs.cpSync(original.dir, copyDir, { recursive: true });
-    const copyResult = await relinkDraft(copyDir);
+    const copyResult = await relinkDraft(copyDir, generic);
     assert.equal(copyResult.fixed, 2);
     assert.ok(read(path.join(copyDir, 'draft_info.json')).materials.videos[0].path.startsWith(nativePath(copyDir)));
     assert.ok(
@@ -119,7 +121,7 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     // 5. 素材真的丢了：报告找不到，不乱改。
     const lost = makeDraft(oldRoot, '素材丢了', { pathOf: (dir, parts) => path.join(dir, ...parts) });
     fs.rmSync(path.join(lost.dir, '素材'), { recursive: true });
-    const lostResult = await relinkDraft(lost.dir);
+    const lostResult = await relinkDraft(lost.dir, generic);
     assert.equal(lostResult.status, 'missing');
     assert.equal(lostResult.missing.length, 2);
 
@@ -128,20 +130,20 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
       manifest: false,
       pathOf: (_dir, parts) => ['', 'nowhere', ...parts].join('/'),
     });
-    assert.equal((await relinkDraft(foreign.dir)).status, 'skipped');
+    assert.equal((await relinkDraft(foreign.dir, generic)).status, 'skipped');
     const encrypted = makeDraft(oldRoot, '密文草稿', { pathOf: (_dir, parts) => ['', 'nowhere', ...parts].join('/') });
     fs.writeFileSync(path.join(encrypted.dir, 'draft_info.json'), 'ENCRYPTED-BYTES');
-    assert.equal((await relinkDraft(encrypted.dir)).status, 'skipped');
+    assert.equal((await relinkDraft(encrypted.dir, generic)).status, 'skipped');
     assert.equal(fs.readFileSync(path.join(encrypted.dir, 'draft_info.json'), 'utf8'), 'ENCRYPTED-BYTES');
 
     // 7. 整个文件夹一起修，只报修过的。
     const batch = makeDraft(base, '批量', { pathOf: (_dir, parts) => ['', 'gone', 'x', ...parts].join('/') });
-    const fixedList = await relinkDraftsIn(path.dirname(batch.dir));
+    const fixedList = await relinkDraftsIn(path.dirname(batch.dir), generic);
     assert.deepEqual(
       fixedList.map((item) => path.basename(item.dir)),
       ['批量'],
     );
-    assert.deepEqual(await relinkDraftsIn(path.join(base, '不存在')), []);
+    assert.deepEqual(await relinkDraftsIn(path.join(base, '不存在'), generic), []);
 
     // 7b. Windows：以前只写了 draft_info.json（Mac 版剪映读的），补一份 draft_content.json（Windows 版剪映读的）。
     const winDraft = makeDraft(base, 'Windows草稿', { pathOf: (dir, parts) => path.join(dir, ...parts) });

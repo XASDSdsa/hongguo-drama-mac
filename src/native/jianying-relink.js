@@ -60,7 +60,7 @@ async function readJson(file) {
  * 修一份草稿的素材路径。
  * @returns {{ status: 'ok'|'fixed'|'skipped'|'missing', fixed: number, missing: string[] }}
  */
-async function relinkDraft(draftDir, { platform = process.platform } = {}) {
+async function relinkDraft(draftDir, { platform = process.platform, windowsTimeline = platform === 'win32' } = {}) {
   const dir = path.resolve(draftDir);
   const result = { status: 'ok', fixed: 0, missing: [] };
   if (!isFile(path.join(dir, 'draft-manifest.json'))) return { ...result, status: 'skipped' };
@@ -87,7 +87,7 @@ async function relinkDraft(draftDir, { platform = process.platform } = {}) {
   // Windows 版剪映读 draft_content.json（Mac 版读 draft_info.json）：以前的版本只写了 draft_info.json，
   // Windows 上打开就只剩一整段视频、没有分镜。补一份（剪映自己保存过的不动）。
   const windowsFile = path.join(dir, 'draft_content.json');
-  const needsWindowsFile = platform === 'win32' && !isFile(windowsFile);
+  const needsWindowsFile = windowsTimeline && !isFile(windowsFile);
   if (!result.fixed && !needsWindowsFile) return { ...result, status: result.missing.length ? 'missing' : 'ok' };
   if (result.fixed) await writeJson(contentFile, content);
   if (needsWindowsFile || (result.fixed && (await readJson(windowsFile)))) {
