@@ -1,20 +1,12 @@
-name: probe mac checks
+name: probe hongguo resolution
 on: push
 jobs:
-  mac:
-    if: "!contains(github.event.head_commit.message, '[pages]')"
-    runs-on: macos-latest
+  probe:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: perf/structure-speed }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22.12.0 }
-      - shell: bash {0}
-        run: |
-          npm i --no-save axios@1 >/dev/null 2>&1
-          note() { echo "::$1 title=$2::$(echo "$3" | tail -n 14 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
-          for c in check-draft-capacity check-catalog check-hot-rank-live; do
-            out=$(node scripts/$c.cjs 2>&1); code=$?
-            [ $code -eq 0 ] && note notice "ok $c" "$out" || note error "FAIL $c ($code)" "$out"
-          done
-          note notice sysctl "$(sysctl -n hw.perflevel0.physicalcpu hw.physicalcpu hw.ncpu 2>&1)"
+      - uses: actions/checkout@v4
+        with: { ref: perf/structure-speed, path: app }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+      - run: npm init -y >/dev/null && npm i -q axios@1 >/dev/null
+      - run: node probe.js
