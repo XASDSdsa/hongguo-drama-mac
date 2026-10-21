@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -285,41 +286,161 @@ def _probe_duration_us(metadata: dict, stream: dict, path: Path) -> int:
 
 
 def material_path(path: Path) -> str:
-    """素材在草稿里记的路径：剪映自己的写法。
+    """素材的绝对路径（不做 resolve：Windows 上 resolve 会把映射盘换成 \\服务器\共享 这类路径）。
 
-    - 用绝对路径但不做 resolve：Windows 上 resolve 会把映射的网络盘、subst 盘换成 \\\\服务器\\共享 这类路径，
-      剪映按原盘符找不到文件。
-    - Windows 上统一用正斜杠（C:/Users/.../素材/视频/第1集.mp4），和剪映自己保存的草稿一致。
+    保存后 finalize_draft 会把草稿文件夹里的素材改写成剪映自己的「草稿目录占位符」相对路径。
     """
-    absolute = os.path.abspath(str(path))
-    return absolute.replace("\\", "/") if os.name == "nt" else absolute
+    return os.path.abspath(str(path))
 
 
-def windows_draft_files(draft_dir: Path, platform: str | None = None) -> bool:
-    """Windows 版剪映读 draft_content.json（Mac 版读 draft_info.json）。
+# ===== 按剪映自己保存草稿的格式收尾 =====
+# 依据（2026-10 查证）：
+# - 剪映保存草稿时，草稿文件夹里的素材不写绝对路径，写「草稿目录占位符 + 草稿内相对路径」：
+#   ##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##/<相对路径>，UUID 是剪映内置常量
+#   （capcut-mate desktop-client/nodeapi/draftPaths.js、capcut-cli utils/draft-token.js 同一个值）。
+#   这样草稿挪位置、换盘、拷到别的电脑都不会「媒体丢失」。
+# - config.material_save_mode：素材都在草稿文件夹里写 1；写 0 剪映会当成素材在草稿外面。
+# - draft_meta_info.json：draft_name 要和文件夹名一致；draft_fold_path / draft_root_path 用正斜杠；
+#   draft_materials 里的 file_Path 写成 "./<相对路径>"。
+# - Windows 版剪映读 draft_content.json（Mac 版读 draft_info.json）。剪映专业版 10.x（Windows）的草稿还有
+#   Timelines/<时间线 id>/ 一份同样的时间线、Timelines/project.json、timeline_layout.json 等
+#   （CapCutAPI 的 jianying_pro_10 模板，按剪映 10.2 Windows 草稿整理）。两种文件都写，新旧版本都能读。
+DRAFT_PATH_PLACEHOLDER = "##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##"
+MEDIA_KINDS = ("videos", "audios", "images")
 
-    pyJianYingDraft 这个分支只写 draft_info.json（按 Mac 版剪映测的），Windows 版剪映找不到时间线，
-    打开就只剩一整段视频、没有分镜。Windows 上再写一份内容一样的 draft_content.json；
-    草稿登记信息（draft_meta_info.json）里的路径也改成剪映自己的正斜杠写法。
-    环境变量 JIANYING_DRAFT_PLATFORM=win32 可以在别的系统上按 Windows 的写法生成（测试用）。
+
+def resolve_material_path(value: str, draft_dir: Path) -> str:
+    """草稿里记的素材路径对应的实际文件（占位符换成草稿文件夹）。"""
+    value = str(value or "")
+    if value.startswith(DRAFT_PATH_PLACEHOLDER):
+        rel = value[len(DRAFT_PATH_PLACEHOLDER):].lstrip("/\\")
+        return os.path.join(str(draft_dir), *re.split(r"[\\/]+", rel))
+    return value
+
+
+def _draft_relative(value: str, draft_dir: Path) -> str | None:
+    """草稿文件夹里的绝对路径 → 草稿内相对路径（正斜杠）；不在草稿文件夹里返回 None。"""
+    if not value or value.startswith(DRAFT_PATH_PLACEHOLDER) or value.startswith("<cloud://"):
+        return None
+    root = os.path.normcase(os.path.abspath(str(draft_dir)))
+    file = os.path.normcase(os.path.abspath(value))
+    try:
+        if os.path.commonpath([root, file]) != root or root == file:
+            return None
+    except ValueError:  # 不同的盘
+        return None
+    return os.path.relpath(os.path.abspath(value), os.path.abspath(str(draft_dir))).replace("\\", "/")
+
+
+def _write_json(path: Path, data, *, compact: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, ensure_ascii=False, separators=(",", ":")) if compact else json.dumps(data, ensure_ascii=False, indent=4)
+    path.write_text(text, encoding="utf-8")
+
+
+def _windows_layout(draft_dir: Path, content: dict, now_us: int) -> None:
+    """剪映专业版 10.x（Windows）草稿的其余文件：时间线目录、布局和几个空的配置文件。"""
+    timeline_id = str(content.get("id") or uuid.uuid4()).upper()
+    content["id"] = timeline_id
+    mirrors = ("draft_content.json", "draft_content.json.bak", "template-2.tmp")
+    for name in mirrors:
+        _write_json(draft_dir / name, content)
+    timelines = draft_dir / "Timelines"
+    timeline_dir = timelines / timeline_id
+    for name in (*mirrors, "template.tmp"):
+        _write_json(timeline_dir / name, content)
+    pc_common = {
+        "ai_packaging_infos": [], "commercial_music_category_ids": [], "pc_feature_flag": 0,
+        "recognize_tasks": [], "template_item_infos": [], "unlock_template_ids": [],
+    }
+    _write_json(timeline_dir / "attachment_editing.json", {"draft_operation_log": []}, compact=True)
+    _write_json(timeline_dir / "attachment_pc_common.json", pc_common, compact=True)
+    _write_json(timeline_dir / "common_attachment" / "attachment_pc_timeline.json", {
+        "reference_lines_config": {"horizontal_lines": [], "is_lock": False, "is_visible": False, "vertical_lines": []},
+        "safe_area_type": 0,
+    }, compact=True)
+    _write_json(timeline_dir / "common_attachment" / "attachment_script_video.json", {"video_segments": []}, compact=True)
+    project = {
+        "config": {"color_space": -1, "render_index_track_mode_on": False, "use_float_render": False},
+        "create_time": now_us,
+        "id": timeline_id,
+        "main_timeline_id": timeline_id,
+        "timelines": [{"create_time": now_us, "id": timeline_id, "is_marked_delete": False, "name": "时间线01", "update_time": now_us}],
+        "update_time": now_us,
+        "version": 0,
+    }
+    for name in ("project.json", "project.json.bak"):
+        _write_json(timelines / name, project, compact=True)
+    _write_json(draft_dir / "timeline_layout.json", {
+        "dockItems": [{"dockIndex": 0, "ratio": 1, "timelineIds": [timeline_id], "timelineNames": ["时间线01"]}],
+        "layoutOrientation": 1,
+    }, compact=True)
+    defaults = {
+        "draft_virtual_store.json": {"key_values": [], "material_infos": []},
+        "key_value.json": {},
+        "attachment_pc_common.json": pc_common,
+        "performance_opt_info.json": {"manual_cancle_precombine_segs": None, "need_auto_precombine_segs": None},
+        "draft_agency_config.json": {"is_auto_agency_enabled": False, "is_auto_agency_popup": False, "is_single_agency_mode": False, "marterials": None, "use_converter": False, "video_resolution": 720},
+        os.path.join("common_attachment", "attachment_pc_timeline.json"): {
+            "reference_lines_config": {"horizontal_lines": [], "is_lock": False, "is_visible": False, "vertical_lines": []},
+            "safe_area_type": 0,
+        },
+    }
+    for name, value in defaults.items():
+        if not (draft_dir / name).exists():
+            _write_json(draft_dir / name, value, compact=True)
+    biz = draft_dir / "draft_biz_config.json"
+    if not biz.exists():
+        biz.write_text("", encoding="utf-8")
+    settings = draft_dir / "draft_settings"
+    seconds = now_us // 1_000_000
+    settings.write_text(
+        f"[General]\ndraft_create_time={seconds}\ndraft_last_edit_time={seconds}\nreal_edit_seconds=0\nreal_edit_keys=0\ncloud_last_modify_platform=windows\n",
+        encoding="utf-8",
+    )
+    for name in ("Resources", "adjust_mask", "matting", "qr_upload", "smart_crop", "subdraft"):
+        (draft_dir / name).mkdir(exist_ok=True)
+
+
+def finalize_draft(draft_dir: Path, platform: str | None = None) -> dict:
+    """pyJianYingDraft 保存后，按剪映自己保存草稿的格式改一遍（见上面的依据）。
+
+    环境变量 JIANYING_DRAFT_PLATFORM=win32 可以在别的系统上按 Windows 的格式生成（测试用）。
     """
     platform = platform or os.environ.get("JIANYING_DRAFT_PLATFORM") or sys.platform
-    if platform != "win32":
-        return False
-    info = draft_dir / "draft_info.json"
-    shutil.copyfile(info, draft_dir / "draft_content.json")
+    info_path = draft_dir / "draft_info.json"
+    content = json.loads(info_path.read_text(encoding="utf-8"))
+    relocated = 0
+    for kind in MEDIA_KINDS:
+        for material in (content.get("materials") or {}).get(kind) or []:
+            if not isinstance(material, dict) or material.get("type") == "music":
+                continue
+            rel = _draft_relative(str(material.get("path") or ""), draft_dir)
+            if rel:
+                material["path"] = f"{DRAFT_PATH_PLACEHOLDER}/{rel}"
+                relocated += 1
+    content.setdefault("config", {})["material_save_mode"] = 1
+    now_us = int(time.time() * 1_000_000)
+    if platform == "win32":
+        _windows_layout(draft_dir, content, now_us)
+    _write_json(info_path, content)
+
     meta_path = draft_dir / "draft_meta_info.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        for key in ("draft_fold_path", "draft_root_path"):
-            if isinstance(meta.get(key), str):
-                meta[key] = meta[key].replace("\\", "/")
+        meta["draft_name"] = draft_dir.name
+        meta["draft_fold_path"] = os.path.abspath(str(draft_dir)).replace("\\", "/")
+        meta["draft_root_path"] = os.path.dirname(os.path.abspath(str(draft_dir))).replace("\\", "/")
+        if platform == "win32":
+            meta["draft_id"] = content["id"]
         for bucket in meta.get("draft_materials") or []:
             for item in (bucket or {}).get("value") or []:
                 if isinstance(item, dict) and isinstance(item.get("file_Path"), str):
-                    item["file_Path"] = item["file_Path"].replace("\\", "/")
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
-    return True
+                    rel = _draft_relative(item["file_Path"], draft_dir)
+                    if rel:
+                        item["file_Path"] = f"./{rel}"
+        _write_json(meta_path, meta)
+    return {"platform": platform, "relocated": relocated, "timeline_id": content.get("id")}
 
 
 def verify_materials(draft_dir: Path) -> int:
@@ -335,7 +456,7 @@ def verify_materials(draft_dir: Path) -> int:
             value = str(material.get("path") or "")
             if not value or value.startswith("<cloud://") or material.get("type") == "music":
                 continue
-            file = os.path.abspath(value)
+            file = os.path.abspath(resolve_material_path(value, draft_dir))
             if not os.path.isfile(file):
                 raise RuntimeError(f"草稿素材不存在：{value}")
             if os.path.commonpath([root, os.path.normcase(file)]) != root:
@@ -592,7 +713,7 @@ def main() -> int:
         os.environ.pop("LOCALAPPDATA", None)
     draft_folder = draft.DraftFolder(
         str(output_root),
-        user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data else None,
+        user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data and not args.no_register else None,
     )
     if draft_folder.has_draft(args.name):
         if not args.force:
@@ -722,7 +843,7 @@ def main() -> int:
         "note": "草稿尚未在目标剪映版本完成打开、播放、保存、重开验收。",
     }
     (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    windows_draft_files(draft_dir)
+    finalize_draft(draft_dir)
     verify_materials(draft_dir)
     print(json.dumps({"success": True, "draft_dir": str(draft_dir), "draft_info": str(draft_dir / "draft_info.json"), "manifest": str(draft_dir / "draft-manifest.json"), "fps": fps, "duration_us": duration_us, "clip_count": len(clip_rows), "subtitle_count": len(subtitle_rows), "status": manifest["status"]}, ensure_ascii=False, indent=2))
     return 0

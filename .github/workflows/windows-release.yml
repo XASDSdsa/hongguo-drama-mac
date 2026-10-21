@@ -136,6 +136,7 @@ jobs:
           ff=$(find "$RUNNER_TEMP/ff" -iname ffmpeg.exe | head -n 1)
           [ -n "$ff" ] || { echo "::error title=没有 FFmpeg::release zip 里没找到 ffmpeg.exe"; exit 1; }
           echo "FFMPEG_PATH=$(cygpath -w "$ff")" >> "$GITHUB_ENV"
+          cygpath -w "$(dirname "$ff")" >> "$GITHUB_PATH"
 
       - name: Jianying draft checks on Windows
         shell: bash
@@ -145,6 +146,7 @@ jobs:
           run_check node scripts/check-jianying-relink.cjs
           run_check node scripts/check-jianying-location.cjs
           run_check env PYTHON=python REQUIRE_JIANYING=1 node scripts/check-jianying-simple-draft.cjs
+          run_check python scripts/check-dialogue-draft.py
 
   quick-update:
     if: inputs.quick == 'true'

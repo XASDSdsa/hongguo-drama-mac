@@ -183,31 +183,49 @@ try {
   assert.notEqual(run().status, 0, 'an existing draft is not overwritten silently');
   assert.equal(run(['--force']).status, 0);
 
-  // 草稿里记的每个素材都在、都在草稿自己的文件夹里；Windows 上是剪映自己的写法（正斜杠）。
-  const materials = [...info.materials.videos, ...info.materials.audios].filter((item) => item.path);
+  // 剪映自己的格式：草稿文件夹里的素材写成「草稿目录占位符/相对路径」，素材都在草稿里，material_save_mode = 1；
+  // draft_meta_info.json 的 draft_name 和文件夹名一致、路径用正斜杠、file_Path 是 ./相对路径。
+  const P = '##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##';
+  const mediaOf = (value, root) =>
+    value.startsWith(P) ? path.join(root, ...value.slice(P.length + 1).split('/')) : value;
+  const current = JSON.parse(fs.readFileSync(path.join(dir, 'draft_info.json'), 'utf8'));
+  const materials = [...current.materials.videos, ...current.materials.audios].filter((item) => item.path);
   assert.ok(materials.length >= 2, 'video and audio materials');
   for (const material of materials) {
-    assert.ok(fs.statSync(material.path).isFile(), `material exists: ${material.path}`);
-    const relative = path.relative(dir, material.path);
-    assert.ok(
-      relative && !relative.startsWith('..') && !path.isAbsolute(relative),
-      `inside the draft: ${material.path}`,
-    );
-    if (process.platform === 'win32') assert.ok(!material.path.includes('\\'), `forward slashes: ${material.path}`);
+    assert.ok(material.path.startsWith(`${P}/`), `placeholder path: ${material.path}`);
+    assert.ok(fs.statSync(mediaOf(material.path, dir)).isFile(), `material exists: ${material.path}`);
   }
+  assert.equal(current.config.material_save_mode, 1);
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'draft_meta_info.json'), 'utf8'));
+  assert.equal(meta.draft_name, path.basename(dir));
+  assert.ok(!meta.draft_fold_path.includes('\\') && !meta.draft_root_path.includes('\\'), 'forward slashes');
+  const filePaths = meta.draft_materials.flatMap((bucket) => bucket.value.map((item) => item.file_Path));
+  assert.ok(filePaths.length >= 1 && filePaths.every((value) => value.startsWith('./')), filePaths.join(' | '));
   if (process.env.GITHUB_ACTIONS)
     console.log(`::notice title=剪映草稿素材路径（${process.platform}）::${materials[0].path}`);
-  // Windows 版剪映读 draft_content.json：Windows 上（或按 Windows 写法生成时）要有一份，内容和 draft_info.json 一样，
-  // 登记信息里的路径用正斜杠。
-  if (process.platform === 'win32') {
-    assert.deepEqual(
-      JSON.parse(fs.readFileSync(path.join(dir, 'draft_content.json'), 'utf8')),
-      JSON.parse(fs.readFileSync(path.join(dir, 'draft_info.json'), 'utf8')),
-      'Windows: draft_content.json is written',
-    );
-    const meta = fs.readFileSync(path.join(dir, 'draft_meta_info.json'), 'utf8');
-    assert.ok(!/\\\\/.test(meta), 'Windows: draft_meta_info.json uses forward slashes');
-  } else {
+
+  // Windows 版剪映读 draft_content.json，剪映专业版 10.x 还有 Timelines/<时间线>/ 一份同样的时间线。
+  const checkWindowsLayout = (root) => {
+    const info = JSON.parse(fs.readFileSync(path.join(root, 'draft_info.json'), 'utf8'));
+    for (const name of ['draft_content.json', 'draft_content.json.bak', 'template-2.tmp'])
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')), info, `Windows: ${name}`);
+    const project = JSON.parse(fs.readFileSync(path.join(root, 'Timelines', 'project.json'), 'utf8'));
+    assert.equal(project.main_timeline_id, info.id);
+    for (const name of ['draft_content.json', 'template.tmp'])
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(path.join(root, 'Timelines', info.id, name), 'utf8')),
+        info,
+        `Windows: Timelines/${info.id}/${name}`,
+      );
+    const layout = JSON.parse(fs.readFileSync(path.join(root, 'timeline_layout.json'), 'utf8'));
+    assert.deepEqual(layout.dockItems[0].timelineIds, [info.id]);
+    const winMeta = JSON.parse(fs.readFileSync(path.join(root, 'draft_meta_info.json'), 'utf8'));
+    assert.equal(winMeta.draft_id, info.id, 'meta draft_id = timeline id');
+    for (const name of ['draft_virtual_store.json', 'key_value.json', 'draft_settings', 'Resources'])
+      assert.ok(fs.existsSync(path.join(root, name)), `Windows: ${name}`);
+  };
+  if (process.platform === 'win32') checkWindowsLayout(dir);
+  else {
     assert.ok(!fs.existsSync(path.join(dir, 'draft_content.json')), 'Mac: only draft_info.json');
     const asWindows = spawnSync(
       python,
@@ -215,14 +233,10 @@ try {
       { encoding: 'utf8', env: { ...process.env, JIANYING_DRAFT_PLATFORM: 'win32' } },
     );
     assert.equal(asWindows.status, 0, asWindows.stderr);
-    const winDir = path.join(tmp, 'win-style', 'win-style');
-    assert.deepEqual(
-      JSON.parse(fs.readFileSync(path.join(winDir, 'draft_content.json'), 'utf8')),
-      JSON.parse(fs.readFileSync(path.join(winDir, 'draft_info.json'), 'utf8')),
-      'Windows-style: draft_content.json mirrors draft_info.json',
-    );
+    checkWindowsLayout(path.join(tmp, 'win-style', 'win-style'));
   }
-  // 整个草稿文件夹挪到别处（老位置没了）：软件把素材路径改到新位置。
+
+  // 整个草稿文件夹挪到别处（老位置没了）：占位符写法不用改，素材照样找得到。
   const movedDir = path.join(tmp, '挪到这里', path.basename(dir));
   fs.mkdirSync(path.dirname(movedDir), { recursive: true });
   fs.cpSync(dir, movedDir, { recursive: true });
@@ -231,20 +245,16 @@ try {
     process.execPath,
     [
       '-e',
-      `require(${JSON.stringify(path.join(__dirname, '..', 'src', 'native', 'jianying-relink.js'))}).relinkDraft(process.argv[1]).then((r) => console.log(JSON.stringify(r)))`,
+      `require(${JSON.stringify(path.join(__dirname, '..', 'src', 'native', 'jianying-relink.js'))}).relinkDraft(process.argv[1], { windowsTimeline: false }).then((r) => console.log(JSON.stringify(r)))`,
       movedDir,
     ],
     { encoding: 'utf8' },
   );
   assert.equal(relink.status, 0, relink.stderr);
-  const relinked = JSON.parse(relink.stdout.trim());
-  assert.equal(relinked.status, 'fixed');
-  assert.equal(relinked.fixed, materials.length);
+  assert.equal(JSON.parse(relink.stdout.trim()).fixed, 0, 'nothing to relink');
   const movedInfo = JSON.parse(fs.readFileSync(path.join(movedDir, 'draft_info.json'), 'utf8'));
-  for (const material of [...movedInfo.materials.videos, ...movedInfo.materials.audios].filter((item) => item.path)) {
-    assert.ok(fs.statSync(material.path).isFile(), `relinked material exists: ${material.path}`);
-    assert.ok(!path.relative(movedDir, material.path).startsWith('..'), `relinked inside: ${material.path}`);
-  }
+  for (const material of [...movedInfo.materials.videos, ...movedInfo.materials.audios].filter((item) => item.path))
+    assert.ok(fs.statSync(mediaOf(material.path, movedDir)).isFile(), `moved material exists: ${material.path}`);
 
   // 草稿位置不在剪映 User Data 里（Windows 的 D:\JianyingPro Drafts）：--no-register 不往 User Data 写登记。
   const local = path.join(tmp, 'AppData', 'Local');

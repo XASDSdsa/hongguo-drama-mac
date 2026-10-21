@@ -8,6 +8,19 @@ import re
 import sys
 from pathlib import Path
 
+# 剪映的草稿目录占位符：素材路径写成「占位符/草稿内相对路径」（见 create-jianying-draft.py 的 finalize_draft）。
+DRAFT_PATH_PLACEHOLDER = "##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##"
+DRAFT_ROOT = Path(".")
+
+
+def media_file(value: str) -> Path:
+    """草稿里记的素材路径对应的实际文件。"""
+    value = str(value or "")
+    if value.startswith(DRAFT_PATH_PLACEHOLDER):
+        rel = value[len(DRAFT_PATH_PLACEHOLDER):].lstrip("/\\")
+        return DRAFT_ROOT.joinpath(*re.split(r"[\\/]+", rel))
+    return Path(value)
+
 
 def validate_dialogue_tracks(content: dict, manifest: dict, tracks: dict) -> None:
     if manifest.get("boundary_policy") != "every_visual_shot_cut" or manifest.get("alignment_algorithm") != "visual-shots-dialogue-index-v2":
@@ -115,7 +128,7 @@ def validate_dialogue_tracks(content: dict, manifest: dict, tracks: dict) -> Non
         if target != {"start": row["start_us"], "duration": row["duration_us"]} or row.get("shot_ids") != [item["shot_id"] for item in coverage(start, end)] or row.get("shot_segments") != coverage(start, end):
             raise SystemExit(f"voice native bounds or visual-shot index differ from manifest: {voice_id}")
         actual_spans.setdefault(utterance_id, []).append({"start_us": start, "end_us": end})
-        material_path = Path(audios.get(segment["material_id"], {}).get("path", ""))
+        material_path = media_file(audios.get(segment["material_id"], {}).get("path", ""))
         if not material_path.is_file() or material_path.resolve() != Path(row["path"]).resolve():
             raise SystemExit(f"voice material mismatch: {utterance_id}")
     if set(utterances) != {row.get("utterance_id") for row in expected_voice} or voice_ids != set(subtitles_by_voice):
@@ -135,7 +148,9 @@ def main() -> int:
     if len(sys.argv) != 2:
         print(f"usage: {sys.argv[0]} DRAFT_DIR", file=sys.stderr)
         return 2
+    global DRAFT_ROOT
     root = Path(sys.argv[1]).resolve()
+    DRAFT_ROOT = root
     content_path = root / "draft_info.json"
     if not content_path.is_file():
         # Jianying <= 5.9 used the legacy filename. Keep the validator able
@@ -206,7 +221,7 @@ def main() -> int:
         cursor = target["start"] + target["duration"]
         material_id = segment["material_id"]
         material = next(item for item in content["materials"]["videos"] if item["id"] == material_id)
-        if not Path(material["path"]).is_file():
+        if not media_file(material["path"]).is_file():
             raise SystemExit(f"missing video material: {material['path']}")
     if cursor != duration:
         raise SystemExit(f"video duration mismatch: {cursor} != {duration}")

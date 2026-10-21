@@ -164,7 +164,7 @@ def main() -> int:
         os.environ.pop("LOCALAPPDATA", None)
     folder = draft.DraftFolder(
         str(output_root),
-        user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data else None,
+        user_data_path=os.path.abspath(args.jianying_user_data) if args.jianying_user_data and not args.no_register else None,
     )
     if folder.has_draft(args.name):
         if not args.force:
@@ -266,7 +266,7 @@ def main() -> int:
         },
     }
     (draft_dir / "draft-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    base.windows_draft_files(draft_dir)
+    base.finalize_draft(draft_dir)
     base.verify_materials(draft_dir)
     print(json.dumps({
         "success": True,

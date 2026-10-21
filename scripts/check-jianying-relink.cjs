@@ -4,7 +4,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { relinkDraft, relinkDraftsIn, relocate, nativePath } = require('../src/native/jianying-relink');
+const {
+  relinkDraft,
+  relinkDraftsIn,
+  relocate,
+  nativePath,
+  DRAFT_PATH_PLACEHOLDER,
+} = require('../src/native/jianying-relink');
 
 function makeDraft(root, name, { manifest = true, pathOf } = {}) {
   const dir = path.join(root, name);
@@ -58,15 +64,37 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     fs.mkdirSync(oldRoot, { recursive: true });
     fs.mkdirSync(newRoot, { recursive: true });
 
-    // 1. 正常的草稿（没挪过）：一个字都不改。
-    const intact = makeDraft(newRoot, '没挪过', { pathOf: (dir, parts) => path.join(dir, ...parts) });
-    const before = fs.readFileSync(path.join(intact.dir, 'draft_info.json'), 'utf8');
-    const intactResult = await relinkDraft(intact.dir, generic);
-    assert.equal(intactResult.status, 'ok');
-    assert.equal(intactResult.fixed, 0);
-    assert.equal(fs.readFileSync(path.join(intact.dir, 'draft_info.json'), 'utf8'), before);
+    const P = DRAFT_PATH_PLACEHOLDER;
+    const media = (value, dir) =>
+      value.startsWith(P) ? path.join(dir, ...value.slice(P.length + 1).split('/')) : value;
 
-    // 2. 整个草稿文件夹挪走（老位置已经没有了）：路径改到新位置，素材都找得到。
+    // 1. 已经是剪映占位符写法的草稿：挪到哪都对，一个字都不改。
+    const portable = makeDraft(newRoot, '占位符草稿', { pathOf: (_dir, parts) => `${P}/${parts.join('/')}` });
+    const before = fs.readFileSync(path.join(portable.dir, 'draft_info.json'), 'utf8');
+    const portableResult = await relinkDraft(portable.dir, generic);
+    assert.equal(portableResult.status, 'ok');
+    assert.equal(portableResult.fixed, 0);
+    assert.equal(fs.readFileSync(path.join(portable.dir, 'draft_info.json'), 'utf8'), before);
+
+    // 1b. 以前的版本写的绝对路径（素材在草稿里）：改成占位符写法，以后挪位置也不会丢。
+    const intact = makeDraft(newRoot, '没挪过', { pathOf: (dir, parts) => path.join(dir, ...parts) });
+    const intactResult = await relinkDraft(intact.dir, generic);
+    assert.equal(intactResult.status, 'fixed');
+    assert.equal(intactResult.fixed, 2);
+    const upgraded = read(path.join(intact.dir, 'draft_info.json'));
+    assert.equal(upgraded.materials.videos[0].path, `${P}/素材/视频/第1集.mp4`);
+    assert.equal(upgraded.materials.audios[0].path, `${P}/素材/音频/人声-整集时间轴.wav`);
+    assert.equal(upgraded.config.material_save_mode, 1, '素材都在草稿里');
+    const upgradedMeta = read(path.join(intact.dir, 'draft_meta_info.json'));
+    assert.deepEqual(
+      upgradedMeta.draft_materials[0].value.map((item) => item.file_Path),
+      ['./素材/视频/第1集.mp4', './素材/音频/人声-整集时间轴.wav'],
+    );
+    assert.equal(upgradedMeta.draft_name, '没挪过', 'draft_name 和文件夹名一致');
+    assert.ok(!upgradedMeta.draft_fold_path.includes('\\'), '正斜杠');
+    assert.equal((await relinkDraft(intact.dir, generic)).fixed, 0, '再跑一次不再改');
+
+    // 2. 整个草稿文件夹挪走（老位置已经没有了）：按「素材/…」找回来，写成占位符。
     const moved = makeDraft(oldRoot, '挪过的草稿', { pathOf: (dir, parts) => path.join(dir, ...parts) });
     const movedDir = path.join(newRoot, '挪过的草稿');
     fs.renameSync(moved.dir, movedDir);
@@ -74,25 +102,17 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(movedResult.status, 'fixed');
     assert.equal(movedResult.fixed, 2);
     const content = read(path.join(movedDir, 'draft_info.json'));
-    assert.equal(content.materials.videos[0].path, nativePath(path.join(movedDir, '素材', '视频', '第1集.mp4')));
-    assert.equal(
-      content.materials.audios[0].path,
-      nativePath(path.join(movedDir, '素材', '音频', '人声-整集时间轴.wav')),
-    );
     assert.equal(content.materials.audios[1].path, '', '云端音乐不动');
-    for (const material of [...content.materials.videos, content.materials.audios[0]])
-      assert.ok(fs.existsSync(material.path));
+    for (const material of [...content.materials.videos, content.materials.audios[0]]) {
+      assert.ok(material.path.startsWith(P));
+      assert.ok(fs.existsSync(media(material.path, movedDir)));
+    }
     const meta = read(path.join(movedDir, 'draft_meta_info.json'));
-    assert.equal(meta.draft_fold_path, nativePath(movedDir));
-    assert.equal(meta.draft_root_path, nativePath(newRoot));
-    assert.deepEqual(
-      meta.draft_materials[0].value.map((item) => item.file_Path),
-      [content.materials.videos[0].path, content.materials.audios[0].path],
-    );
-    // 再跑一次：已经修好，不再改。
+    assert.equal(meta.draft_fold_path, movedDir.split(path.sep).join('/'));
+    assert.equal(meta.draft_root_path, newRoot.split(path.sep).join('/'));
     assert.equal((await relinkDraft(movedDir, generic)).fixed, 0);
 
-    // 3. Windows 生成、路径是 C:/… 或 C:\… 写法，拿到别的电脑上：按「素材/…」找回来。
+    // 3. 别的电脑生成（C:/… 或 C:\… 或 Mac 路径）：按「素材/…」找回来。
     for (const [label, pathOf] of [
       ['正斜杠', (_dir, parts) => ['C:', 'Users', '张三', 'AppData', '某草稿', ...parts].join('/')],
       ['反斜杠', (_dir, parts) => ['D:', '短剧', '剪映草稿', '某草稿', ...parts].join('\\')],
@@ -102,17 +122,17 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
       const result = await relinkDraft(other.dir, generic);
       assert.equal(result.status, 'fixed', label);
       const fixed = read(path.join(other.dir, 'draft_info.json'));
-      assert.ok(fs.existsSync(fixed.materials.videos[0].path), label);
-      assert.ok(fs.existsSync(fixed.materials.audios[0].path), label);
+      assert.ok(fs.existsSync(media(fixed.materials.videos[0].path, other.dir)), label);
+      assert.ok(fs.existsSync(media(fixed.materials.audios[0].path, other.dir)), label);
     }
 
-    // 4. 草稿是拷过来的（老位置那份还在）：改成指向自己这份，老位置以后删了也不影响。
+    // 4. 草稿是拷过来的（老位置那份还在）：改成这份草稿自己的素材，来源那份不动。
     const original = makeDraft(oldRoot, '拷贝来源', { pathOf: (dir, parts) => path.join(dir, ...parts) });
     const copyDir = path.join(newRoot, '拷贝来源');
     fs.cpSync(original.dir, copyDir, { recursive: true });
     const copyResult = await relinkDraft(copyDir, generic);
     assert.equal(copyResult.fixed, 2);
-    assert.ok(read(path.join(copyDir, 'draft_info.json')).materials.videos[0].path.startsWith(nativePath(copyDir)));
+    assert.ok(read(path.join(copyDir, 'draft_info.json')).materials.videos[0].path.startsWith(P));
     assert.ok(
       read(path.join(original.dir, 'draft_info.json')).materials.videos[0].path.startsWith(original.dir),
       '来源那份不动',

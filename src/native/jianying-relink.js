@@ -10,6 +10,18 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 
 const MEDIA_DIR = '素材';
+// 剪映自己的「草稿目录占位符」：素材写成「占位符/草稿内相对路径」，草稿挪到哪都找得到（见 create-jianying-draft.py）。
+const DRAFT_PATH_PLACEHOLDER = '##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##';
+
+/** 草稿文件夹里的文件 → 占位符写法。 */
+function placeholderPath(file, draftDir) {
+  return `${DRAFT_PATH_PLACEHOLDER}/${path.relative(draftDir, file).split(path.sep).join('/')}`;
+}
+
+/** 草稿文件夹里的文件 → draft_meta_info.json 里 file_Path 的写法（./相对路径）。 */
+function metaPath(file, draftDir) {
+  return `./${path.relative(draftDir, file).split(path.sep).join('/')}`;
+}
 
 /** 剪映自己的路径写法：Windows 上用正斜杠。 */
 function nativePath(file, platform = process.platform) {
@@ -72,15 +84,16 @@ async function relinkDraft(draftDir, { platform = process.platform, windowsTimel
     for (const material of content.materials?.[kind] || []) {
       const value = typeof material?.path === 'string' ? material.path : '';
       if (!value || value.startsWith('<cloud://') || material.type === 'music') continue;
-      if (isFile(value) && inside(value, dir)) continue;
-      // 找不到，或者指着别的地方（草稿是拷过来的，老位置那份以后可能被删）：改成指向这份草稿自己的素材。
-      const found = relocate(value, dir);
+      if (value.startsWith(DRAFT_PATH_PLACEHOLDER)) continue; // 已经是剪映的占位符写法，挪到哪都对
+      // 以前的版本写的是绝对路径：在草稿里的直接改成占位符写法；找不到或指着别处（草稿是拷过来的）的，
+      // 按「素材/…」在这份草稿自己的文件夹里找回来。
+      const found = isFile(value) && inside(value, dir) ? path.resolve(value) : relocate(value, dir);
       if (!found) {
         if (!isFile(value)) result.missing.push(value);
         continue;
       }
-      material.path = nativePath(found, platform);
-      mapping.set(value, material.path);
+      material.path = placeholderPath(found, dir);
+      mapping.set(value, metaPath(found, dir));
       result.fixed += 1;
     }
   }
@@ -89,7 +102,10 @@ async function relinkDraft(draftDir, { platform = process.platform, windowsTimel
   const windowsFile = path.join(dir, 'draft_content.json');
   const needsWindowsFile = windowsTimeline && !isFile(windowsFile);
   if (!result.fixed && !needsWindowsFile) return { ...result, status: result.missing.length ? 'missing' : 'ok' };
-  if (result.fixed) await writeJson(contentFile, content);
+  if (result.fixed) {
+    content.config = { ...(content.config || {}), material_save_mode: 1 };
+    await writeJson(contentFile, content);
+  }
   if (needsWindowsFile || (result.fixed && (await readJson(windowsFile)))) {
     await writeJson(windowsFile, content);
     result.windowsFile = true;
@@ -103,14 +119,15 @@ async function relinkDraft(draftDir, { platform = process.platform, windowsTimel
       for (const item of Array.isArray(bucket?.value) ? bucket.value : []) {
         const value = typeof item?.file_Path === 'string' ? item.file_Path : '';
         if (mapping.has(value)) item.file_Path = mapping.get(value);
-        else if (value && !(isFile(value) && inside(value, dir))) {
-          const found = relocate(value, dir);
-          if (found) item.file_Path = nativePath(found, platform);
+        else if (value && !value.startsWith('./')) {
+          const found = isFile(value) && inside(value, dir) ? path.resolve(value) : relocate(value, dir);
+          if (found) item.file_Path = metaPath(found, dir);
         }
       }
     }
-    meta.draft_fold_path = nativePath(dir, platform);
-    meta.draft_root_path = nativePath(path.dirname(dir), platform);
+    meta.draft_name = path.basename(dir);
+    meta.draft_fold_path = dir.split(path.sep).join('/');
+    meta.draft_root_path = path.dirname(dir).split(path.sep).join('/');
     await writeJson(metaFile, meta);
   }
   return { ...result, status: result.missing.length ? 'missing' : 'fixed' };
@@ -133,4 +150,4 @@ async function relinkDraftsIn(root, options = {}) {
   return fixed;
 }
 
-module.exports = { nativePath, relocate, relinkDraft, relinkDraftsIn };
+module.exports = { DRAFT_PATH_PLACEHOLDER, nativePath, placeholderPath, relocate, relinkDraft, relinkDraftsIn };

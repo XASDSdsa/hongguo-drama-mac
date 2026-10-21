@@ -1245,9 +1245,10 @@ function getReconstructionPipeline() {
           checkScript: resolveJianyingScript('check-jianying-draft.py'),
           outputRoot: location.draftRoot || plan.fallbackRoot || path.join(ctx.projectDir, '剪映草稿'),
           name,
-          // 只有草稿位置就是 User Data 里那个时才登记；Windows 的 D:\JianyingPro Drafts 不登记，剪映自己会扫到。
+          // Windows 不往 User Data 登记：剪映打开时自己扫草稿文件夹（capcut-mate、CapCutAPI 也都是只放文件夹、不登记）；
+          // Mac 上草稿位置就是 User Data 里那个时才登记。
           userData: location.userData,
-          register: !!location.userData,
+          register: !!location.userData && process.platform !== 'win32',
           // 三分轨草稿结构简单，由脚本自己核对；多分轨照旧走完整校验。
           validate: simple ? false : workflowGates().validateDraft,
         });
