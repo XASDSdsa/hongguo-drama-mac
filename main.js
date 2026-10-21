@@ -5323,17 +5323,75 @@ function resplitSelectionIsPrefix(dir, files) {
   return ordered.slice(0, chosen.size).every((file) => chosen.has(file));
 }
 
-const episodeDurationCache = new Map();
+// 每集时长：按「路径 + 大小 + 修改时间」记下来，存在软件数据目录里，重启后不用再读一遍（文件改过会重新读）。
+let episodeDurationCache = null;
+let episodeDurationSaveTimer = null;
+function episodeDurations() {
+  if (episodeDurationCache) return episodeDurationCache;
+  episodeDurationCache = new Map();
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'episode-durations.json'), 'utf8'));
+    for (const [key, value] of Object.entries(saved || {})) if (Number(value) > 0) episodeDurationCache.set(key, Number(value));
+  } catch (_) {}
+  return episodeDurationCache;
+}
+function saveEpisodeDurationsSoon() {
+  clearTimeout(episodeDurationSaveTimer);
+  episodeDurationSaveTimer = setTimeout(() => {
+    try {
+      const entries = [...episodeDurations().entries()].slice(-20000); // 只留最近的，防止越攒越多
+      const file = path.join(app.getPath('userData'), 'episode-durations.json');
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(Object.fromEntries(entries)));
+      fs.renameSync(`${file}.tmp`, file);
+    } catch (_) {}
+  }, 1500);
+  episodeDurationSaveTimer.unref?.();
+}
 async function cachedEpisodeDuration(ffprobePath, file) {
   const stat = await fsp.stat(file).catch(() => null);
   if (!stat?.isFile()) return 0;
-  const key = `${file}|${stat.size}|${stat.mtimeMs}`;
-  if (episodeDurationCache.has(key)) return episodeDurationCache.get(key);
+  const key = `${file}|${stat.size}|${Math.round(stat.mtimeMs)}`;
+  const cache = episodeDurations();
+  if (cache.has(key)) return cache.get(key);
   const media = await quchong.probeMedia(ffprobePath, file).catch(() => null);
   const duration = media?.has_video ? (media.video_duration > 0 ? media.video_duration : media.duration) : 0;
-  if (duration > 0) episodeDurationCache.set(key, duration);
+  if (duration > 0) {
+    cache.delete(key);
+    cache.set(key, duration);
+    saveEpisodeDurationsSoon();
+  }
   return duration;
 }
+
+/** 管理剧集里每一集（原剧、去重后的成品）的时长，单位秒；读不出来的不返回。 */
+ipcMain.handle('library-durations', async (_event, payload = {}) => {
+  try {
+    const dir = path.resolve(String(payload.dir || ''));
+    if (!seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list()))
+      return { success: false, error: '这不是剧文件夹' };
+    const ffprobePath = resolveFfmpeg('ffprobe');
+    if (!ffprobePath) return { success: false, error: '未找到 ffprobe' };
+    const files = [...new Set((Array.isArray(payload.files) ? payload.files : []).map((file) => path.resolve(String(file))))]
+      .filter((file) => {
+        const relative = path.relative(dir, file);
+        return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+      })
+      .slice(0, 2000);
+    const durations = {};
+    let next = 0;
+    const worker = async () => {
+      while (next < files.length) {
+        const file = files[next++];
+        const seconds = await cachedEpisodeDuration(ffprobePath, file).catch(() => 0);
+        if (seconds > 0) durations[file] = Math.round(seconds * 10) / 10;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, files.length) }, worker));
+    return { success: true, durations };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
 
 /** 开始处理前的预览：按这些集的时长和当前参数，估一下会得到多少集。 */
 ipcMain.handle('library-estimate', async (_event, payload = {}) => {

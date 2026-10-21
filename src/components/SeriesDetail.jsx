@@ -56,6 +56,18 @@ const formatTime = (value) => {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
+/** 每集时长：1:05、12:30、1:02:03。 */
+const formatDuration = (seconds) => {
+  const total = Math.round(Number(seconds) || 0);
+  if (!total) return '';
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+};
+
+const durationId = (item) => `${item.path}|${item.size}`;
+
 /** 一个缺集的占位标签：失败时写出具体原因，暂停和下载中也说清楚。 */
 function ghostLabel(item) {
   const task = item.task;
@@ -193,6 +205,8 @@ export default function SeriesDetail({ folder, active = true }) {
   const [estimate, setEstimate] = useState({ loading: false, data: null, error: '' });
   const [page, setPage] = useState(1);
   const [outPage, setOutPage] = useState(1); // 「去重处理后」的页码
+  const [durations, setDurations] = useState({}); // 每集时长（秒），按文件路径
+  const [viewing, setViewing] = useState(null); // 点开看大图的海报 { url, title }
   const [pageSize, setPageSize] = useState(
     EPISODE_PAGE_SIZES.includes(view.episodePageSize) ? view.episodePageSize : 60,
   );
@@ -468,6 +482,8 @@ export default function SeriesDetail({ folder, active = true }) {
     },
     '.lib-params-dialog',
   );
+  // 海报大图：Esc 关闭。
+  useDialogKeyboard(active && !!viewing, () => setViewing(null), '.lib-viewer-box');
 
   // 强提示窗打开时，键盘焦点和 Esc 都归它。
   useDialogKeyboard(
@@ -489,6 +505,32 @@ export default function SeriesDetail({ folder, active = true }) {
         : activity?.draft?.status === 'running'
           ? `正在生成剪映草稿：${activity.draft.done}/${activity.draft.total} 集`
           : '';
+  // 每集时长：原剧和去重后的成品都显示。主进程按文件记了缓存，只有新文件才要读。
+  // 按「路径 + 大小」记：正在写的成品文件变大了会重新读。
+  const durationItems = [...(detail?.episodes || []), ...(detail?.outputs || [])];
+  const durationKey = durationItems.map(durationId).join('\n');
+  useEffect(() => {
+    if (!detail?.dir || !durationItems.length) return undefined;
+    const missing = durationItems.filter((item) => !(durationId(item) in durations));
+    if (!missing.length) return undefined;
+    let alive = true;
+    window.electronAPI
+      .libraryDurations?.({ dir: detail.dir, files: missing.map((item) => item.path) })
+      .then((result) => {
+        if (!alive || !result?.success) return;
+        setDurations((previous) => {
+          const next = { ...previous };
+          for (const item of missing) next[durationId(item)] = result.durations[item.path] || 0;
+          return next;
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.dir, durationKey]);
+
   // 正在去重时，做好的集陆续出现在「去重处理后」：每 5 秒刷新一次。
   const dedupRunning = activeBatches.length > 0;
   useEffect(() => {
@@ -600,19 +642,31 @@ export default function SeriesDetail({ folder, active = true }) {
         </div>
         <div className="lib-heads">
           <figure className="lib-head-pic">
-            <div className="lib-head-frame">
+            <button
+              type="button"
+              className="lib-head-frame"
+              disabled={!detail?.coverUrl}
+              onClick={() => setViewing({ url: detail.coverUrl, title: `《${title}》原封面` })}
+              title={detail?.coverUrl ? '点击查看大图' : undefined}
+            >
               {detail?.coverUrl ? <img src={detail.coverUrl} alt={`《${title}》原封面`} /> : <span>没有封面</span>}
-            </div>
+            </button>
             <figcaption>原封面</figcaption>
           </figure>
           <figure className="lib-head-pic">
-            <div className={`lib-head-frame ${publish?.posterUrl ? 'is-new' : ''}`}>
+            <button
+              type="button"
+              className={`lib-head-frame ${publish?.posterUrl ? 'is-new' : ''}`}
+              disabled={!publish?.posterUrl}
+              onClick={() => setViewing({ url: publish.posterUrl, title: `《${publish.title}》新海报` })}
+              title={publish?.posterUrl ? '点击查看大图' : undefined}
+            >
               {publish?.posterUrl ? (
                 <img src={publish.posterUrl} alt={`《${publish.title}》新海报`} />
               ) : (
                 <span>还没生成</span>
               )}
-            </div>
+            </button>
             <figcaption>{publish?.posterUrl ? `新海报 · ${publish.title}` : 'AI 新海报'}</figcaption>
           </figure>
         </div>
@@ -718,11 +772,14 @@ export default function SeriesDetail({ folder, active = true }) {
                       className={`lib-ep ${on ? 'is-selected' : ''}`}
                       aria-pressed={on}
                       onClick={() => clickEpisode(episode, episodes.indexOf(episode))}
-                      title={`${episode.name}（${formatSize(episode.size)}）`}
+                      title={`${episode.name}（${formatSize(episode.size)}${durations[durationId(episode)] > 0 ? ` · ${formatDuration(durations[durationId(episode)])}` : ''}）`}
                     >
                       <span className="lib-ep-no">
                         {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
                       </span>
+                      {durations[durationId(episode)] > 0 && (
+                        <span className="lib-ep-dur">{formatDuration(durations[durationId(episode)])}</span>
+                      )}
                     </button>
                     {on && (
                       <span className="lib-ep-check">
@@ -804,11 +861,14 @@ export default function SeriesDetail({ folder, active = true }) {
                       className={`lib-ep ${on ? 'is-selected' : ''}`}
                       aria-pressed={on}
                       onClick={() => draftOn && toggleDraftEpisode(output.index)}
-                      title={`${output.name}（${formatSize(output.size)}）${draftOn ? (on ? '，点一下不做剪映草稿' : '，点一下做剪映草稿') : ''}`}
+                      title={`${output.name}（${formatSize(output.size)}${durations[durationId(output)] > 0 ? ` · ${formatDuration(durations[durationId(output)])}` : ''}）${draftOn ? (on ? '，点一下不做剪映草稿' : '，点一下做剪映草稿') : ''}`}
                     >
                       <span className="lib-ep-no">
                         {output.index != null ? `第${output.index}集` : output.name.replace(/\.[^.]+$/, '')}
                       </span>
+                      {durations[durationId(output)] > 0 && (
+                        <span className="lib-ep-dur">{formatDuration(durations[durationId(output)])}</span>
+                      )}
                     </button>
                     {on && (
                       <span className="lib-ep-check">
@@ -1009,6 +1069,9 @@ export default function SeriesDetail({ folder, active = true }) {
             <div className="lib-params-dialog-head">
               <h3>去重参数</h3>
               <span>{estimateText || `每集 ${split.min_len}–${split.max_len} 秒`}</span>
+              <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={() => setShowParams(false)}>
+                ×
+              </button>
             </div>
             <DedupParams
               opts={opts}
@@ -1045,6 +1108,9 @@ export default function SeriesDetail({ folder, active = true }) {
             <div className="lib-params-dialog-head">
               <h3>上次处理参数</h3>
               <span>{formatTime(detail.lastDedup.at)} 开始的那次去重（只读）</span>
+              <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={() => setShowSaved(false)}>
+                ×
+              </button>
             </div>
             <DedupParams
               opts={{ ...(opts || {}), ...(detail.lastDedup.opts || {}) }}
@@ -1071,6 +1137,26 @@ export default function SeriesDetail({ folder, active = true }) {
                 关闭
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {viewing && (
+        <div className="lib-mask lib-mask-top lib-viewer" onClick={() => setViewing(null)}>
+          <div
+            className="lib-viewer-box"
+            role="dialog"
+            aria-modal="true"
+            aria-label={viewing.title}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="lib-viewer-head">
+              <b>{viewing.title}</b>
+              <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={() => setViewing(null)}>
+                ×
+              </button>
+            </div>
+            <img src={viewing.url} alt={viewing.title} />
           </div>
         </div>
       )}
