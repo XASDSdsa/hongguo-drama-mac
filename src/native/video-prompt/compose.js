@@ -351,12 +351,17 @@ function applyVerification(shots, raw, segment) {
 
 // ===== Seedance 生成设置 =====
 
-/** 生成用的分辨率和比例：统一 720p；比例看原片，竖屏 9:16、横屏 16:9（读不到画幅按竖屏）。 */
+/**
+ * 生成用的分辨率和比例，跟成品走：成品 1080p（短边 ≥ 1080）就按 1080p 生成（Seedance 2.5 支持原生 1080p），
+ * 低于 1080p 的按 720p（不低于平台要求）。比例看原片，竖屏 9:16、横屏 16:9（读不到画幅按竖屏 720p）。
+ */
 function seedanceFormat(size) {
   const width = Number(size?.width);
   const height = Number(size?.height);
-  const landscape = width > 0 && height > 0 && width > height;
-  return { resolution: '720p', ratio: landscape ? '16:9' : '9:16' };
+  const known = width > 0 && height > 0;
+  const landscape = known && width > height;
+  const resolution = known && Math.min(width, height) >= 1080 ? '1080p' : '720p';
+  return { resolution, ratio: landscape ? '16:9' : '9:16' };
 }
 
 // ===== 输出文件（每一集同一个格式） =====

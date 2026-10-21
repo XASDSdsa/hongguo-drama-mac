@@ -373,7 +373,7 @@ function shotCard({
   const shotImages = (segment.images || []).filter((image) => (shot?.assets || []).includes(image.id)).length;
   const params = [
     ['目标模型', 'Seedance 2.5'],
-    // 生成设置：统一 720p，比例按原片（竖屏 9:16、横屏 16:9），不显示原片像素。
+    // 生成设置：分辨率跟成品走（1080p 成品按 1080p，其余 720p），比例按原片（竖屏 9:16、横屏 16:9），不显示原片像素。
     ['分辨率', seedanceFormat(size).resolution],
     ['时长', seconds(row.dur)],
     ['比例', seedanceFormat(size).ratio],

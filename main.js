@@ -55,6 +55,7 @@ const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
 const jianyingLocator = require('./src/native/jianying-location');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
+const { seedanceFormat } = require('./src/native/video-prompt/compose');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
@@ -5214,6 +5215,33 @@ function storyboardTarget(dir, number) {
   return { file, label, html: path.join(dir, '视频提示词', `${label}.html`) };
 }
 
+/**
+ * 以前生成的分镜工程图把「生成分辨率」统一写成 720p；现在跟成品走（1080p 成品写 1080p）。
+ * 打开时按成品实际尺寸改过来（只改分辨率那几处文字，不重新问方舟）。
+ */
+async function refreshStoryboardResolution(target) {
+  try {
+    const media = await quchong.probeMedia(resolveFfmpeg('ffprobe'), target.file).catch(() => null);
+    if (!media?.video_width || !media?.video_height) return;
+    const want = seedanceFormat({ width: media.video_width, height: media.video_height }).resolution;
+    const html = await fsp.readFile(target.html, 'utf8').catch(() => null);
+    if (html != null) {
+      const fixed = html
+        .replace(/(<span>分辨率<\/span><b>)(?:720p|1080p)(<\/b>)/g, `$1${want}$2`)
+        .replace(/(<span class="pill">)(?:720p|1080p)( · )/g, `$1${want}$2`);
+      if (fixed !== html) await fsp.writeFile(target.html, fixed);
+    }
+    const txtFile = target.html.replace(/\.html$/, '.txt');
+    const txt = await fsp.readFile(txtFile, 'utf8').catch(() => null);
+    if (txt != null) {
+      const fixed = txt.replace(/(生成设置：分辨率 )(?:720p|1080p)/g, `$1${want}`);
+      if (fixed !== txt) await fsp.writeFile(txtFile, fixed);
+    }
+  } catch (_) {
+    // 改不了就按原样显示。
+  }
+}
+
 function storyboardDir(payload) {
   const dir = path.resolve(String(payload?.dir || ''));
   return seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list()) ? dir : '';
@@ -5247,6 +5275,7 @@ ipcMain.handle('library-storyboard-html', async (_event, payload = {}) => {
     if (!dir) return { success: false, error: '这不是剧文件夹' };
     const target = storyboardTarget(dir, Number(payload.number));
     if (!target) return { success: false, error: '成品里没有这一集' };
+    await refreshStoryboardResolution(target);
     const html = await fsp.readFile(target.html, 'utf8').catch(() => null);
     if (html == null) return { success: false, error: '这一集的分镜工程图还没有生成' };
     return {
@@ -5265,6 +5294,7 @@ ipcMain.handle('library-storyboard-open', async (_event, payload = {}) => {
     if (!dir) return { success: false, error: '这不是剧文件夹' };
     const target = storyboardTarget(dir, Number(payload.number));
     if (!target || !fs.existsSync(target.html)) return { success: false, error: '这一集的分镜工程图还没有生成' };
+    await refreshStoryboardResolution(target);
     const error = await shell.openPath(target.html);
     return error ? { success: false, error } : { success: true };
   } catch (error) {

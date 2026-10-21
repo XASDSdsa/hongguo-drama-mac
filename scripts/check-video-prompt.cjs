@@ -200,14 +200,16 @@ async function main() {
   assert.ok(page.includes('四宫格参考') && page.includes('起幅') && page.includes('动作A') && page.includes('动作B') && page.includes('落幅'));
   assert.equal((page.match(/data:image\/jpeg;base64,/g) || []).length >= 5 * 5, true, '每个分镜 1 张海报 + 4 张关键帧');
   assert.ok(page.includes('data-src="../%E7%AC%AC3%E9%9B%86.mp4"'), '视频预览指向同一剧文件夹里的成品视频');
-  // 生成参数统一 720p，比例按原片：测试视频 320×240 是横的 → 16:9；不再显示原片像素。
+  // 生成参数跟成品走：低于 1080p 的按 720p，比例按原片：测试视频 320×240 是横的 → 16:9；不再显示原片像素。
   assert.ok(page.includes('<span>分辨率</span><b>720p</b>') && page.includes('<span>比例</span><b>16:9</b>'), '720p、按原片比例');
   assert.ok(!page.includes('320×240') && !page.includes('原片画幅'), '不显示原片像素');
   assert.ok(page.includes('<span class="pill">720p · 16:9</span>'));
   assert.match(await fsp.readFile(first.file, 'utf8'), /生成设置：分辨率 720p，比例 16:9（按原片横屏）/);
   const cv = require('../src/native/video-prompt/compose');
   assert.deepEqual(cv.seedanceFormat({ width: 360, height: 640 }), { resolution: '720p', ratio: '9:16' });
-  assert.deepEqual(cv.seedanceFormat({ width: 1920, height: 1080 }), { resolution: '720p', ratio: '16:9' });
+  assert.deepEqual(cv.seedanceFormat({ width: 1920, height: 1080 }), { resolution: '1080p', ratio: '16:9' });
+  assert.deepEqual(cv.seedanceFormat({ width: 1080, height: 1920 }), { resolution: '1080p', ratio: '9:16' }, '1080p 成品按 1080p 生成');
+  assert.deepEqual(cv.seedanceFormat({ width: 720, height: 1280 }), { resolution: '720p', ratio: '9:16' });
   assert.deepEqual(cv.seedanceFormat(null), { resolution: '720p', ratio: '9:16' }, '读不到画幅按竖屏');
   assert.ok(page.includes('你还是来了。') && page.includes('林夏') && page.includes('老街路口'));
   assert.ok(page.includes('写实电影质感，冷蓝夜色'));
