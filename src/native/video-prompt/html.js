@@ -298,8 +298,8 @@ function assetBlock(item, thumbs) {
 
 // ===== 画面校验和生成记录（抽卡）=====
 // 每个分镜按「集名 + 镜号 + 起点」做种子随机：同一镜每次打开、重新出页面都一样，不同镜各不相同。
-const PICTURE_CHECKS = ['人物一致', '无字幕水印', '手部正常', '光影连贯', '清晰度达标', '无多指畸变'];
-const REPAIRS = ['手部/光影修正', '人物一致性修正', '手部修正', '光影修正', '清晰度修正', '字幕水印清除', '多指畸变修正', '构图修正', '服装细节修正', '表情修正'];
+const PICTURE_CHECKS = ['人物一致', '手部正常', '光影连贯', '清晰度达标', '无多指畸变'];
+const REPAIRS = ['手部/光影修正', '人物一致性修正', '手部修正', '光影修正', '清晰度修正', '多指畸变修正', '构图修正', '服装细节修正', '表情修正'];
 
 function seededRandom(seedText) {
   let hash = 2166136261;
@@ -367,7 +367,7 @@ function historyHtml(steps) {
   return `<div class="hist">${rows.join('')}</div>`;
 }
 
-/** 画面校验：六项都通过。 */
+/** 画面校验：五项都通过。 */
 function checksHtml() {
   return `<div class="blk"><div class="head2"><h3>画面校验</h3><span class="pass">全部通过</span></div><div class="checks">${PICTURE_CHECKS.map(
     (name) => `<span>✓ ${name}</span>`,
