@@ -518,7 +518,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          f=$(ls dist/*-Setup.exe | head -n 1)
+          f=$(ls dist/*-Setup-*.exe | head -n 1)  # electron-builder 出的是「AI短剧助手-Setup-版本号.exe」
           size=$(stat -c %s "$f")
           echo "::notice title=安装包大小::$(basename "$f") ${size} 字节（$((size / 1048576)) MiB，上限 2048 MiB）"
           if [ "$size" -ge 2147483648 ]; then
