@@ -112,6 +112,7 @@ cuBLAS、cuDNN 9 及 CUDA runtime 的可再分发动态库和 Microsoft Visual C
 - 中文标点恢复采用 sherpa-onnx 官方发布的 CT-Transformer 2024-04-12 int8 转换模型；上游 [ModelScope iic 模型卡](https://modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch/) 标注 Apache-2.0。安装包仅在本机运行该模型，构建脚本校验模型 SHA256；标点只是句界候选，不能保证语义准确。
 - PyTorch 2.5.1、NumPy 1.26.4 许可证随内置运行时收集；用户端不会执行 pip 或在线安装模型。
 - 分镜工程图关键帧整张找字采用 PaddleOCR 的 PP-OCRv3 文字检测模型（Apache-2.0），模型文件取自 [OpenCV 模型库 opencv_zoo](https://github.com/opencv/opencv_zoo/tree/main/models/text_detection_ppocr)（text_detection_cn_ppocrv3_2023may.onnx，构建脚本校验 SHA256），用内置运行时里的 OpenCV DNN 在本机运行。
+- 找到的字先用 PaddleOCR 的 PP-OCRv3 中文文字识别模型（Apache-2.0）认一遍，认得出字的才补，衣服条纹、发卡之类不动。模型文件和字表取自 [RapidOCR](https://github.com/RapidAI/RapidOCR) 的 rapidocr_onnxruntime 1.2.3 发布包（Apache-2.0，ch_PP-OCRv3_rec_infer.onnx，构建脚本校验发布包和模型的 SHA256），构建时用 onnxsim 把输入固定成 48×320（ppocrv3_rec_48x320.onnx，字表取自模型自带的 character 元数据，存为 ppocrv3_rec_keys.txt），用内置运行时里的 OpenCV DNN 在本机运行。
 - 分镜工程图关键帧去字幕采用 LaMa（big-lama，Roman Suvorov 等，[advimman/lama](https://github.com/advimman/lama)，Apache-2.0）。模型文件取自 IOPaint 项目发布的 TorchScript 导出版（[Sanster/models add_big_lama](https://github.com/Sanster/models/releases/tag/add_big_lama)），构建脚本校验 SHA256 后把权重存成 float16 以减小安装包（运行时转回 float32），许可证随源码存放于 src/native/video-structure/vendor/LAMA-LICENSE.txt，并随运行时放在 licenses/LaMa-Apache-2.0.txt。只在本机运行，不联网。
 
 ## 海报标题字体

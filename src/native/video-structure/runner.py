@@ -229,8 +229,9 @@ def inpaint_server(args):
     finder = None
     if args.detector:
         from textclean import TextFinder
-        finder = TextFinder(args.detector)
-    print(json.dumps(dict(type='ready', torch=torch.__version__, threads=torch.get_num_threads(), detector=bool(finder))), flush=True)
+        finder = TextFinder(args.detector, args.recognizer, args.keys)
+    print(json.dumps(dict(type='ready', torch=torch.__version__, threads=torch.get_num_threads(), detector=bool(finder),
+                          recognizer=bool(finder and finder.reader))), flush=True)
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -291,6 +292,8 @@ def main():
     parser.add_argument('--min-silence', type=float, default=0.5)
     parser.add_argument('--min-speech', type=float, default=0.25)
     parser.add_argument('--detector')
+    parser.add_argument('--recognizer')
+    parser.add_argument('--keys')
     args = parser.parse_args()
     if args.module == 'inpaint':
         inpaint_server(args)

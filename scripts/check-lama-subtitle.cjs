@@ -11,7 +11,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { createLamaWorker, asciiJson, MODEL_FILE, DETECTOR_FILE } = require('../src/native/video-prompt/lama');
+const { createLamaWorker, asciiJson, MODEL_FILE, DETECTOR_FILE, RECOGNIZER_FILE, KEYS_FILE } = require('../src/native/video-prompt/lama');
 const sc = require('../src/native/video-prompt/subtitle-clean');
 const structureRuntime = require('../src/native/video-structure/runtime');
 
@@ -24,7 +24,7 @@ fs.appendFileSync(counter, 'start\n');
 const args = process.argv.slice(2);
 if (args[0] !== 'inpaint' || !args.includes('--model') || !args.includes('--threads')) process.exit(3);
 const detector = args.includes('--detector') ? args[args.indexOf('--detector') + 1] : '';
-setTimeout(() => console.log(JSON.stringify({ type: 'ready', threads: Number(args[args.indexOf('--threads') + 1]), detector: !!detector })), mode === 'slow' ? 400 : 20);
+setTimeout(() => console.log(JSON.stringify({ type: 'ready', threads: Number(args[args.indexOf('--threads') + 1]), detector: !!detector, recognizer: args.includes('--recognizer') && args.includes('--keys') })), mode === 'slow' ? 400 : 20);
 let n = 0;
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   n += 1;
@@ -149,9 +149,11 @@ async function partA(dir) {
   {
     const detector = path.join(dir, 'text_detection_cn_ppocrv3_2023may.onnx');
     fs.writeFileSync(detector, 'not a real model');
-    const worker = make('ok', { detector });
+    const worker = make('ok', { detector, recognizer: path.join(dir, 'missing-rec.onnx'), keys: path.join(dir, 'missing-keys.txt') });
     assert.equal(worker.canClean, true);
-    assert.equal((await worker.start()).detector, true, '传了 --detector');
+    const ready = await worker.start();
+    assert.equal(ready.detector, true, '传了 --detector');
+    assert.equal(ready.recognizer, false, '认字模型文件不在：不传 --recognizer');
     const frame = Buffer.alloc(4 * 2 * 3, 10);
     const result = await worker.clean({ data: frame, width: 4, height: 2 });
     assert.equal(result.data[0], 77);
@@ -160,6 +162,13 @@ async function partA(dir) {
     assert.equal(result.residue, false);
     assert.equal(result.seconds, 0.5);
     worker.close();
+    const recognizer = path.join(dir, RECOGNIZER_FILE);
+    const keys = path.join(dir, KEYS_FILE);
+    fs.writeFileSync(recognizer, 'not a real model');
+    fs.writeFileSync(keys, 'a\nb\n');
+    const reading = make('ok', { detector, recognizer, keys });
+    assert.equal((await reading.start()).recognizer, true, '认字模型和字表都在：传 --recognizer --keys');
+    reading.close();
     const without = make('ok');
     assert.equal(without.canClean, false, '没有文字检测模型：不能整张找字');
     await assert.rejects(without.clean({ data: frame, width: 4, height: 2 }), /text detector not loaded/);
@@ -175,11 +184,19 @@ async function partA(dir) {
 /** 真的 LaMa：打包机上用内置运行时；本机开发可以给 LAMA_PYTHON（装了 torch 的 python）和 LAMA_MODEL。 */
 function realLama() {
   if (process.env.LAMA_PYTHON && process.env.LAMA_MODEL)
-    return { command: process.env.LAMA_PYTHON, prefix: [path.join(__dirname, '../src/native/video-structure/runner.py')], model: process.env.LAMA_MODEL, detector: process.env.LAMA_DETECTOR || null };
+    return {
+      command: process.env.LAMA_PYTHON,
+      prefix: [path.join(__dirname, '../src/native/video-structure/runner.py')],
+      model: process.env.LAMA_MODEL,
+      detector: process.env.LAMA_DETECTOR || null,
+      recognizer: process.env.LAMA_RECOGNIZER || null,
+      keys: process.env.LAMA_KEYS || null,
+    };
   const rt = structureRuntime.runtime({});
   const model = path.join(rt.models, MODEL_FILE);
-  const detector = path.join(rt.models, DETECTOR_FILE);
-  if (rt.command && fs.existsSync(model)) return { command: rt.command, prefix: rt.prefix, model, detector: fs.existsSync(detector) ? detector : null };
+  const found = (file) => (fs.existsSync(path.join(rt.models, file)) ? path.join(rt.models, file) : null);
+  if (rt.command && fs.existsSync(model))
+    return { command: rt.command, prefix: rt.prefix, model, detector: found(DETECTOR_FILE), recognizer: found(RECOGNIZER_FILE), keys: found(KEYS_FILE) };
   return null;
 }
 
@@ -235,6 +252,9 @@ async function partB(dir) {
     const worker = createLamaWorker({ ...real, threads: Math.max(2, Math.min(8, os.cpus().length - 1)) });
     try {
       assert.equal(worker.canClean, true);
+      const ready = await worker.start();
+      // 打包机上认字模型必须在：没有它衣服条纹、发卡会被当成字补掉
+      if (process.env.REQUIRE_LAMA === '1') assert.equal(ready.recognizer, true, '内置运行时带了认字模型');
       const result = await worker.clean({ data: Buffer.from(raw), width: W, height: H });
       const at = (buf, x, y) => [...buf.subarray((y * W + x) * 3, (y * W + x) * 3 + 3)];
       const changed = (x0, y0, x1, y1) => {
@@ -266,8 +286,12 @@ async function partB(dir) {
       assert.ok(in7(300, 235), '红色标题字找到了');
       const same7 = (x, y) => [0, 1, 2].every((c) => raw7[(y * W7 + x) * 3 + c] === r7.data[(y * W7 + x) * 3 + c]);
       assert.ok(same7(292, 582) && same7(570, 360), '眼睛高光、反光细线一个像素都不动');
+      // 一片衣服条纹（白底上几道深色横条）不是字
+      let stripe = 0;
+      for (let y = 760; y < 830; y++) for (let x = 470; x < 620; x++) if (!same7(x, y)) stripe += 1;
+      assert.equal(stripe, 0, `衣服条纹不动（动了 ${stripe} 个像素）`);
       assert.equal(r7.residue, false);
-      console.log(`PASS real text scan at 720p: yellow subtitle, black-on-white banner and red title removed (${r7.seconds.toFixed(1)} s); highlights left alone`);
+      console.log(`PASS real text scan at 720p: yellow subtitle, black-on-white banner and red title removed (${r7.seconds.toFixed(1)} s); highlights and stripes left alone${ready.recognizer ? ' (recognizer on)' : ''}`);
     } finally {
       worker.close();
     }

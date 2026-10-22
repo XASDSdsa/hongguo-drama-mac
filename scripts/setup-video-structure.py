@@ -65,6 +65,53 @@ def half_lama(source, target):
     torch.jit.save(model, str(temp))
     os.replace(temp, target)
 
+REC_FILE = 'ppocrv3_rec_48x320.onnx'
+REC_KEYS = 'ppocrv3_rec_keys.txt'
+REC_CONVERT = '''
+import sys
+import onnx
+from onnxsim import simplify
+source, target, keys = sys.argv[1:4]
+model = onnx.load(source)
+chars = next(p.value for p in model.metadata_props if p.key == 'character')
+if len(chars.split('\\n')) != 6623:
+    raise SystemExit('unexpected character list')
+with open(keys, 'w', encoding='utf-8', newline='') as handle:
+    handle.write(chars)
+fixed, ok = simplify(model, overwrite_input_shapes={'x': [1, 3, 48, 320]})
+if not ok:
+    raise SystemExit('simplify failed')
+onnx.save(fixed, target)
+'''
+
+def rec_converter_python():
+    """Build-machine tool venv for pinning the recognizer's input shape (onnx / onnxsim are not bundled)."""
+    venv = CACHE / 'rec-convert-venv'
+    python = venv / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+    if not python.exists():
+        subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
+    subprocess.run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', 'onnx==1.23.2', 'onnxsim==0.8.1'], check=True)
+    return python
+
+def prepare_recognizer(models):
+    """PP-OCRv3 text recognizer (PaddleOCR, Apache-2.0) as shipped in RapidOCR's PyPI package; its input is pinned to
+    1x3x48x320 so OpenCV DNN can run it, and its character list is written next to it."""
+    import zipfile
+    if (models / REC_FILE).exists() and (models / REC_KEYS).exists():
+        return
+    wheel = CACHE / 'rapidocr_onnxruntime-1.2.3-py3-none-any.whl'
+    if not wheel.exists():
+        subprocess.run([sys.executable, '-m', 'pip', 'download', '--disable-pip-version-check', '--no-deps', '--only-binary=:all:', 'rapidocr_onnxruntime==1.2.3', '-d', str(CACHE)], check=True)
+    if hashlib.file_digest(wheel.open('rb'), 'sha256').hexdigest() != 'c707d3a6eb72d13119afe9602d3cc36d8b2a4a4d74e9575cf1b0e67ed6a27819':
+        raise RuntimeError('Pinned package checksum mismatch: rapidocr_onnxruntime 1.2.3')
+    source = CACHE / 'ch_PP-OCRv3_rec_infer.onnx'
+    source.write_bytes(zipfile.ZipFile(wheel).read('rapidocr_onnxruntime/models/ch_PP-OCRv3_rec_infer.onnx'))
+    if hashlib.file_digest(source.open('rb'), 'sha256').hexdigest() != '897a3ededb38fee0dae2c1ccee38241f37df202c9509e3abca02e9217c5ee615':
+        raise RuntimeError('Pinned model checksum mismatch: ch_PP-OCRv3_rec_infer.onnx')
+    script = CACHE / 'convert_rec.py'
+    script.write_text(REC_CONVERT, encoding='utf-8')
+    subprocess.run([str(rec_converter_python()), str(script), str(source), str(models / REC_FILE), str(models / REC_KEYS)], check=True)
+
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
     models = DEST / 'models'
@@ -84,6 +131,7 @@ def main():
     # PP-OCRv3 text detector (PaddleOCR, Apache-2.0) as published in the OpenCV model zoo for cv2.dnn: storyboard
     # keyframes are scanned for text anywhere in the frame (subtitles wherever they sit, name cards, vertical captions).
     fetch('https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/text_detection_ppocr/text_detection_cn_ppocrv3_2023may.onnx', models / 'text_detection_cn_ppocrv3_2023may.onnx')
+    prepare_recognizer(models)
     model_name = 'sherpa-onnx-paraformer-zh-small-2024-03-09'
     if not (models / model_name / 'model.int8.onnx').exists():
         archive(f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{model_name}.tar.bz2', models)

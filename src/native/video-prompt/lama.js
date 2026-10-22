@@ -14,6 +14,10 @@ const readline = require('node:readline');
 const MODEL_FILE = 'big-lama-fp16.pt';
 // 找字：PP-OCRv3 文字检测（OpenCV 官方模型库里的版本），整张画面哪里有字都找
 const DETECTOR_FILE = 'text_detection_cn_ppocrv3_2023may.onnx';
+// 认字：PP-OCRv3 文字识别（构建时把输入固定成 48×320，OpenCV 才能跑）和它的字表。认得出字的框才补，
+// 条纹、发卡、眼睛这类认不出字的不动
+const RECOGNIZER_FILE = 'ppocrv3_rec_48x320.onnx';
+const KEYS_FILE = 'ppocrv3_rec_keys.txt';
 
 // 任务行只用 ASCII（中文路径写成 \uXXXX）：Windows 上不管控制台是什么编码都不会读错
 const asciiJson = (value) =>
@@ -30,6 +34,8 @@ function createLamaWorker({
   prefix = [],
   model,
   detector = null,
+  recognizer = null,
+  keys = null,
   threads = 4,
   idleMs = 60_000,
   startTimeoutMs = 180_000,
@@ -74,6 +80,7 @@ function createLamaWorker({
     if (!model || !fs.existsSync(model)) return Promise.reject(new Error('LaMa 补图模型没装上（需要完整安装包）'));
     tail = '';
     const extra = detector && fs.existsSync(detector) ? ['--detector', detector] : [];
+    if (extra.length && recognizer && keys && fs.existsSync(recognizer) && fs.existsSync(keys)) extra.push('--recognizer', recognizer, '--keys', keys);
     const proc = spawn(command, [...prefix, 'inpaint', '--model', model, '--threads', String(threads), ...extra], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -223,4 +230,4 @@ function createLamaWorker({
   };
 }
 
-module.exports = { MODEL_FILE, DETECTOR_FILE, createLamaWorker, asciiJson };
+module.exports = { MODEL_FILE, DETECTOR_FILE, RECOGNIZER_FILE, KEYS_FILE, createLamaWorker, asciiJson };

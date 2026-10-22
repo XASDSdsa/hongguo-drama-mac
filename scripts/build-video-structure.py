@@ -41,7 +41,7 @@ def lama_self_test(executable, env, model, cache):
     print('Frozen LaMa self-test: mean error', round(error, 1), flush=True)
 
 
-def text_self_test(executable, env, model, detector, cache):
+def text_self_test(executable, env, model, detector, cache, recognizer=None, keys=None):
     """The frozen worker must find text drawn anywhere on a picture (a line at the bottom and a vertical caption on the
     left) and repaint it so that looking again finds nothing."""
     import cv2
@@ -55,13 +55,16 @@ def text_self_test(executable, env, model, detector, cache):
     crop, output = cache / 'frozen-text.rgb', cache / 'frozen-text-out.rgb'
     crop.write_bytes(np.ascontiguousarray(image).tobytes()); output.unlink(missing_ok=True)
     job = json.dumps(dict(id=1, op='clean', input=str(crop), output=str(output), width=width, height=height))
-    run = subprocess.run([str(executable), 'inpaint', '--model', str(model), '--detector', str(detector), '--threads', '2'], input=job + '\n', env=env, capture_output=True, text=True, encoding='utf-8', timeout=900)
+    reading = ['--recognizer', str(recognizer), '--keys', str(keys)] if recognizer else []
+    run = subprocess.run([str(executable), 'inpaint', '--model', str(model), '--detector', str(detector), *reading, '--threads', '2'], input=job + '\n', env=env, capture_output=True, text=True, encoding='utf-8', timeout=900)
     replies = [json.loads(line) for line in run.stdout.splitlines() if line.strip().startswith('{')]
-    if run.returncode != 0 or [r.get('type') for r in replies] != ['ready', 'done'] or not replies[0].get('detector'):
+    if run.returncode != 0 or [r.get('type') for r in replies] != ['ready', 'done'] or not replies[0].get('detector') or (recognizer and not replies[0].get('recognizer')):
         raise RuntimeError('Frozen text self-test failed: ' + run.stdout[-800:] + run.stderr[-1500:])
     done = replies[1]
     if len(done.get('boxes') or []) < 2 or done.get('residue'):
         raise RuntimeError(f'Frozen text self-test did not find / remove the text: {done}')
+    if recognizer and not any('HELLO' in str(box[-1]).upper() for box in done['boxes']):
+        raise RuntimeError(f'Frozen text self-test: the recognizer did not read the line: {done}')
     if len(output.read_bytes()) != width * height * 3:
         raise RuntimeError('Frozen text self-test returned a wrong size')
     print('Frozen text self-test:', len(done['boxes']), 'text boxes removed in', done.get('seconds'), 's', flush=True)
@@ -104,7 +107,7 @@ def main():
     invalid=subprocess.run([str(executable),'verify-shots','--input',str(review_frames),'--timeline',str(timeline),'--predictions',str(test),'--threshold','0.6','--output',str(invalid_output)],env=env,capture_output=True,text=True)
     if invalid.returncode==0 or invalid_output.exists() or 'Invalid verification timeline or prediction scores' not in invalid.stderr:raise RuntimeError('Frozen shot verifier accepted an unapproved threshold')
     lama_self_test(executable,env,models/'big-lama-fp16.pt',cache)
-    text_self_test(executable,env,models/'big-lama-fp16.pt',models/'text_detection_cn_ppocrv3_2023may.onnx',cache)
+    text_self_test(executable,env,models/'big-lama-fp16.pt',models/'text_detection_cn_ppocrv3_2023may.onnx',cache,models/'ppocrv3_rec_48x320.onnx',models/'ppocrv3_rec_keys.txt')
     license_dir=out/'licenses';license_dir.mkdir(exist_ok=True)
     for name in ['torch','sherpa-onnx','numpy','opencv-python-headless','sympy','networkx','filelock','fsspec','jinja2','markupsafe','mpmath']:
         dist=importlib.metadata.distribution(name)

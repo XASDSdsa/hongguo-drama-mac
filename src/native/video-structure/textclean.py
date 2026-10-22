@@ -1,20 +1,91 @@
-"""Storyboard keyframes: find every piece of overlay text anywhere in the frame (subtitles wherever they sit, name cards,
-vertical captions, titles) with the PP-OCRv3 DB text detector through OpenCV, keep only boxes that look like real
-overlay text (thin gray-white / yellow strokes, several of them; ears, eyes and highlights are refused), repaint them
-with LaMa (only crops around the text), then look again; text still found where it was gets a second pass."""
+"""Storyboard keyframes: find every piece of text anywhere in the frame (subtitles wherever they sit, name cards,
+vertical captions, titles) with the PP-OCRv3 DB text detector through OpenCV, keep only boxes the PP-OCRv3 recognizer
+can actually read as characters (the way PaddleOCR drops low-score boxes; striped patches, hair clips, eyes and
+highlights read as nothing), repaint them with LaMa (only crops around the text), then look again; text still read
+where it was painted gets a second pass. Without the recognizer, a stroke check decides instead."""
 import time
 import numpy as np
 
 DET_MEAN = (122.67891434, 116.66876762, 104.00698793)
 # Defaults; the app sends its own values with every job (so they can be tuned without rebuilding this runtime).
 DEFAULTS = dict(binary=0.3, polygon=0.5, unclip=2.0, min_share=0.004, min_strokes=3, many_strokes=5, contrast=40,
-                min_luma=90, light_background=140, context=96, lama_width=640, grow=3, passes=2)
+                min_luma=90, light_background=140, context=96, lama_width=640, grow=3, passes=2,
+                rec_min=0.55, rec_single=0.5, rec_stripy=0.85)
+# What stripes, bars, edges and round highlights read as: such a reading only counts when the recognizer is very sure.
+STRIPY = set('1lIi|!丨一二三川-_—=.:·,，。、\'"`~0oO○〇°')
+
+
+class TextReader:
+    """PP-OCRv3 recognizer (input pinned to 1x3x48x320 at build time so OpenCV DNN can run it) with its character list."""
+
+    def __init__(self, path, keys):
+        import cv2
+        self.cv2 = cv2
+        self.net = cv2.dnn.readNetFromONNX(path)
+        with open(keys, encoding='utf-8') as handle:
+            self.chars = [''] + handle.read().split('\n') + [' ']  # CTC blank first, space last (as PaddleOCR)
+
+    def rectify(self, rgb, box):
+        cv2 = self.cv2
+        pts = np.array(box, np.float32)
+        s = pts.sum(1)
+        d = np.diff(pts, axis=1).ravel()
+        tl, br, tr, bl = pts[np.argmin(s)], pts[np.argmax(s)], pts[np.argmin(d)], pts[np.argmax(d)]
+        w = max(4, int(round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))))
+        h = max(4, int(round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))))
+        m = cv2.getPerspectiveTransform(np.array([tl, tr, br, bl], np.float32), np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32))
+        return cv2.warpPerspective(rgb, m, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+    def horizontal(self, crop):
+        """Vertical text (name cards): cut into roughly square characters and lay them out left to right."""
+        h, w = crop.shape[:2]
+        if h < 1.5 * w:
+            return crop
+        n = max(1, int(round(h / w)))
+        step = h / n
+        return np.concatenate([self.cv2.resize(crop[int(i * step):int((i + 1) * step)], (w, w), interpolation=self.cv2.INTER_AREA) for i in range(n)], 1)
+
+    def read_line(self, line):
+        cv2 = self.cv2
+        h, w = line.shape[:2]
+        pieces = max(1, int(np.ceil(48 * w / h / 320)))  # the model reads at most 320 px wide at a time
+        texts, confs = [], []
+        for k in range(pieces):
+            part = line[:, int(k * w / pieces):int((k + 1) * w / pieces)]
+            pw = min(320, max(8, int(round(48 * part.shape[1] / h))))
+            img = cv2.resize(part, (pw, 48), interpolation=cv2.INTER_AREA).astype(np.float32)[..., ::-1]  # RGB -> BGR
+            blob = np.zeros((1, 3, 48, 320), np.float32)
+            blob[0, :, :, :pw] = ((img / 255.0 - 0.5) / 0.5).transpose(2, 0, 1)
+            self.net.setInput(blob)
+            probs = self.net.forward()[0]
+            last = 0
+            for i, p in zip(probs.argmax(1), probs.max(1)):
+                if i != 0 and i != last and i < len(self.chars):
+                    texts.append(self.chars[i])
+                    confs.append(float(p))
+                last = i
+        return ''.join(texts).strip(), (float(np.mean(confs)) if confs else 0.0)
+
+    def read(self, rgb, box):
+        return self.read_line(self.horizontal(self.rectify(rgb, box)))
+
+
+def readable(text, conf, options):
+    core = [c for c in text if not c.isspace()]
+    if not core:
+        return False
+    if all(c in STRIPY for c in core):
+        return conf >= float(options['rec_stripy'])
+    if len(core) == 1:
+        return conf >= float(options['rec_single'])
+    return conf >= float(options['rec_min'])
 
 
 class TextFinder:
-    def __init__(self, path):
+    def __init__(self, path, recognizer=None, keys=None):
         import cv2
         self.cv2 = cv2
+        self.reader = TextReader(recognizer, keys) if recognizer and keys else None
         self.model = cv2.dnn_TextDetectionModel_DB(path)
         self.model.setBinaryThreshold(0.3)
         self.model.setPolygonThreshold(0.5)
@@ -102,12 +173,21 @@ class TextFinder:
         n, _ = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
         return n - 1, None
 
+    def judge(self, rgb, box):
+        """(ok, reason, text): with the recognizer, a box counts only when it reads as characters."""
+        if self.reader is None:
+            ok, why = self.looks_like_text(rgb, box)
+            return ok, why, ''
+        text, conf = self.reader.read(rgb, box)
+        options = getattr(self, 'options', DEFAULTS)
+        return readable(text, conf, options), f'read {text!r} {conf:.2f}', text
+
     def find(self, rgb):
         boxes, scores = self.raw(rgb)
         kept, rejected = [], []
         for box, score in zip(boxes, scores):
-            ok, why = self.looks_like_text(rgb, box)
-            (kept if ok else rejected).append((box, score, why))
+            ok, why, text = self.judge(rgb, box)
+            (kept if ok else rejected).append((box, text, why))
         return kept, rejected
 
 
@@ -198,7 +278,7 @@ def clean_frame(finder, model, torch, rgb, options=None):
             lama_fill(model, torch, rgb, mask, rect, scale=min(1.0, float(options['lama_width']) / w))
         again, _refused = finder.find(rgb)
         current = [item for item in again if _overlap(painted, item[0]) > 0.3]
-    boxes = [[int(v) for v in (*np.floor(box.min(0)), *np.ceil(box.max(0)))] + [why] for box, _, why in found]
+    boxes = [[int(v) for v in (*np.floor(box.min(0)), *np.ceil(box.max(0)))] + [why, text] for box, text, why in found]
     return rgb, dict(boxes=boxes, rejected=[why for _, _, why in rejected], residue=bool(current), seconds=round(time.time() - started, 3))
 
 
