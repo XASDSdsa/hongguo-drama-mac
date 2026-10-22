@@ -245,7 +245,14 @@ async function main() {
   {
     const verifiedPage = await fsp.readFile(first.htmlFile, 'utf8');
     assert.ok(inRange(verifiedPage), '匹配度在 97.0–99.0 之间，一位小数');
-    assert.ok(verifiedPage.includes('核对：动作对不上；画面里林夏没有站着，是在走'));
+    // 页面里不再显示「核对：……对不上」说明
+    assert.ok(!verifiedPage.includes('核对：'), '核对说明去掉了');
+    assert.ok(!verifiedPage.includes('画面里林夏没有站着'));
+    // 以前生成的页面：打开时把核对说明去掉，别的不动
+    const { removeVerifyNotes } = require('../src/native/video-prompt/html');
+    const oldPage = '<div class="blk novel"><p class="novtext">原文</p><p class="novnote">小说原文里缺了这一镜的台词</p><p class="novnote">核对：动作对不上；画面里林夏没有站着，是在走</p></div>';
+    assert.equal(removeVerifyNotes(oldPage), '<div class="blk novel"><p class="novtext">原文</p><p class="novnote">小说原文里缺了这一镜的台词</p></div>');
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /await dropStoryboardVerifyNotes\(target\);\n\s+const stat = await fsp\.stat\(target\.html\)/, '列表里先去掉旧页面的核对说明（页面变新，截图自动重出）');
     assert.ok(!verifiedPage.includes('（自评）'));
     verifyMode = 'broken';
     const selfOnly = await deriveEpisodePrompts({ ...options, outDir: path.join(dir, 'out-self'), cacheFile: path.join(dir, 'cache', 'self.json'), sourceKey: 'hash-self' });

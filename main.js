@@ -59,6 +59,7 @@ const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
 const { createLamaWorker, MODEL_FILE: LAMA_MODEL_FILE } = require('./src/native/video-prompt/lama');
 const structureRuntime = require('./src/native/video-structure/runtime');
 const storyboardSnapshot = require('./src/native/video-prompt/snapshot');
+const storyboardHtmlTools = require('./src/native/video-prompt/html');
 const { seedanceFormat } = require('./src/native/video-prompt/compose');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
@@ -5352,6 +5353,7 @@ function storyboardTarget(dir, number) {
  * 打开时按成品实际尺寸改过来（只改分辨率那几处文字，不重新问方舟）。
  */
 async function refreshStoryboardResolution(target) {
+  await dropStoryboardVerifyNotes(target);
   try {
     const media = await quchong.probeMedia(resolveFfmpeg('ffprobe'), target.file).catch(() => null);
     if (!media?.video_width || !media?.video_height) return;
@@ -5374,6 +5376,18 @@ async function refreshStoryboardResolution(target) {
   }
 }
 
+/** 以前生成的页面里有「核对：……」说明：去掉（改了页面，截图比页面旧，界面会自动重新出图）。 */
+async function dropStoryboardVerifyNotes(target) {
+  try {
+    const html = await fsp.readFile(target.html, 'utf8').catch(() => null);
+    if (html == null || !html.includes('<p class="novnote">核对：')) return;
+    const fixed = storyboardHtmlTools.removeVerifyNotes(html);
+    if (fixed !== html) await fsp.writeFile(target.html, fixed);
+  } catch (_) {
+    // 改不了就按原样显示。
+  }
+}
+
 function storyboardDir(payload) {
   const dir = path.resolve(String(payload?.dir || ''));
   return seriesLibrary.isLibraryFolder(dir, downloadRoot(), libraryFolders().list()) ? dir : '';
@@ -5391,6 +5405,7 @@ ipcMain.handle('library-storyboards', async (_event, payload = {}) => {
         items.push({ number, state: 'no-episode' });
         continue;
       }
+      await dropStoryboardVerifyNotes(target);
       const stat = await fsp.stat(target.html).catch(() => null);
       const shot = stat ? await fsp.stat(storyboardSnapshot.snapshotFile(target.html)).catch(() => null) : null;
       items.push({
