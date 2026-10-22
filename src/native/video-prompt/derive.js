@@ -375,15 +375,18 @@ async function deriveEpisodePrompts({
           if (lamaBroken) log('warn', `关键帧去字幕：LaMa 用不了（${lamaBroken.message}），这一集用本机补图（效果差一些）`);
         }
       }
-      // LaMa 出过一次错（进程起不来、模型坏了）：这一集剩下的关键帧不再试
+      // 某一张出错只影响这一张（用原图）；连着两张都出错（进程起不来、模型坏了），这一集剩下的关键帧不再试
+      let failedInRow = 0;
       const guard = (call) => async (job) => {
         if (lamaBroken) throw lamaBroken;
         try {
-          return await call(job);
+          const result = await call(job);
+          failedInRow = 0;
+          return result;
         } catch (error) {
-          if (!signal?.aborted && !lamaBroken) {
+          if (!signal?.aborted && !lamaBroken && ++failedInRow >= 2) {
             lamaBroken = error;
-            log('warn', `关键帧去字：LaMa 出错了（${error.message}），这一集剩下的关键帧${textMode ? '不去字（画面校验里不写「无字幕水印」）' : '用本机补图（效果差一些）'}`);
+            log('warn', `关键帧去字：LaMa 连着两张出错（${error.message}），这一集剩下的关键帧${textMode ? '不去字（画面校验里不写「无字幕水印」）' : '用本机补图（效果差一些）'}`);
           }
           throw error;
         }

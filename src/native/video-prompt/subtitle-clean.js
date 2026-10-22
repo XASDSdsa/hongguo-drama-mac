@@ -918,9 +918,24 @@ async function cleanKeyframe({ ffmpeg, inputPath, time, band, dims, sizes, signa
 const TEXT_MAX_WIDTH = 1080;
 // 找字和核对的参数（每次随任务发给内置运行时，调参数只要快速更新，不用重新打完整包）：
 // binary / polygon / unclip：文字检测模型的阈值和框外扩；min_share / min_strokes / contrast / min_luma：核对「像不像字」
-// （细笔画占框的比例、至少几笔、笔画比两边亮多少、笔画至少多亮）；context：补图时字周围带多少画面（按 640 宽算）；
+// （细笔画占框的比例、至少几笔、笔画比两边亮 / 鲜艳 / 暗多少、亮笔画至少多亮）；context：补图时字周围带多少画面（按 640 宽算）；
 // lama_width：LaMa 按多宽补（关键帧最后只出 320 / 560 宽）；grow：字的框再往外扩几像素（按 640 宽算）；passes：补完再查、最多补几遍。
-const TEXT_OPTIONS = { binary: 0.3, polygon: 0.5, unclip: 2.0, min_share: 0.004, min_strokes: 3, contrast: 40, min_luma: 90, context: 96, lama_width: 640, grow: 3, passes: 2 };
+// many_strokes：笔画够多（这么多笔以上）时细笔画占比只要一半（字小、画面糊时）；light_background：框里中位亮度到这么亮才认深色字。
+const TEXT_OPTIONS = {
+  binary: 0.3,
+  polygon: 0.5,
+  unclip: 2.0,
+  min_share: 0.004,
+  min_strokes: 3,
+  many_strokes: 5,
+  contrast: 40,
+  min_luma: 90,
+  light_background: 140,
+  context: 96,
+  lama_width: 640,
+  grow: 3,
+  passes: 2,
+};
 
 /** 整张找字用的尺寸：原片宽度（最多 1080），偶数。 */
 function textWorkSize(size) {

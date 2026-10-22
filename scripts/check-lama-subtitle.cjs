@@ -253,6 +253,21 @@ async function partB(dir) {
       assert.ok(changed(320, 1390, 760, 1450) > 2000, '字幕那一行补过了');
       assert.equal(result.residue, false, '补完再查没有字');
       console.log(`PASS real text scan: ${result.boxes.length} pieces of text found anywhere in a 1080p frame and removed (${result.seconds.toFixed(1)} s); the eye highlight is left alone`);
+
+      // 720p：黄字幕、白底黑字条幅、红色标题字（和背景差不多亮）；眼睛高光、一根反光细线不是字
+      const W7 = 720;
+      const H7 = 1280;
+      const raw7 = execFileSync(ffmpegBin, ['-v', 'error', '-i', path.join(__dirname, 'fixtures', 'keyframe-text-720.png'), '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { maxBuffer: 64 * 1024 * 1024 });
+      assert.equal(raw7.length, W7 * H7 * 3);
+      const r7 = await worker.clean({ data: Buffer.from(raw7), width: W7, height: H7 });
+      const in7 = (x, y) => r7.boxes.some(([x0, y0, x1, y1]) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
+      assert.ok(in7(360, 1025), `黄字幕找到了（${JSON.stringify(r7.boxes)}）`);
+      assert.ok(in7(300, 130), '白底黑字条幅找到了');
+      assert.ok(in7(300, 235), '红色标题字找到了');
+      const same7 = (x, y) => [0, 1, 2].every((c) => raw7[(y * W7 + x) * 3 + c] === r7.data[(y * W7 + x) * 3 + c]);
+      assert.ok(same7(292, 582) && same7(570, 360), '眼睛高光、反光细线一个像素都不动');
+      assert.equal(r7.residue, false);
+      console.log(`PASS real text scan at 720p: yellow subtitle, black-on-white banner and red title removed (${r7.seconds.toFixed(1)} s); highlights left alone`);
     } finally {
       worker.close();
     }

@@ -432,9 +432,15 @@ async function main() {
 
       let broke = 0;
       const midway = await run('lama-broke', { start: async () => {}, inpaint: async () => { broke += 1; throw new Error('LaMa 补图进程退出了（1）'); } });
-      assert.equal(broke, 1, '出过一次错就不再试');
-      assert.equal(midway.filter(([l, m]) => l === 'warn' && /LaMa 出错了（LaMa 补图进程退出了（1）），这一集剩下的关键帧用本机补图/.test(m)).length, 1, '只报一次');
+      assert.equal(broke, 2, '连着两张出错就不再试');
+      assert.equal(midway.filter(([l, m]) => l === 'warn' && /LaMa 连着两张出错（LaMa 补图进程退出了（1）），这一集剩下的关键帧用本机补图/.test(m)).length, 1, '只报一次');
       assert.ok(has(midway, 'info', /去掉了（本机补图/), '出错那张和后面的都用本机补图补上');
+
+      // 只有一张出错（比如这一张的图有问题）：只影响这一张，后面照样用 LaMa
+      let once = 0;
+      const blip = await run('lama-blip', { start: async () => {}, inpaint: async (job) => { once += 1; if (once === 1) throw new Error('这一张坏了'); return fakeInpaint(job); } });
+      assert.ok(!blip.some(([, m]) => /连着两张出错/.test(m)), '一张出错不算坏了');
+      assert.ok(has(blip, 'info', /去掉了（LaMa，0\.4 秒）/), '后面照样用 LaMa');
 
       // 有文字检测模型：不找字幕横带，每张关键帧整张画面找字（按原片尺寸），找到的补掉；日志每张都写
       let scans = 0;
