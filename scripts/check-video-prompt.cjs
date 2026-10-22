@@ -325,7 +325,7 @@ async function main() {
   assert.match(main, /if \(item\.prompts && results\) queueLibraryPrompts\(job, file, item, results\)/, '拆解完成后才反推（后台排队，不占草稿车道）');
   assert.match(main, /await waitLibraryPrompts\(job\)/, '整个草稿任务等分镜工程图做完才结束');
   assert.match(main, /withPrompts \? videoPromptProblem\(\) : ''/, '没填方舟 Key 或模型名就不开始');
-  assert.match(main, /path\.join\(job\.dir, '视频提示词'\)/, '成果放在剧文件夹的「视频提示词」里');
+  assert.match(main, /outDir: seriesLayout\.storyboardPagesDir\(job\.dir\)/, '成果放在剧文件夹的「分镜工程图/网页和提示词」里');
   assert.match(main, /ark_video_model: ''/, '模型名没有默认值');
   assert.match(main, /job\.controller\?\.abort\(\)/, '停止草稿时也中断提示词请求');
   const detail = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'SeriesDetail.jsx'), 'utf8');

@@ -1,16 +1,19 @@
 'use strict';
-// 剧文件夹里的“剧信息”：封面和简介。下载一部剧时顺手存进去，之后各功能直接从文件夹里读。
-// 已经存在的文件一律不覆盖（用户可能手动换过封面、改过简介）；读不到就不写，绝不编造。
+// 剧文件夹里的“剧信息”：原剧海报和简介。下载一部剧时顺手存进去，之后各功能直接从文件夹里读。
+// 已经存在的一律不覆盖（用户可能手动换过海报、改过简介）；读不到就不写，绝不编造。
+// 放在哪：剧文件夹根目录的 原剧集海报.jpg 和 原剧集信息.txt（见 series-layout.js）；以前「原剧」里的 封面 / 简介.txt 也认。
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { cleanSynopsis } = require('./synopsis');
+const layout = require('./series-layout');
 
-// 原剧（下载的原集、原封面、原简介）放在剧文件夹下的「原剧」子文件夹；成品（去重、草稿、发布素材）在外面。
+// 原集视频放在剧文件夹下的「原剧」子文件夹；成品（去重、分镜工程图、发布素材）在外面。
 // 用户自己导入的文件夹没有「原剧」子文件夹时，原集就是文件夹顶层的视频。
-const ORIGINAL_DIR = '原剧';
-const COVER_BASENAME = '封面';
-const SYNOPSIS_FILENAME = '简介.txt';
+const ORIGINAL_DIR = layout.ORIGINAL_DIR;
+// 以前的名字：整理旧文件夹、认旧文件时用
+const COVER_BASENAME = layout.LEGACY.cover;
+const SYNOPSIS_FILENAME = layout.LEGACY.synopsis;
 const MAX_COVER_BYTES = 15 * 1024 * 1024;
 const MIN_COVER_BYTES = 512;
 const COVER_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
@@ -52,44 +55,14 @@ function seriesDirOf(file) {
   return path.basename(parent) === ORIGINAL_DIR ? path.dirname(parent) : parent;
 }
 
-/** 先看「原剧」子文件夹，再看剧文件夹本身。 */
-function lookIn(dir) {
-  const original = originalDir(dir);
-  return original === dir ? [dir] : [original, dir];
-}
-
-/** 剧文件夹里已有的封面（封面.jpg/.png/.webp 之一），没有返回 null。 */
+/** 剧文件夹里已有的原剧海报（原剧集海报.*；以前的 封面.* 也认），没有返回 null。 */
 function findCover(dir) {
-  for (const base of lookIn(dir)) {
-    for (const ext of COVER_EXTENSIONS) {
-      const file = path.join(base, COVER_BASENAME + ext);
-      try {
-        if (fs.statSync(file).isFile()) return file;
-      } catch (_) {}
-    }
-  }
-  return null;
+  return layout.findOriginalPoster(dir);
 }
 
-function findSynopsisFile(dir) {
-  for (const base of lookIn(dir)) {
-    const file = path.join(base, SYNOPSIS_FILENAME);
-    try {
-      if (fs.statSync(file).isFile()) return file;
-    } catch (_) {}
-  }
-  return null;
-}
-
-/** 读剧文件夹里的简介文本；没有或读失败返回空字符串。 */
+/** 读原剧简介（原剧集信息.txt 里的；以前的 简介.txt 也认）；没有返回空字符串。 */
 function readSynopsis(dir) {
-  const file = findSynopsisFile(dir);
-  if (!file) return '';
-  try {
-    return fs.readFileSync(file, 'utf8').trim();
-  } catch (_) {
-    return '';
-  }
+  return layout.readOriginalSynopsis(dir);
 }
 
 /** 先写临时文件，再用“不覆盖”的方式放到目标位置；中途失败不会留下半截文件。 */
@@ -110,11 +83,12 @@ function writeIfAbsent(dest, data) {
 }
 
 /**
- * 把封面和简介存进剧文件夹。
+ * 把原剧海报和简介存进剧文件夹（dir 是剧文件夹本身）：海报存成 原剧集海报.*，简介写进 原剧集信息.txt
+ * （facts：剧名、来源、总集数、已下载、已处理，一起写进去）。
  * fetchImage(url) 由调用方提供，返回图片 Buffer。每一项互不影响，任何一项失败都不抛出。
  * 返回 { cover, synopsis }，值为 saved / exists / none / failed。
  */
-async function saveSeriesInfo({ dir, cover, synopsis, fetchImage }) {
+async function saveSeriesInfo({ dir, cover, synopsis, fetchImage, facts = {} }) {
   const result = { cover: 'none', synopsis: 'none' };
   if (!dir) return result;
   try {
@@ -124,10 +98,11 @@ async function saveSeriesInfo({ dir, cover, synopsis, fetchImage }) {
   }
 
   const text = cleanSynopsis(synopsis);
-  if (findSynopsisFile(dir)) result.synopsis = 'exists';
+  if (readSynopsis(dir)) result.synopsis = 'exists';
   else if (text) {
     try {
-      result.synopsis = writeIfAbsent(path.join(dir, SYNOPSIS_FILENAME), `${text}\n`) ? 'saved' : 'exists';
+      layout.updateOriginalInfo(dir, { ...facts, synopsis: text });
+      result.synopsis = 'saved';
     } catch (_) {
       result.synopsis = 'failed';
     }
@@ -142,7 +117,7 @@ async function saveSeriesInfo({ dir, cover, synopsis, fetchImage }) {
       if (!ext || buffer.length < MIN_COVER_BYTES || buffer.length > MAX_COVER_BYTES) result.cover = 'failed';
       // 下载期间用户可能已经放了自己的封面，再查一次。
       else if (findCover(dir)) result.cover = 'exists';
-      else result.cover = writeIfAbsent(path.join(dir, COVER_BASENAME + ext), buffer) ? 'saved' : 'exists';
+      else result.cover = writeIfAbsent(layout.originalPosterFile(dir, ext), buffer) ? 'saved' : 'exists';
     } catch (_) {
       result.cover = 'failed';
     }

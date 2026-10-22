@@ -1,16 +1,17 @@
 'use strict';
-// 分镜工程图截图：页头 + 前两个分镜，存成一张 JPG，放在 HTML 旁边（同名 .jpg）。
+// 分镜工程图截图：页头 + 前两个分镜，存成一张 JPG（同名 .jpg）：网页在「分镜工程图/网页和提示词」里，截图放「分镜工程图」里。
 // 管理剧集里按集显示这张图（固定大小，点开看大图）；要看完整的交互页面再打开 HTML。
 
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { storyboardImageFor } = require('../series-layout');
 
 const SNAPSHOT_WIDTH = 1440; // 和设计稿一样宽，三栏卡片不挤
 const MAX_HEIGHT = 8000;
 
-/** HTML 旁边的截图文件名。 */
+/** 网页对应的截图文件：网页在「网页和提示词」里时放上一层的「分镜工程图」，以前的（还没挪的）放网页旁边。 */
 function snapshotFile(htmlFile) {
-  return path.join(path.dirname(htmlFile), `${path.basename(htmlFile, path.extname(htmlFile))}.jpg`);
+  return storyboardImageFor(htmlFile);
 }
 
 /** 页面里跑：等字体和图片都好了，量出「页头 + 前 shots 个分镜」到哪为止（像素）。 */
@@ -51,6 +52,7 @@ async function captureStoryboard({ driver, htmlFile, outFile = snapshotFile(html
     const bytes = await driver.capture({ x: 0, y: 0, width: SNAPSHOT_WIDTH, height: Math.min(height, MAX_HEIGHT) }, quality);
     if (!bytes?.length || bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error('截图不是 JPG');
     const temp = `${outFile}.${process.pid}.tmp`;
+    await fsp.mkdir(path.dirname(outFile), { recursive: true });
     await fsp.writeFile(temp, bytes);
     await fsp.rename(temp, outFile);
     return outFile;

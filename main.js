@@ -35,6 +35,7 @@ const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
 const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
 const seriesInfo = require('./src/native/series-info');
+const seriesLayout = require('./src/native/series-layout');
 const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
 const seriesGaps = require('./src/native/series-gaps');
@@ -2043,6 +2044,7 @@ async function executeHongguoDownload(task, attempt = 0) {
       task.progress = 100;
       task.endTime = Date.now();
       markPipelineDownloaded(task, finalPath);
+      scheduleSeriesRefresh(seriesInfo.seriesDirOf(finalPath));
       saveDownloadTasks();
       sendToRenderer('download-completed', { id, path: finalPath });
       return;
@@ -2122,6 +2124,7 @@ async function executeHongguoDownload(task, attempt = 0) {
     task.progress = 100;
     task.endTime = Date.now();
     markPipelineDownloaded(task, finalPath);
+    scheduleSeriesRefresh(seriesInfo.seriesDirOf(finalPath));
     saveDownloadTasks();
     sendToRenderer('download-completed', { id, path: finalPath });
   } catch (error) {
@@ -3059,6 +3062,7 @@ function pumpQuchongBatch(batch) {
           `完成，用时 ${took} 秒${detail ? `（${detail}）` : ''} → 去重/${path.basename(task.dst)}`,
         );
         if (!task.segments) markPipelineDeduped(task.src, task.dst);
+        if (batch.libraryDir) scheduleSeriesRefresh(batch.libraryDir);
         startSideTaskForOutput(batch, task);
       })
       .catch((error) => {
@@ -3658,7 +3662,10 @@ function scanLibraryFolderRecords() {
 
 ipcMain.handle('library-list', () => {
   try {
-    return { success: true, root: downloadRoot(), folders: libraryFolderRecords() };
+    let folders = libraryFolderRecords();
+    // 打开管理剧集：每部剧整理成新结构、更新两个信息文件；挪了海报的重新扫一遍（海报位置变了）
+    if (folders.map((folder) => refreshSeriesFiles(folder.path)).some(Boolean)) folders = libraryFolderRecords();
+    return { success: true, root: downloadRoot(), folders };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -3783,6 +3790,7 @@ function libraryEpisodeDetail(dir) {
   const folder = path.resolve(String(dir));
   const isImported = imported.some((item) => path.resolve(item) === folder);
   if (!isImported) migrateSeriesOriginals(folder);
+  refreshSeriesFiles(folder);
   const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
   const remote = new Map((entry?.episodes || []).map((episode) => [Number(episode.vid_index), episode]));
   const cover = seriesInfo.findCover(folder);
@@ -3989,7 +3997,7 @@ ipcMain.handle('library-job-dismiss', (_event, id) => {
 });
 
 // ===== AI 发布素材：改写简介 / 改写剧名 / 重新生成海报 =====
-// 结果直接放在剧文件夹里（发布剧名.txt / 发布简介.txt / 发布海报.jpg），无字底图和状态放在应用私有目录。
+// 结果直接放在剧文件夹里（新剧集信息.txt 里的新剧名和新简介、新剧集海报.jpg），无字底图和状态放在应用私有目录。
 const publishJobs = new Map();
 
 function publishWorkDir(dir) {
@@ -4751,7 +4759,7 @@ function videoPromptProblem() {
 }
 
 /**
- * 这一集拆解完成后，用同一份分镜和台词结果反推 Seedance 2.5 提示词，写成「视频提示词/集名.txt」。
+ * 这一集拆解完成后，用同一份分镜和台词结果反推 Seedance 2.5 提示词，写成「分镜工程图/网页和提示词/集名.txt」。
  * 失败只记日志、不影响剪映草稿。
  */
 // ===== 分镜结果留底：草稿做完就把这一集的分镜（alignment）和台词（transcript）存一份小文件 =====
@@ -4901,7 +4909,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
         model,
       }),
       model,
-      outDir: path.join(job.dir, '视频提示词'),
+      outDir: seriesLayout.storyboardPagesDir(job.dir),
       cacheFile,
       sourceKey,
       title: path.basename(path.resolve(job.dir)),
@@ -5330,13 +5338,13 @@ ipcMain.handle('library-draft-cancel', (_event, dir) => {
   }
 });
 
-// ===== AI 分镜工程图：剪映草稿任务里生成的「视频提示词/集名.html」，在管理剧集里按所选集号直接显示 =====
+// ===== AI 分镜工程图：剪映草稿任务里生成的「分镜工程图/网页和提示词/集名.html」，截图在「分镜工程图/集名.jpg」，在管理剧集里按所选集号直接显示 =====
 function storyboardTarget(dir, number) {
   const { files } = selectDraftFiles(libraryDedupOutputs(dir), { numbers: [number] });
   const file = files[0];
   if (!file) return null;
   const label = path.basename(file, path.extname(file));
-  return { file, label, html: path.join(dir, '视频提示词', `${label}.html`) };
+  return { file, label, html: seriesLayout.storyboardHtml(dir, label) };
 }
 
 /**
@@ -5887,11 +5895,11 @@ function migrateSeriesOriginals(dir) {
         return false;
       }
     };
-    const names = [
-      ...seriesLibrary.scanVideos(folder).map((episode) => episode.name),
-      ...seriesInfo.COVER_EXTENSIONS.map((ext) => seriesInfo.COVER_BASENAME + ext),
-      seriesInfo.SYNOPSIS_FILENAME,
-    ].filter(isFile);
+    // 只挪原集视频：原剧海报、原剧集信息放在剧文件夹根目录（见 refreshSeriesFiles）
+    const names = seriesLibrary
+      .scanVideos(folder)
+      .map((episode) => episode.name)
+      .filter(isFile);
     const target = path.join(folder, seriesInfo.ORIGINAL_DIR);
     const moved = new Map();
     if (names.length) {
@@ -5935,7 +5943,7 @@ function migrateSeriesOriginals(dir) {
     }
     if (moved.size) {
       folderRecordsCache = null;
-      libLog(folder, 'info', `已把 ${moved.size} 个原剧文件（原集、封面、简介）挪进「原剧」文件夹`);
+      libLog(folder, 'info', `已把 ${moved.size} 集原集视频挪进「原剧」文件夹`);
     }
     return moved.size;
   } catch (error) {
@@ -5978,23 +5986,89 @@ async function fetchCoverImage(url) {
   return Buffer.from(response.data);
 }
 
-/** 把来源平台的封面和简介存进剧文件夹（已有的不覆盖），失败只记日志，不影响下载。 */
+/** 把来源平台的海报和简介存进剧文件夹（已有的不覆盖），失败只记日志，不影响下载。 */
 function writeSeriesInfoFiles(seriesId, dir, coverHint) {
   const entry = seriesRegistry.find((s) => String(s.series_id) === String(seriesId));
-  // 原封面、原简介一律写进「原剧」；传进来的是剧文件夹时先把旧布局整理好，免得外层和里面各有一份。
+  // 原剧集海报、原剧集信息放在剧文件夹根目录；传进来的是「原剧」时往上一层。先把旧布局整理好，免得新旧各有一份。
   let target = path.resolve(String(dir));
-  if (path.basename(target) !== seriesInfo.ORIGINAL_DIR) {
-    migrateSeriesOriginals(target);
-    target = path.join(target, seriesInfo.ORIGINAL_DIR);
-  }
+  if (path.basename(target) === seriesInfo.ORIGINAL_DIR) target = path.dirname(target);
+  migrateSeriesOriginals(target);
+  refreshSeriesFiles(target);
   return seriesInfo
     .saveSeriesInfo({
       dir: target,
       cover: coverHint || entry?.cover || '',
       synopsis: entry?.synopsis || '',
       fetchImage: fetchCoverImage,
+      facts: seriesFacts(target),
     })
-    .catch((error) => console.warn('[SeriesInfo] 保存封面/简介失败:', error.message));
+    .then((result) => {
+      folderRecordsCache = null;
+      return result;
+    })
+    .catch((error) => console.warn('[SeriesInfo] 保存海报/简介失败:', error.message));
+}
+
+/** 原剧集信息.txt / 新剧集信息.txt 里要写的数字和名字（从磁盘和剧档案现查）。 */
+function seriesFacts(folder) {
+  const isImported = libraryFolders()
+    .list()
+    .some((item) => path.resolve(item) === folder);
+  const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
+  const outputs = libraryDedupOutputs(folder).length;
+  const record = libraryDedupRecord(folder);
+  const range = record?.sourceCount
+    ? record.sourceFrom != null && record.sourceTo != null && record.sourceFrom !== record.sourceTo
+      ? `原剧第 ${record.sourceFrom}–${record.sourceTo} 集，共 ${record.sourceCount} 集`
+      : `${record.sourceCount} 集`
+    : '';
+  return {
+    title: String(entry?.series_title || path.basename(folder)),
+    source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
+    total: entry ? Number(entry.total) || (entry.episodes || []).length || 0 : 0,
+    downloaded: seriesLibrary.scanEpisodes(folder).length,
+    processed: range
+      ? `${range}（做成 ${outputs} 集成品，在「去重」文件夹）`
+      : outputs
+        ? `「去重」里有 ${outputs} 集成品`
+        : '0 集',
+    synopsis: entry?.synopsis || '',
+    outputs,
+  };
+}
+
+/**
+ * 剧文件夹整理成现在的结构（以前的海报、分镜工程图挪到新位置，视频不动），
+ * 再把原剧集信息.txt、新剧集信息.txt 里的数字更新到最新（内容没变就不写）。返回有没有挪文件。
+ */
+function refreshSeriesFiles(dir) {
+  try {
+    const folder = path.resolve(String(dir || ''));
+    if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) return false;
+    const moved = seriesLayout.migrateLayout(folder);
+    const facts = seriesFacts(folder);
+    seriesLayout.updateOriginalInfo(folder, facts);
+    seriesLayout.updateNewInfo(folder, { processed: facts.outputs });
+    if (moved.length) libLog(folder, 'info', `剧文件夹整理成新结构：挪好了 ${moved.join('、')}`);
+    return moved.length > 0;
+  } catch (error) {
+    console.warn('[Library] 更新剧集信息失败:', error?.message || error);
+    return false;
+  }
+}
+
+// 下载完一集、去重完一集：过两秒再更新一次信息文件里的数字（一批里连着完成的只写一次）
+const seriesRefreshTimers = new Map();
+function scheduleSeriesRefresh(dir) {
+  if (!dir) return;
+  const key = path.resolve(String(dir));
+  clearTimeout(seriesRefreshTimers.get(key));
+  const timer = setTimeout(() => {
+    seriesRefreshTimers.delete(key);
+    refreshSeriesFiles(key);
+  }, 2000);
+  timer.unref?.();
+  seriesRefreshTimers.set(key, timer);
 }
 
 /** 输出目录：先用本次操作明确给出的目录，其次是设置里指定的目录；都没有就报错，绝不自动推导。 */

@@ -7,16 +7,17 @@
  * 这里让它只画“没有任何文字的画面”，标题由 poster-title 用真字体渲染，位置和样式都由程序决定，
  * 所以字永远是对的，换标题也不用重新作图。
  *
- * 给客户看的结果放在剧文件夹里（发布剧名.txt / 发布简介.txt / 发布海报.jpg）；
+ * 给客户看的结果放在剧文件夹根目录：新剧名和新简介写进 新剧集信息.txt，海报是 新剧集海报.jpg
+ * （以前的 发布剧名.txt / 发布简介.txt / 发布海报.jpg 也认，管理剧集打开时挪过来）；
  * 无字底图和状态记录放在应用私有的 workDir，不进输出目录。
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const { STYLE_IDS, pickStyleByGenre, describeStyles } = require('./poster-styles');
+const seriesLayout = require('./series-layout');
 
-const OUTPUT_TITLE = '发布剧名.txt';
-const OUTPUT_SYNOPSIS = '发布简介.txt';
-const OUTPUT_POSTER = '发布海报.jpg';
+const OUTPUT_INFO = seriesLayout.NEW_INFO;
+const OUTPUT_POSTER = seriesLayout.NEW_POSTER;
 const STATE_FILE = 'state.json';
 
 const TITLE_MIN = 3;
@@ -101,14 +102,6 @@ const clip = (value, limit) =>
   Array.from(String(value || '').trim())
     .slice(0, limit)
     .join('');
-
-function textOf(file) {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch (_) {
-    return '';
-  }
-}
 
 function writeAtomic(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -348,11 +341,15 @@ function writeState(workDir, state) {
 
 function outputPaths(outputDir) {
   return {
-    title: path.join(outputDir, OUTPUT_TITLE),
-    synopsis: path.join(outputDir, OUTPUT_SYNOPSIS),
+    dir: outputDir,
+    info: path.join(outputDir, OUTPUT_INFO),
     poster: path.join(outputDir, OUTPUT_POSTER),
   };
 }
+
+/** 已保存的新剧名 / 新简介（新剧集信息.txt 里的）。 */
+const savedTitle = (paths) => seriesLayout.readNewInfo(paths.dir).title;
+const savedSynopsis = (paths) => seriesLayout.readNewInfo(paths.dir).synopsis;
 
 async function renderPoster({ renderer, state, workDir, outputDir, title, styleId, tagline, layout, signal }) {
   signal?.throwIfAborted?.();
@@ -478,7 +475,7 @@ function saveSynopsis({ outputDir, workDir, synopsis }) {
   const state = loadState(workDir, '');
   state.copy.synopsis = text;
   const paths = outputPaths(outputDir);
-  writeAtomic(paths.synopsis, text + '\n');
+  seriesLayout.updateNewInfo(outputDir, { synopsis: text });
   writeState(workDir, state);
   return summarize(state, paths, null);
 }
@@ -508,7 +505,7 @@ async function makePoster({
 
   report('scene', '正在构思海报画面');
   const sceneRaw = await openai.chatJson(
-    buildSceneMessages({ title: chosen.title, synopsis: textOf(paths.synopsis).trim() || synopsis }),
+    buildSceneMessages({ title: chosen.title, synopsis: savedSynopsis(paths) || synopsis }),
     { signal },
     copyConfig || config,
   );
@@ -592,14 +589,14 @@ async function retitle({ outputDir, workDir, renderer, title, styleId, tagline, 
     });
   }
   state.chosen = { title: nextTitle, style, tagline: nextTagline };
-  writeAtomic(paths.title, nextTitle + '\n');
+  seriesLayout.updateNewInfo(outputDir, { title: nextTitle });
   writeState(workDir, state);
   return summarize(state, paths, meta);
 }
 
 function summarize(state, paths, meta) {
   const chosen = state.chosen || {};
-  const saved = textOf(paths.synopsis).trim();
+  const saved = savedSynopsis(paths);
   const proposed = state.copy?.synopsis || '';
   return {
     title: chosen.title || '',
@@ -621,14 +618,14 @@ function readResult({ outputDir, workDir }) {
   const state = readState(workDir);
   const paths = outputPaths(outputDir);
   if (!state) return null;
-  const poster = fs.existsSync(paths.poster) ? paths.poster : null;
+  // 新剧集海报.jpg；还没挪的以前的 发布海报.jpg 也认
+  const poster = seriesLayout.findNewPoster(outputDir);
   const base = summarize(state, { ...paths, poster: poster || '' }, null);
-  return { ...base, hasPoster: !!poster, title: textOf(paths.title).trim() || base.title };
+  return { ...base, hasPoster: !!poster, title: savedTitle(paths) || base.title };
 }
 
 module.exports = {
-  OUTPUT_TITLE,
-  OUTPUT_SYNOPSIS,
+  OUTPUT_INFO,
   OUTPUT_POSTER,
   buildTitleMessages,
   buildSynopsisMessages,

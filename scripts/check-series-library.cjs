@@ -266,11 +266,14 @@ async function check(name, fn) {
     assert.equal(series.source, '红果');
     assert.match(series.coverUrl, /^hongguo-local:\/\//, 'the cover file in the folder is preferred');
     assert.equal(series.hasSynopsis, true);
-    // 下载目录里的剧：原集、封面、简介自动挪进「原剧」，外层只留成品。
-    for (const name of ['同名剧_第001集.mp4', '同名剧_第002集.mp4', '封面.jpg', '简介.txt']) {
+    // 下载目录里的剧：原集自动挪进「原剧」；封面变成根目录的 原剧集海报.jpg，简介写进 原剧集信息.txt。
+    for (const name of ['同名剧_第001集.mp4', '同名剧_第002集.mp4']) {
       assert.ok(fs.existsSync(path.join(root, '同名剧', '原剧', name)), `${name} moved into 原剧`);
       assert.ok(!fs.existsSync(path.join(root, '同名剧', name)), `${name} no longer outside`);
     }
+    assert.ok(fs.existsSync(path.join(root, '同名剧', '原剧集海报.jpg')) && !fs.existsSync(path.join(root, '同名剧', '封面.jpg')));
+    assert.match(fs.readFileSync(path.join(root, '同名剧', '原剧集信息.txt'), 'utf8'), /^剧名：同名剧\n来源：红果\n总集数：5 集\n已下载：2 集\n[\s\S]*\n简介：\n这是简介\n$/);
+    assert.ok(!fs.existsSync(path.join(root, '同名剧', '简介.txt')));
 
     const imported = await handlers['library-import']({});
     assert.equal(imported.success, true);

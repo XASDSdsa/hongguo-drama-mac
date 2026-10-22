@@ -41,7 +41,18 @@ function fakeDriver({ heights, bytes = JPEG }) {
   try {
     const html = path.join(dir, '新剧 - 第1集.html');
     fs.writeFileSync(html, '<html></html>');
-    assert.equal(snapshot.snapshotFile(html), path.join(dir, '新剧 - 第1集.jpg'));
+    assert.equal(snapshot.snapshotFile(html), path.join(dir, '新剧 - 第1集.jpg'), '以前的（还没挪的）网页：截图在网页旁边');
+    // 现在的结构：网页在「分镜工程图/网页和提示词」，截图放「分镜工程图」
+    const layout = require('../src/native/series-layout');
+    const series = path.join(dir, '剧');
+    const page = layout.storyboardHtml(series, '新剧 - 第1集');
+    assert.equal(page, path.join(series, '分镜工程图', '网页和提示词', '新剧 - 第1集.html'));
+    assert.equal(snapshot.snapshotFile(page), path.join(series, '分镜工程图', '新剧 - 第1集.jpg'));
+    // 还没挪的「视频提示词」里的网页也认
+    fs.mkdirSync(path.join(series, '视频提示词'), { recursive: true });
+    fs.writeFileSync(path.join(series, '视频提示词', '新剧 - 第2集.html'), '<html></html>');
+    assert.equal(layout.storyboardHtml(series, '新剧 - 第2集'), path.join(series, '视频提示词', '新剧 - 第2集.html'));
+    fs.rmSync(series, { recursive: true, force: true });
 
     // 页面高度随窗口变了一次（1759 → 1818），第三次量不变才截
     const driver = fakeDriver({ heights: [1759, 1818, 1818] });

@@ -8,6 +8,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const openai = require('../src/native/openai');
 const publish = require('../src/native/publish-materials');
+const { readNewInfo: newInfo } = require('../src/native/series-layout');
 const { createTitleRenderer } = require('../src/native/poster-title');
 const { openBrowser, FONTS_DIR } = require('./lib/poster-browser.cjs');
 
@@ -202,11 +203,13 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.equal(image.log[0].auth, 'Bearer image-secret-key');
       assert.match(image.log[0].raw.toString('latin1'), /gpt-image-2\.5/);
       assert.match(image.log[0].raw.toString('latin1'), /filename="封面\.png"|filename="[^"]*\.png"/);
-      assert.ok(result.paths.poster.endsWith('发布海报.jpg'));
+      assert.ok(result.paths.poster.endsWith('新剧集海报.jpg'));
       assert.ok(fs.statSync(result.paths.poster).size > 1000);
-      assert.equal(fs.readFileSync(result.paths.title, 'utf8').trim(), result.title);
-      assert.match(fs.readFileSync(result.paths.synopsis, 'utf8'), /重生回到被退婚/);
-      assert.deepEqual(fs.readdirSync(outputDir).sort(), ['发布剧名.txt', '发布海报.jpg', '发布简介.txt']);
+      assert.equal(newInfo(outputDir).title, result.title);
+      assert.match(newInfo(outputDir).synopsis, /重生回到被退婚/);
+      // 剧名和简介都写进 新剧集信息.txt，海报是 新剧集海报.jpg
+      assert.deepEqual(fs.readdirSync(outputDir).sort(), ['新剧集信息.txt', '新剧集海报.jpg']);
+      assert.match(fs.readFileSync(path.join(outputDir, '新剧集信息.txt'), 'utf8'), new RegExp(`^剧名：${result.title}\n`));
     });
 
     await check('the prompt asks for no text, keeps the lower third clear, and carries the scene', async () => {
@@ -366,7 +369,7 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.equal(text.log.length + image.log.length, before, 'no network calls');
       assert.equal(next.title, result.candidates[1]);
       assert.equal(next.styleId, 'ink');
-      assert.equal(fs.readFileSync(result.paths.title, 'utf8').trim(), result.candidates[1]);
+      assert.equal(newInfo(outputDir).title, result.candidates[1]);
       if (session) assert.notDeepEqual(fs.readFileSync(result.paths.poster), first);
       await assert.rejects(publish.retitle({ outputDir, workDir, renderer, styleId: 'nope' }), /未知的标题样式/);
       await assert.rejects(publish.retitle({ outputDir, workDir, renderer, title: '一'.repeat(20) }), /1–16/);
@@ -393,7 +396,7 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.equal(calls.length, 1);
       assert.match(JSON.stringify(calls[0].json.messages), /海报美术指导/);
       assert.equal(imageCalls, 1);
-      assert.equal(fs.readFileSync(result.paths.title, 'utf8').trim(), result.title);
+      assert.equal(newInfo(outputDir).title, result.title);
     });
 
     await check('the three tasks are independent: each writes only its own file', async () => {
@@ -406,27 +409,30 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.match(drafted.proposedSynopsis, /重生回到被退婚/);
       assert.equal(drafted.synopsis, '', 'nothing is saved yet');
       const savedSynopsis = publish.saveSynopsis({ ...d, synopsis: drafted.proposedSynopsis });
-      assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt']);
+      assert.deepEqual(fs.readdirSync(d.outputDir), ['新剧集信息.txt']);
+      assert.match(newInfo(d.outputDir).synopsis, /重生回到被退婚/);
+      assert.equal(newInfo(d.outputDir).title, '', '剧名还没定');
       assert.match(savedSynopsis.synopsis, /重生回到被退婚/);
       assert.equal(savedSynopsis.proposedSynopsis, '', 'saved: no pending draft left');
       assert.throws(() => publish.saveSynopsis({ ...d, synopsis: '太短' }), /简介现在 2 个字，要 90–95 个字/);
       const afterTitles = await publish.generate({ task: 'titles', ...base });
-      assert.deepEqual(fs.readdirSync(d.outputDir), ['发布简介.txt'], 'rewriting titles only offers candidates');
+      assert.deepEqual(fs.readdirSync(d.outputDir), ['新剧集信息.txt'], 'rewriting titles only offers candidates');
+      assert.equal(newInfo(d.outputDir).title, '', 'rewriting titles writes no title');
       assert.equal(afterTitles.title, '', 'no title is chosen until one is saved');
       assert.ok(afterTitles.candidates.length > 0);
       assert.match(afterTitles.synopsis, /重生回到被退婚/, 'the saved synopsis is kept');
       await publish.retitle({ ...d, renderer, title: afterTitles.candidates[0] });
-      assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['发布剧名.txt', '发布简介.txt']);
+      assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['新剧集信息.txt']);
+      assert.equal(newInfo(d.outputDir).title, afterTitles.candidates[0]);
+      assert.match(newInfo(d.outputDir).synopsis, /重生回到被退婚/, '定剧名不动已保存的简介');
       await publish.generate({ task: 'poster', ...base });
-      assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['发布剧名.txt', '发布海报.jpg', '发布简介.txt']);
+      assert.deepEqual(fs.readdirSync(d.outputDir).sort(), ['新剧集信息.txt', '新剧集海报.jpg']);
       // 再改写简介：剧名和海报不动
-      const posterBefore = fs.readFileSync(path.join(d.outputDir, '发布海报.jpg'));
-      const titleBefore = fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'));
+      const posterBefore = fs.readFileSync(path.join(d.outputDir, '新剧集海报.jpg'));
+      const infoBefore = fs.readFileSync(path.join(d.outputDir, '新剧集信息.txt'), 'utf8');
       await publish.generate({ task: 'synopsis', ...base });
-      const synopsisBefore = fs.readFileSync(path.join(d.outputDir, '发布简介.txt'), 'utf8');
-      assert.equal(fs.readFileSync(path.join(d.outputDir, '发布简介.txt'), 'utf8'), synopsisBefore);
-      assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '发布海报.jpg')), posterBefore);
-      assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt')), titleBefore);
+      assert.equal(fs.readFileSync(path.join(d.outputDir, '新剧集信息.txt'), 'utf8'), infoBefore, '改写简介（没保存）不动信息文件');
+      assert.deepEqual(fs.readFileSync(path.join(d.outputDir, '新剧集海报.jpg')), posterBefore);
     });
 
     await check('a poster needs a chosen name first; a typed name is enough', async () => {
@@ -438,18 +444,18 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       await assert.rejects(publish.retitle({ ...d, renderer, title: '' }), /1–16/);
       const typed = await publish.retitle({ ...d, renderer, title: '我自己起的名字' });
       assert.equal(typed.title, '我自己起的名字');
-      assert.equal(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'), 'utf8').trim(), '我自己起的名字');
-      assert.ok(!fs.existsSync(path.join(d.outputDir, '发布海报.jpg')), 'choosing a name does not draw a poster');
+      assert.equal(newInfo(d.outputDir).title, '我自己起的名字');
+      assert.ok(!fs.existsSync(path.join(d.outputDir, '新剧集海报.jpg')), 'choosing a name does not draw a poster');
       const poster = await publish.generate({ task: 'poster', ...base });
       assert.equal(poster.title, '我自己起的名字');
-      assert.ok(fs.existsSync(path.join(d.outputDir, '发布海报.jpg')));
+      assert.ok(fs.existsSync(path.join(d.outputDir, '新剧集海报.jpg')));
       // 改写剧名：只更新候选，已选定（手填）的剧名不被替换，也不再画图
       imageCalls = 0;
       const again = await publish.generate({ task: 'titles', ...base });
       assert.equal(imageCalls, 0);
       assert.equal(again.title, '我自己起的名字');
       assert.ok(again.candidates.length > 0);
-      assert.equal(fs.readFileSync(path.join(d.outputDir, '发布剧名.txt'), 'utf8').trim(), '我自己起的名字');
+      assert.equal(newInfo(d.outputDir).title, '我自己起的名字');
     });
 
     await check('without an original poster the picture is generated from the scene description', async () => {

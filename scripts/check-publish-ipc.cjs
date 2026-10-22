@@ -7,6 +7,7 @@ const assert = require('node:assert/strict'),
   path = require('node:path'),
   vm = require('node:vm'),
   zlib = require('node:zlib');
+const { readNewInfo: newInfo } = require('../src/native/series-layout');
 const { EventEmitter } = require('node:events'),
   { createRequire } = require('node:module');
 
@@ -236,22 +237,20 @@ const COPY = {
       assert.equal(mid.job.task, 'titles');
       await waitFor(() => updates().some((u) => u.status === 'done'));
       delay = 0;
-      assert.deepEqual(
-        fs.readdirSync(dir).sort(),
-        ['原剧'],
-        'rewriting only offers candidates: nothing is written until you save',
-      );
-      // 原集和原封面在「原剧」里，外层只放成品。
-      assert.deepEqual(fs.readdirSync(path.join(dir, '原剧')).sort(), ['封面.png', '退婚之后_第001集.mp4'].sort());
+      // 剧文件夹：根目录放原剧集信息.txt、原剧集海报、新剧集信息.txt；原集视频在「原剧」里
+      assert.deepEqual(fs.readdirSync(dir).sort(), ['原剧', '原剧集信息.txt', '原剧集海报.png', '新剧集信息.txt'].sort());
+      assert.deepEqual(fs.readdirSync(path.join(dir, '原剧')), ['退婚之后_第001集.mp4']);
+      assert.equal(newInfo(dir).title, '', 'rewriting only offers candidates: no title is written until you save');
+      assert.match(fs.readFileSync(path.join(dir, '原剧集信息.txt'), 'utf8'), /^剧名：退婚之后\n已下载：1 集\n已处理：0 集\n/);
       const drafts = await handlers['publish-state']({}, dir);
       assert.equal(drafts.result.title, '', 'no name chosen yet');
       assert.equal(drafts.original.title, '退婚之后', 'the original name is shown apart from the saved one');
       // 选一个候选并保存剧名
       const saveTitle = await handlers['publish-retitle']({}, { dir, title: drafts.result.candidates[0] });
       assert.equal(saveTitle.success, true, saveTitle.error);
-      assert.ok(fs.existsSync(path.join(dir, '发布剧名.txt')));
+      assert.equal(newInfo(dir).title, drafts.result.candidates[0]);
       await runTask('synopsis');
-      assert.ok(!fs.existsSync(path.join(dir, '发布简介.txt')), 'a rewritten synopsis is a draft until saved');
+      assert.equal(newInfo(dir).synopsis, '', 'a rewritten synopsis is a draft until saved');
       const pending = await handlers['publish-state']({}, dir);
       assert.equal(pending.result.synopsis, '');
       assert.match(pending.result.proposedSynopsis, /重生回到被退婚/);
@@ -259,13 +258,13 @@ const COPY = {
       assert.equal(tooShort.success, false);
       const savedSyn = await handlers['publish-save-synopsis']({}, { dir, synopsis: pending.result.proposedSynopsis });
       assert.equal(savedSyn.success, true, savedSyn.error);
-      assert.ok(fs.existsSync(path.join(dir, '发布简介.txt')));
+      assert.match(newInfo(dir).synopsis, /重生回到被退婚/);
       assert.equal(savedSyn.result.proposedSynopsis, '');
-      assert.ok(!fs.existsSync(path.join(dir, '发布海报.jpg')));
+      assert.ok(!fs.existsSync(path.join(dir, '新剧集海报.jpg')));
       await runTask('poster');
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
-        ['原剧', '发布剧名.txt', '发布海报.jpg', '发布简介.txt'].sort(),
+        ['原剧', '原剧集信息.txt', '原剧集海报.png', '新剧集信息.txt', '新剧集海报.jpg'].sort(),
         'only results land in the series folder',
       );
       const stages = new Set(
@@ -290,7 +289,7 @@ const COPY = {
       assert.equal(res.result.title, '她撕了婚书转身就走');
       assert.equal(res.result.styleId, 'ink');
       assert.equal(server.log.length, calls);
-      assert.equal(fs.readFileSync(path.join(dir, '发布剧名.txt'), 'utf8').trim(), '她撕了婚书转身就走');
+      assert.equal(newInfo(dir).title, '她撕了婚书转身就走');
       assert.deepEqual(FakeWindow.rendered.at(-1), { title: '她撕了婚书转身就走', style: 'ink', layout: 'auto' });
       const bad = await handlers['publish-retitle']({}, { dir, styleId: 'nope' });
       assert.equal(bad.success, false);

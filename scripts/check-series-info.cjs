@@ -32,23 +32,40 @@ async function check(name, fn) {
     assert.equal(info.sniffImageExtension(null), '');
   });
 
-  await check('cover and synopsis are written into the series folder', async () => {
+  await check('poster and synopsis are written into the series folder root (原剧集海报 / 原剧集信息.txt)', async () => {
     const dir = path.join(tmp, 'a', '剧A');
     const result = await info.saveSeriesInfo({
       dir,
       cover: 'https://x.invalid/c.webp',
       synopsis: '<p>一个很长的故事简介，讲述主角的经历。</p>',
       fetchImage: async () => webp,
+      facts: { title: '剧A', source: '红果', total: 30, downloaded: 0, processed: '0 集' },
     });
     assert.deepEqual(result, { cover: 'saved', synopsis: 'saved' });
-    assert.ok(fs.existsSync(path.join(dir, '封面.webp')));
-    assert.equal(fs.readFileSync(path.join(dir, '简介.txt'), 'utf8'), '一个很长的故事简介，讲述主角的经历。\n');
+    assert.ok(fs.existsSync(path.join(dir, '原剧集海报.webp')));
+    assert.equal(
+      fs.readFileSync(path.join(dir, '原剧集信息.txt'), 'utf8'),
+      '剧名：剧A\n来源：红果\n总集数：30 集\n已下载：0 集\n已处理：0 集\n\n简介：\n一个很长的故事简介，讲述主角的经历。\n',
+    );
     assert.equal(info.readSynopsis(dir), '一个很长的故事简介，讲述主角的经历。');
+    assert.equal(info.findCover(dir), path.join(dir, '原剧集海报.webp'));
     assert.deepEqual(
       fs.readdirSync(dir).sort(),
-      ['封面.webp', '简介.txt'],
+      ['原剧集信息.txt', '原剧集海报.webp'],
       'no temporary files are left in the folder',
     );
+  });
+
+  await check('a poster and synopsis already in the new files are never overwritten', async () => {
+    const dir = path.join(tmp, 'a2');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, '原剧集海报.png'), png);
+    fs.writeFileSync(path.join(dir, '原剧集信息.txt'), '剧名：剧\n已下载：1 集\n已处理：0 集\n\n简介：\n我自己改过的简介\n');
+    let fetched = 0;
+    const result = await info.saveSeriesInfo({ dir, cover: 'https://x.invalid/c.jpg', synopsis: '平台上的简介内容比较长一些', fetchImage: async () => (fetched++, jpeg) });
+    assert.deepEqual(result, { cover: 'exists', synopsis: 'exists' });
+    assert.equal(fetched, 0);
+    assert.equal(info.readSynopsis(dir), '我自己改过的简介');
   });
 
   await check('existing files are never overwritten', async () => {
