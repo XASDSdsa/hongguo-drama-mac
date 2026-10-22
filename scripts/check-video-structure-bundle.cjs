@@ -25,6 +25,8 @@ function verifyBundle(root, platform, arch) {
     throw Error('内置整句标点未通过离线自检，请重新执行 npm run setup:structure');
   if (m.lamaSelfTest !== true || !m.sha256?.['models/big-lama-fp16.pt'])
     throw Error('内置 LaMa 去字幕模型没有通过离线自检，请重新执行 npm run setup:structure');
+  if (m.textSelfTest !== true || !m.sha256?.['models/text_detection_cn_ppocrv3_2023may.onnx'])
+    throw Error('内置文字检测模型没有通过离线自检（关键帧整张找字要用），请重新执行 npm run setup:structure');
   if (platform === 'darwin' && (!m.minimumMacOS || Number(m.minimumMacOS) > 13))
     throw Error('结构化运行时尚未通过 macOS 13 兼容性检查');
   const exe = platform === 'win32' ? '.exe' : '';

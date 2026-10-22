@@ -138,12 +138,15 @@ function textCandidates(image, y0, y1, radius) {
     const r0 = y - top;
     for (let x = 0; x < W; x++) {
       let hit = false;
+      const here = luma[r0 * W + x];
       if (bright[r0 * W + x]) {
         // 旁边有黑描边，或者旁边比它暗了一大截（浅色无描边的字）
         const low = nearest[r0 * W + x];
-        const near = low <= 90 || luma[r0 * W + x] - low >= STROKE_CONTRAST;
-        hit = near && brightShare(x, r0) < 0.6;
+        hit = (low <= 90 || here - low >= STROKE_CONTRAST) && brightShare(x, r0) < 0.6;
       }
+      // 灰色的字（暗画面上不怎么亮的灰白字）：是一道细笔画——左右两边（或上下两边）都比它暗一大截；
+      // 物体的边（脸、衣服的轮廓）只有一边暗，不算
+      if (!hit && here >= 100 && isGray(data, (y * W + x) * 3)) hit = ridge(luma, W, rows, x, r0, radius * 2, here - STROKE_CONTRAST);
       if (hit) {
         mask[y * W + x] = 1;
         if (!inRun) runs[y] += 1;
@@ -152,6 +155,29 @@ function textCandidates(image, y0, y1, radius) {
     }
   }
   return { mask, runs };
+}
+
+/** 灰白色（不太饱和）或黄色。 */
+function isGray(data, i) {
+  const r = data[i];
+  const g = data[i + 1];
+  const b = data[i + 2];
+  const hi = Math.max(r, g, b);
+  return hi - Math.min(r, g, b) <= 60 || (r >= 120 && g >= 100 && b <= r - 40);
+}
+
+/** (x, r) 是不是一道细笔画：左右两边各在 reach 像素内有比 below 暗的像素，或者上下两边各有。 */
+function ridge(luma, W, rows, x, r, reach, below) {
+  let left = false;
+  let right = false;
+  for (let d = 1; d <= reach && !left; d++) if (x - d >= 0 && luma[r * W + x - d] <= below) left = true;
+  for (let d = 1; d <= reach && !right; d++) if (x + d < W && luma[r * W + x + d] <= below) right = true;
+  if (left && right) return true;
+  let up = false;
+  let down = false;
+  for (let d = 1; d <= reach && !up; d++) if (r - d >= 0 && luma[(r - d) * W + x] <= below) up = true;
+  for (let d = 1; d <= reach && !down; d++) if (r + d < rows && luma[(r + d) * W + x] <= below) down = true;
+  return up && down;
 }
 
 const MIN_RUNS = 6; // 一行里至少这么多段笔画才算「有字」
@@ -887,6 +913,55 @@ async function cleanKeyframe({ ffmpeg, inputPath, time, band, dims, sizes, signa
   return { outputs, cleaned, clean, reason, method, seconds, lamaError };
 }
 
+// 整张找字（文字检测模型）按原片的清晰度做：720p 就是 720 宽、1080p 就是 1080 宽，更宽的才缩到 1080。
+// 不先缩小，小字（人名条下面那行小字、角标）不会被缩没。
+const TEXT_MAX_WIDTH = 1080;
+// 找字和核对的参数（每次随任务发给内置运行时，调参数只要快速更新，不用重新打完整包）：
+// binary / polygon / unclip：文字检测模型的阈值和框外扩；min_share / min_strokes / contrast / min_luma：核对「像不像字」
+// （细笔画占框的比例、至少几笔、笔画比两边亮多少、笔画至少多亮）；context：补图时字周围带多少画面（按 640 宽算）；
+// lama_width：LaMa 按多宽补（关键帧最后只出 320 / 560 宽）；grow：字的框再往外扩几像素（按 640 宽算）；passes：补完再查、最多补几遍。
+const TEXT_OPTIONS = { binary: 0.3, polygon: 0.5, unclip: 2.0, min_share: 0.004, min_strokes: 3, contrast: 40, min_luma: 90, context: 96, lama_width: 640, grow: 3, passes: 2 };
+
+/** 整张找字用的尺寸：原片宽度（最多 1080），偶数。 */
+function textWorkSize(size) {
+  if (!size?.width || !size?.height) return null;
+  const width = Math.min(TEXT_MAX_WIDTH, size.width) & ~1;
+  return { width, height: Math.round((size.height * width) / size.width / 2) * 2 };
+}
+
+/**
+ * 抽一张关键帧，整张画面哪里有字都找出来补掉（字幕在哪都行、横排竖排、人名条、片头字），补完再查一遍。
+ * clean：worker.clean（文字检测 + LaMa，在内置运行时里跑）。按原片清晰度做，出图时再缩到 sizes 里的宽度。
+ * 返回 { outputs, cleaned, clean, reason, method: 'lama', seconds, boxes, rejected }：
+ *   cleaned 找到字并补过；clean 补完再查没有字（没找到字也算 clean）；boxes 找到的字（x0, y0, x1, y1, 说明）；
+ *   rejected 检测模型以为是字、核对后不像字没动的（耳朵、眼睛高光这类）。
+ */
+async function cleanKeyframeText({ ffmpeg, inputPath, time, size, sizes, signal, clean }) {
+  const dims = textWorkSize(size);
+  if (!dims) throw new Error('不知道原片尺寸');
+  const original = await grabRaw(ffmpeg, inputPath, time, dims, signal);
+  const result = await clean({ data: Buffer.from(original.data), width: original.width, height: original.height, signal, options: TEXT_OPTIONS });
+  const image = { ...original, data: result.data };
+  const outputs = [];
+  for (const target of sizes) {
+    const bytes = await encodeJpeg(ffmpeg, image, target.width, target.quality, signal);
+    if (bytes.length < 100) throw new Error('关键帧编码失败');
+    outputs.push(bytes);
+  }
+  const cleaned = result.boxes.length > 0;
+  return {
+    outputs,
+    cleaned,
+    clean: !result.residue,
+    reason: !cleaned ? 'none' : result.residue ? 'residue' : '',
+    method: 'lama',
+    seconds: result.seconds,
+    boxes: result.boxes,
+    rejected: result.rejected,
+    width: original.width,
+  };
+}
+
 /** 从列表里均匀挑最多 count 个。 */
 function spread(list, count) {
   const n = Math.min(count, list.length);
@@ -959,6 +1034,9 @@ module.exports = {
   blendBox,
   cleanBox,
   lamaBox,
+  textWorkSize,
+  cleanKeyframeText,
+  TEXT_OPTIONS,
   LAMA_CONTEXT,
   detectEpisodeBand,
   cleanKeyframe,

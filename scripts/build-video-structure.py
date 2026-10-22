@@ -41,6 +41,32 @@ def lama_self_test(executable, env, model, cache):
     print('Frozen LaMa self-test: mean error', round(error, 1), flush=True)
 
 
+def text_self_test(executable, env, model, detector, cache):
+    """The frozen worker must find text drawn anywhere on a picture (a line at the bottom and a vertical caption on the
+    left) and repaint it so that looking again finds nothing."""
+    import cv2
+    import numpy as np
+    width, height = 720, 1280
+    yy, xx = np.mgrid[0:height, 0:width]
+    image = np.stack([60 + xx * 80 // width, 50 + yy * 60 // height, 90 + 0 * xx], -1).astype(np.uint8)
+    cv2.putText(image, 'HELLO WORLD 2026', (150, 960), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (235, 235, 235), 3, cv2.LINE_AA)
+    for i, ch in enumerate('ABCD'):
+        cv2.putText(image, ch, (70, 420 + i * 70), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 3, cv2.LINE_AA)
+    crop, output = cache / 'frozen-text.rgb', cache / 'frozen-text-out.rgb'
+    crop.write_bytes(np.ascontiguousarray(image).tobytes()); output.unlink(missing_ok=True)
+    job = json.dumps(dict(id=1, op='clean', input=str(crop), output=str(output), width=width, height=height))
+    run = subprocess.run([str(executable), 'inpaint', '--model', str(model), '--detector', str(detector), '--threads', '2'], input=job + '\n', env=env, capture_output=True, text=True, encoding='utf-8', timeout=900)
+    replies = [json.loads(line) for line in run.stdout.splitlines() if line.strip().startswith('{')]
+    if run.returncode != 0 or [r.get('type') for r in replies] != ['ready', 'done'] or not replies[0].get('detector'):
+        raise RuntimeError('Frozen text self-test failed: ' + run.stdout[-800:] + run.stderr[-1500:])
+    done = replies[1]
+    if len(done.get('boxes') or []) < 2 or done.get('residue'):
+        raise RuntimeError(f'Frozen text self-test did not find / remove the text: {done}')
+    if len(output.read_bytes()) != width * height * 3:
+        raise RuntimeError('Frozen text self-test returned a wrong size')
+    print('Frozen text self-test:', len(done['boxes']), 'text boxes removed in', done.get('seconds'), 's', flush=True)
+
+
 def main():
     target, build_id = sys.argv[1:3]
     out = ROOT / 'build/video-structure' / target
@@ -78,6 +104,7 @@ def main():
     invalid=subprocess.run([str(executable),'verify-shots','--input',str(review_frames),'--timeline',str(timeline),'--predictions',str(test),'--threshold','0.6','--output',str(invalid_output)],env=env,capture_output=True,text=True)
     if invalid.returncode==0 or invalid_output.exists() or 'Invalid verification timeline or prediction scores' not in invalid.stderr:raise RuntimeError('Frozen shot verifier accepted an unapproved threshold')
     lama_self_test(executable,env,models/'big-lama-fp16.pt',cache)
+    text_self_test(executable,env,models/'big-lama-fp16.pt',models/'text_detection_cn_ppocrv3_2023may.onnx',cache)
     license_dir=out/'licenses';license_dir.mkdir(exist_ok=True)
     for name in ['torch','sherpa-onnx','numpy','opencv-python-headless','sympy','networkx','filelock','fsspec','jinja2','markupsafe','mpmath']:
         dist=importlib.metadata.distribution(name)
@@ -89,6 +116,6 @@ def main():
     shutil.copyfile(ROOT/'src/native/video-structure/vendor/TRANSNET-LICENSE.txt',license_dir/'TransNetV2-MIT.txt')
     shutil.copyfile(ROOT/'src/native/video-structure/vendor/LAMA-LICENSE.txt',license_dir/'LaMa-Apache-2.0.txt')
     files={str(p.relative_to(out)).replace(os.sep,'/'):digest(p) for p in out.rglob('*') if p.is_file() and p.name not in ['bundle.json']}
-    (out/'bundle.json').write_text(json.dumps(dict(platform=target,minimumMacOS=minimum_macos,buildId=build_id,offlineSelfTest=True,shotVerifierSelfTest=True,punctuationSelfTest=True,lamaSelfTest=True,versions=versions,sha256=files),indent=2),encoding='utf-8')
+    (out/'bundle.json').write_text(json.dumps(dict(platform=target,minimumMacOS=minimum_macos,buildId=build_id,offlineSelfTest=True,shotVerifierSelfTest=True,punctuationSelfTest=True,lamaSelfTest=True,textSelfTest=True,versions=versions,sha256=files),indent=2),encoding='utf-8')
     print('Offline structured runtime verified:',out)
 if __name__=='__main__':main()

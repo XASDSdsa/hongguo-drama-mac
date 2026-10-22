@@ -12,19 +12,24 @@ const readline = require('node:readline');
 
 // 权重存成 float16（安装包小一半），加载时转回 float32 算
 const MODEL_FILE = 'big-lama-fp16.pt';
+// 找字：PP-OCRv3 文字检测（OpenCV 官方模型库里的版本），整张画面哪里有字都找
+const DETECTOR_FILE = 'text_detection_cn_ppocrv3_2023may.onnx';
 
 // 任务行只用 ASCII（中文路径写成 \uXXXX）：Windows 上不管控制台是什么编码都不会读错
 const asciiJson = (value) =>
   JSON.stringify(value).replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 /**
- * command / prefix：运行时程序（打包后是 structure-worker，开发时是 python + runner.py）；model：big-lama.pt。
- * 返回 { start(), inpaint({ data, width, height, mask, signal }) → { data, seconds }, close() }。
+ * command / prefix：运行时程序（打包后是 structure-worker，开发时是 python + runner.py）；model：big-lama；
+ * detector：文字检测模型（有它才能 clean：整张关键帧找字 + 补字 + 再查一遍）。
+ * 返回 { start(), inpaint({ data, width, height, mask, signal }) → { data, seconds },
+ *        clean({ data, width, height, signal }) → { data, boxes, rejected, residue, seconds }, canClean, close() }。
  */
 function createLamaWorker({
   command,
   prefix = [],
   model,
+  detector = null,
   threads = 4,
   idleMs = 60_000,
   startTimeoutMs = 180_000,
@@ -68,7 +73,8 @@ function createLamaWorker({
     if (!command || !fs.existsSync(command)) return Promise.reject(new Error('内置分析运行时没装上（需要完整安装包）'));
     if (!model || !fs.existsSync(model)) return Promise.reject(new Error('LaMa 补图模型没装上（需要完整安装包）'));
     tail = '';
-    const proc = spawn(command, [...prefix, 'inpaint', '--model', model, '--threads', String(threads)], {
+    const extra = detector && fs.existsSync(detector) ? ['--detector', detector] : [];
+    const proc = spawn(command, [...prefix, 'inpaint', '--model', model, '--threads', String(threads), ...extra], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
@@ -129,9 +135,9 @@ function createLamaWorker({
     idleTimer.unref?.();
   }
 
-  async function run({ data, width, height, mask, signal }) {
+  async function run({ data, width, height, mask, signal, op = 'inpaint', options = null }) {
     signal?.throwIfAborted?.();
-    if (data.length !== width * height * 3 || mask.length !== width * height) throw new Error('补图输入尺寸不对');
+    if (data.length !== width * height * 3 || (op === 'inpaint' && mask.length !== width * height)) throw new Error('补图输入尺寸不对');
     clearTimeout(idleTimer);
     await start();
     tempDir ||= await fsp.mkdtemp(path.join(tempRoot, 'hongguo-lama-'));
@@ -139,7 +145,7 @@ function createLamaWorker({
     const files = ['in.rgb', 'mask.bin', 'out.rgb'].map((name) => path.join(tempDir, `${id}-${name}`));
     try {
       await fsp.writeFile(files[0], data);
-      await fsp.writeFile(files[1], mask);
+      if (op === 'inpaint') await fsp.writeFile(files[1], mask);
       const reply = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
@@ -163,10 +169,22 @@ function createLamaWorker({
           pending.delete(id);
           return entry.reject(new Error('LaMa 补图进程不在了'));
         }
-        child.stdin.write(`${asciiJson({ id, input: files[0], mask: files[1], output: files[2], width, height })}\n`);
+        const job =
+          op === 'clean'
+            ? { id, op, input: files[0], output: files[2], width, height, options: options || undefined }
+            : { id, input: files[0], mask: files[1], output: files[2], width, height };
+        child.stdin.write(`${asciiJson(job)}\n`);
       });
       const out = await fsp.readFile(files[2]);
       if (out.length !== width * height * 3) throw new Error('LaMa 补图输出尺寸不对');
+      if (op === 'clean')
+        return {
+          data: out,
+          boxes: Array.isArray(reply.boxes) ? reply.boxes : [],
+          rejected: Array.isArray(reply.rejected) ? reply.rejected : [],
+          residue: reply.residue === true,
+          seconds: Number(reply.seconds) || 0,
+        };
       return { data: out, seconds: Number(reply.seconds) || 0 };
     } finally {
       await Promise.all(files.map((file) => fsp.rm(file, { force: true }).catch(() => {})));
@@ -182,6 +200,16 @@ function createLamaWorker({
       queue = result.catch(() => {});
       return result;
     },
+    /** 整张关键帧：哪里有字都找出来补掉，补完再查一遍。也排队。 */
+    clean(job) {
+      const result = queue.then(() => run({ ...job, op: 'clean' }));
+      queue = result.catch(() => {});
+      return result;
+    },
+    /** 装了文字检测模型才能整张找字（老的运行时没有，就只能按字幕横带补）。 */
+    get canClean() {
+      return !!detector && fs.existsSync(detector);
+    },
     close() {
       clearTimeout(idleTimer);
       failAll(new Error('LaMa 补图已关闭'));
@@ -195,4 +223,4 @@ function createLamaWorker({
   };
 }
 
-module.exports = { MODEL_FILE, createLamaWorker, asciiJson };
+module.exports = { MODEL_FILE, DETECTOR_FILE, createLamaWorker, asciiJson };

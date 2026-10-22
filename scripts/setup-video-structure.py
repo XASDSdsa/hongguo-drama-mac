@@ -81,6 +81,9 @@ def main():
         raise RuntimeError('Pinned model checksum mismatch: big-lama.pt')
     if not (models / LAMA_FILE).exists():
         half_lama(lama_source, models / LAMA_FILE)
+    # PP-OCRv3 text detector (PaddleOCR, Apache-2.0) as published in the OpenCV model zoo for cv2.dnn: storyboard
+    # keyframes are scanned for text anywhere in the frame (subtitles wherever they sit, name cards, vertical captions).
+    fetch('https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/text_detection_ppocr/text_detection_cn_ppocrv3_2023may.onnx', models / 'text_detection_cn_ppocrv3_2023may.onnx')
     model_name = 'sherpa-onnx-paraformer-zh-small-2024-03-09'
     if not (models / model_name / 'model.int8.onnx').exists():
         archive(f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{model_name}.tar.bz2', models)
@@ -117,6 +120,7 @@ def main():
         punctuation_name + '/model.int8.onnx': '65a3fb9f5ad7bfb96bf69e0dc4481df97f6ee60513c1d94ce981ba6effd524b1',
         'UVR-MDX-NET-Inst_HQ_3.onnx': 'c207b845d51dc1303c543503f6f5a8b596da5d7de97bead77b3e16ec38e8d5b3',
         'silero_vad.onnx': '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
+        'text_detection_cn_ppocrv3_2023may.onnx': '03f550c6b406fda8bf54bd8327815f6c7e2edd98cea02348c93d879254366587',
         model_name + '/model.int8.onnx': '3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec',
         model_name + '/tokens.txt': '4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa',
     }

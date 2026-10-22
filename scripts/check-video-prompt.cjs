@@ -435,6 +435,31 @@ async function main() {
       assert.equal(broke, 1, '出过一次错就不再试');
       assert.equal(midway.filter(([l, m]) => l === 'warn' && /LaMa 出错了（LaMa 补图进程退出了（1）），这一集剩下的关键帧用本机补图/.test(m)).length, 1, '只报一次');
       assert.ok(has(midway, 'info', /去掉了（本机补图/), '出错那张和后面的都用本机补图补上');
+
+      // 有文字检测模型：不找字幕横带，每张关键帧整张画面找字（按原片尺寸），找到的补掉；日志每张都写
+      let scans = 0;
+      const sizesSeen = new Set();
+      const whole = await run('text', {
+        canClean: true,
+        start: async () => {},
+        inpaint: async () => assert.fail('整张找字不用横带补'),
+        clean: async ({ data, width, height }) => {
+          scans += 1;
+          sizesSeen.add(`${width}x${height}`);
+          const hit = scans % 2 === 1;
+          return { data, boxes: hit ? [[10, 10, 80, 40, 'k=3']] : [], rejected: scans === 2 ? ['no thin strokes'] : [], residue: scans === 5, seconds: 1.2 };
+        },
+      });
+      assert.equal(scans, 8, '四宫格 2 个分镜 × 4 张，每张都整张找');
+      assert.deepEqual([...sizesSeen], ['540x960'], '按原片尺寸找（不先缩小）');
+      assert.ok(has(whole, 'info', /每张关键帧整张画面找字（字幕在哪都算，人名条、竖排字、片头字也算），按原片 540×960 找和补/));
+      assert.ok(!whole.some(([, m]) => /字幕在画面/.test(m)), '不再找固定的字幕横带');
+      assert.equal(whole.filter(([l, m]) => l === 'info' && /关键帧去字 \d\/8：镜\d .+ 找到 1 处字，去掉了（LaMa，1\.2 秒）/.test(m)).length, 3);
+      assert.ok(has(whole, 'warn', /关键帧去字 \d\/8：镜\d .+ 找到 1 处字，补过了，但还检测到字/), '补完还有字：说出来');
+      assert.ok(has(whole, 'info', /整张找过，没有字（另有 1 处像字的地方核对后不是字，没动）/));
+      assert.ok(has(whole, 'warn', /8 张整张找过，4 张有字、已去掉；1 处像字的地方核对后不是字，没动；1 张补完还检测到字/));
+      const wholePage = await fsp.readFile(path.join(dir, 'out-text', '第6集.html'), 'utf8').catch(() => fsp.readFile(path.join(dir, 'out-text', '网页和提示词', '第6集.html'), 'utf8'));
+      assert.equal((wholePage.match(/✓ 无字幕水印/g) || []).length, 1, '补完还有字的那个分镜不写「无字幕水印」，另一个写');
     }
   }
 

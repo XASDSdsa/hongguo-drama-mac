@@ -11,7 +11,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { createLamaWorker, asciiJson, MODEL_FILE } = require('../src/native/video-prompt/lama');
+const { createLamaWorker, asciiJson, MODEL_FILE, DETECTOR_FILE } = require('../src/native/video-prompt/lama');
 const sc = require('../src/native/video-prompt/subtitle-clean');
 const structureRuntime = require('../src/native/video-structure/runtime');
 
@@ -23,7 +23,8 @@ const counter = process.env.FAKE_COUNTER;
 fs.appendFileSync(counter, 'start\n');
 const args = process.argv.slice(2);
 if (args[0] !== 'inpaint' || !args.includes('--model') || !args.includes('--threads')) process.exit(3);
-setTimeout(() => console.log(JSON.stringify({ type: 'ready', threads: Number(args[args.indexOf('--threads') + 1]) })), mode === 'slow' ? 400 : 20);
+const detector = args.includes('--detector') ? args[args.indexOf('--detector') + 1] : '';
+setTimeout(() => console.log(JSON.stringify({ type: 'ready', threads: Number(args[args.indexOf('--threads') + 1]), detector: !!detector })), mode === 'slow' ? 400 : 20);
 let n = 0;
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   n += 1;
@@ -33,6 +34,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (mode === 'crash' && n === 2) process.exit(7);
   if (mode === 'error' && n === 1) return console.log(JSON.stringify({ type: 'error', id: job.id, message: 'RuntimeError: bad crop' }));
   const data = fs.readFileSync(job.input);
+  if (job.op === 'clean') {
+    if (!detector) return console.log(JSON.stringify({ type: 'error', id: job.id, message: 'ValueError: text detector not loaded' }));
+    data.fill(77, 0, 3); // 「补」了第一个像素
+    fs.writeFileSync(job.output, data);
+    return console.log(JSON.stringify({ type: 'done', id: job.id, boxes: [[0, 0, 1, 1, 'k=3']], rejected: ['no thin strokes'], residue: false, seconds: 0.5 }));
+  }
   const mask = fs.readFileSync(job.mask);
   for (let p = 0; p < mask.length; p++) if (mask[p]) data.fill(128, p * 3, p * 3 + 3);
   setTimeout(() => {
@@ -138,6 +145,27 @@ async function partA(dir) {
     worker.close();
   }
 
+  // 整张找字（clean）：有文字检测模型才传 --detector、才能 clean；结果带回找到的字和没动的
+  {
+    const detector = path.join(dir, 'text_detection_cn_ppocrv3_2023may.onnx');
+    fs.writeFileSync(detector, 'not a real model');
+    const worker = make('ok', { detector });
+    assert.equal(worker.canClean, true);
+    assert.equal((await worker.start()).detector, true, '传了 --detector');
+    const frame = Buffer.alloc(4 * 2 * 3, 10);
+    const result = await worker.clean({ data: frame, width: 4, height: 2 });
+    assert.equal(result.data[0], 77);
+    assert.deepEqual(result.boxes, [[0, 0, 1, 1, 'k=3']]);
+    assert.deepEqual(result.rejected, ['no thin strokes']);
+    assert.equal(result.residue, false);
+    assert.equal(result.seconds, 0.5);
+    worker.close();
+    const without = make('ok');
+    assert.equal(without.canClean, false, '没有文字检测模型：不能整张找字');
+    await assert.rejects(without.clean({ data: frame, width: 4, height: 2 }), /text detector not loaded/);
+    without.close();
+  }
+
   // 没装运行时 / 模型：说清楚
   await assert.rejects(createLamaWorker({ command: path.join(dir, 'nope'), model }).start(), /内置分析运行时没装上（需要完整安装包）/);
   await assert.rejects(createLamaWorker({ command: process.execPath, prefix: [fake], model: path.join(dir, 'nope.pt') }).start(), /LaMa 补图模型没装上（需要完整安装包）/);
@@ -147,10 +175,11 @@ async function partA(dir) {
 /** 真的 LaMa：打包机上用内置运行时；本机开发可以给 LAMA_PYTHON（装了 torch 的 python）和 LAMA_MODEL。 */
 function realLama() {
   if (process.env.LAMA_PYTHON && process.env.LAMA_MODEL)
-    return { command: process.env.LAMA_PYTHON, prefix: [path.join(__dirname, '../src/native/video-structure/runner.py')], model: process.env.LAMA_MODEL };
+    return { command: process.env.LAMA_PYTHON, prefix: [path.join(__dirname, '../src/native/video-structure/runner.py')], model: process.env.LAMA_MODEL, detector: process.env.LAMA_DETECTOR || null };
   const rt = structureRuntime.runtime({});
   const model = path.join(rt.models, MODEL_FILE);
-  if (rt.command && fs.existsSync(model)) return { command: rt.command, prefix: rt.prefix, model };
+  const detector = path.join(rt.models, DETECTOR_FILE);
+  if (rt.command && fs.existsSync(model)) return { command: rt.command, prefix: rt.prefix, model, detector: fs.existsSync(detector) ? detector : null };
   return null;
 }
 
@@ -196,6 +225,38 @@ async function partB(dir) {
       worker.close();
     }
   }
+  // 整张找字：1080×1920 的样图（底部一行浅灰宋体字幕、左边竖排人名条和一列小字、右上角角标、眼睛里的高光）
+  if (real.detector) {
+    const ffmpegBin = process.env.FFMPEG_PATH || 'ffmpeg';
+    const W = 1080;
+    const H = 1920;
+    const raw = execFileSync(ffmpegBin, ['-v', 'error', '-i', path.join(__dirname, 'fixtures', 'keyframe-text.png'), '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { maxBuffer: 64 * 1024 * 1024 });
+    assert.equal(raw.length, W * H * 3);
+    const worker = createLamaWorker({ ...real, threads: Math.max(2, Math.min(8, os.cpus().length - 1)) });
+    try {
+      assert.equal(worker.canClean, true);
+      const result = await worker.clean({ data: Buffer.from(raw), width: W, height: H });
+      const at = (buf, x, y) => [...buf.subarray((y * W + x) * 3, (y * W + x) * 3 + 3)];
+      const changed = (x0, y0, x1, y1) => {
+        let n = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (Math.abs(raw[(y * W + x) * 3] - result.data[(y * W + x) * 3]) > 24) n += 1;
+        return n;
+      };
+      const inside = (x, y) => result.boxes.some(([x0, y0, x1, y1]) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
+      assert.ok(inside(540, 1420), `底部字幕找到了（${JSON.stringify(result.boxes)}）`);
+      assert.ok(inside(175, 870), '竖排人名条找到了');
+      assert.ok(inside(110, 980), '人名条旁边那列小字找到了');
+      assert.ok(inside(900, 110), '右上角角标找到了');
+      assert.ok(!inside(548, 808), '眼睛里的高光不是字');
+      assert.deepEqual(at(result.data, 548, 808), at(raw, 548, 808), '眼睛高光一个像素都不动');
+      assert.equal(changed(400, 300, 700, 600), 0, '没字的地方不动');
+      assert.ok(changed(320, 1390, 760, 1450) > 2000, '字幕那一行补过了');
+      assert.equal(result.residue, false, '补完再查没有字');
+      console.log(`PASS real text scan: ${result.boxes.length} pieces of text found anywhere in a 1080p frame and removed (${result.seconds.toFixed(1)} s); the eye highlight is left alone`);
+    } finally {
+      worker.close();
+    }
+  } else if (process.env.REQUIRE_LAMA === '1') throw new Error('REQUIRE_LAMA=1 但内置运行时里没有文字检测模型');
   if (!font) return console.log('SKIP real LaMa subtitle video (no CJK font for drawtext)');
   // 软件自带的 FFmpeg 不一定带 drawtext（Mac 那份就没有）：造不了带字幕的视频就只做上面那项
   if (!/\bdrawtext\b/.test(spawnSync(ffmpeg, ['-hide_banner', '-filters'], { encoding: 'utf8' }).stdout || ''))
@@ -252,7 +313,8 @@ async function partB(dir) {
         }
       assert.equal(outsideChanged, 0, '框外一个像素都没动');
       console.log(`  ${time}s：框里和原片平均差 ${(inside / n).toFixed(1)}（补之前 ${(before / n).toFixed(1)}），LaMa ${result.seconds.toFixed(2)} 秒`);
-      assert.ok(inside / n < 12 && inside / n < (before / n) * 0.35, '补出来接近没字幕的原片');
+      // （老办法：整行框比字大一圈，框里和原片比起来会多出一点差别）
+      assert.ok(inside / n < 12 && inside / n < (before / n) * 0.45, '补出来接近没字幕的原片');
     }
     console.log(`PASS real LaMa removes subtitles (${(total / 3).toFixed(2)} s per keyframe)`);
   } finally {

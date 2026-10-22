@@ -226,7 +226,11 @@ def inpaint_server(args):
     model = torch.jit.load(args.model, map_location='cpu').eval().float()
     with torch.no_grad():
         model(torch.zeros(1, 3, 64, 64), torch.zeros(1, 1, 64, 64))
-    print(json.dumps(dict(type='ready', torch=torch.__version__, threads=torch.get_num_threads())), flush=True)
+    finder = None
+    if args.detector:
+        from textclean import TextFinder
+        finder = TextFinder(args.detector)
+    print(json.dumps(dict(type='ready', torch=torch.__version__, threads=torch.get_num_threads(), detector=bool(finder))), flush=True)
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -238,10 +242,21 @@ def inpaint_server(args):
             if width < 8 or height < 8 or width > 4096 or height > 4096:
                 raise ValueError('bad crop size')
             image = np.frombuffer(Path(job['input']).read_bytes(), np.uint8)
-            mask = np.frombuffer(Path(job['mask']).read_bytes(), np.uint8)
+            mask = np.frombuffer(Path(job['mask']).read_bytes(), np.uint8) if job.get('mask') else np.zeros(width * height, np.uint8)
             if image.size != width * height * 3 or mask.size != width * height:
                 raise ValueError('crop or mask size mismatch')
             image = image.reshape(height, width, 3)
+            if job.get('op') == 'clean':
+                # Whole keyframe: find the text anywhere, repaint it, look again. No mask from the caller.
+                if finder is None:
+                    raise ValueError('text detector not loaded')
+                from textclean import clean_frame
+                cleaned, info = clean_frame(finder, model, torch, image, job.get('options'))
+                temporary = job['output'] + '.tmp'
+                Path(temporary).write_bytes(np.ascontiguousarray(cleaned).tobytes())
+                os.replace(temporary, job['output'])
+                print(json.dumps(dict(type='done', id=job.get('id'), **info), ensure_ascii=False), flush=True)
+                continue
             mask = (mask.reshape(height, width) > 0).astype(np.float32)
             pad_h, pad_w = (8 - height % 8) % 8, (8 - width % 8) % 8
             padded = np.pad(image, ((0, pad_h), (0, pad_w), (0, 0)), mode='symmetric')
@@ -275,6 +290,7 @@ def main():
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--min-silence', type=float, default=0.5)
     parser.add_argument('--min-speech', type=float, default=0.25)
+    parser.add_argument('--detector')
     args = parser.parse_args()
     if args.module == 'inpaint':
         inpaint_server(args)

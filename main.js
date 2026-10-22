@@ -56,7 +56,7 @@ const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
 const jianyingLocator = require('./src/native/jianying-location');
 const { deriveEpisodePrompts } = require('./src/native/video-prompt/derive');
-const { createLamaWorker, MODEL_FILE: LAMA_MODEL_FILE } = require('./src/native/video-prompt/lama');
+const { createLamaWorker, MODEL_FILE: LAMA_MODEL_FILE, DETECTOR_FILE: TEXT_DETECTOR_FILE } = require('./src/native/video-prompt/lama');
 const structureRuntime = require('./src/native/video-structure/runtime');
 const storyboardSnapshot = require('./src/native/video-prompt/snapshot');
 const storyboardHtmlTools = require('./src/native/video-prompt/html');
@@ -4870,7 +4870,13 @@ function getLamaWorker() {
   const key = [rt.command, ...rt.prefix, threads].join('\u0000');
   if (!lamaWorker || lamaWorkerKey !== key) {
     lamaWorker?.close();
-    lamaWorker = createLamaWorker({ command: rt.command, prefix: rt.prefix, model: path.join(rt.models, LAMA_MODEL_FILE), threads });
+    lamaWorker = createLamaWorker({
+      command: rt.command,
+      prefix: rt.prefix,
+      model: path.join(rt.models, LAMA_MODEL_FILE),
+      detector: path.join(rt.models, TEXT_DETECTOR_FILE),
+      threads,
+    });
     lamaWorkerKey = key;
   }
   return lamaWorker;

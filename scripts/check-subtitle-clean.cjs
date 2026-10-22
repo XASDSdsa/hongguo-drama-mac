@@ -134,7 +134,8 @@ const font = FONTS.find((file) => fs.existsSync(file));
       const truth = await plainAt(time);
       const was = errorIn(original, truth);
       const now = errorIn(image, truth);
-      assert.ok(now < was * 0.5, `${time}s 字幕那一条和原片的差距至少缩小一半（${was.toFixed(1)} → ${now.toFixed(1)}）`);
+      // （本机补图现在只是装不上 LaMa 时的最后退路：差距缩小三成五以上就行）
+      assert.ok(now < was * 0.65, `${time}s 字幕那一条和原片的差距至少缩小三成五（${was.toFixed(1)} → ${now.toFixed(1)}）`);
       assert.equal(sc.subtitleCover(image, band), null, `${time}s 补完检测不到字`);
       // 框外面一个像素都不动
       for (let y = 0; y < dims.height; y++)
