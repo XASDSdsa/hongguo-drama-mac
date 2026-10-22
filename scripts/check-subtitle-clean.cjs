@@ -181,6 +181,62 @@ const font = FONTS.find((file) => fs.existsSync(file));
     assert.deepEqual(sc.workSize({ width: 1080, height: 1920 }), { width: 640, height: 1138 });
     assert.deepEqual(sc.workSize({ width: 360, height: 640 }), { width: 360, height: 640 });
     console.log('PASS keyframe subtitle cleaning: band found, scene text untouched; subtitle line filled from real texture around it, nothing outside the box changed, no subtitle left');
+
+    // 4) 浅色细字、只带一点淡阴影、没有黑描边的字幕（宋体这类），最后一个字压在差不多颜色的亮块上：
+    //    也要找到字幕横带；整行框要把字幕的每一个像素都盖住（包括亮块上认不出的那个字），没台词的时刻不碰
+    const serif = [
+      '/usr/share/fonts/opentype/noto/NotoSerifCJK-Medium.ttc',
+      '/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc',
+      'C:\\Windows\\Fonts\\simsun.ttc',
+      '/System/Library/Fonts/Supplemental/Songti.ttc',
+    ].find((file) => fs.existsSync(file)) || font;
+    const serifArg = serif.replace(/\\/g, '/').replace(/:/g, '\\:');
+    const lightLines = [
+      ['穿回原时空一次', 0.5, 2.4],
+      ['不限次数', 3.1, 4.6],
+      ['你想回到哪一天', 5.4, 7.2],
+    ];
+    const lightScene = [
+      `gradients=s=${W}x${H}:speed=0.01:n=4:c0=0x8a9a94:c1=0x6c7570:c2=0xa8b8b0:c3=0x7d8a84:seed=11,format=yuv420p,noise=alls=4:allf=t:all_seed=5`,
+      // 右边一块和字差不多亮的「玻璃」：压在它上面的字几乎认不出来
+      `drawbox=x=${Math.round(W * 0.6)}:y=${Math.round(H * 0.6)}:w=${Math.round(W * 0.4)}:h=${Math.round(H * 0.3)}:color=0xCFDCD6@1:t=fill`,
+    ].join(',');
+    const lightSubs = lightLines
+      .map(([text, from, to]) => `drawtext=fontfile='${serifArg}':text='${text}':fontsize=32:fontcolor=0xDADADA:shadowcolor=0x000000@0.35:shadowx=2:shadowy=2:x=(w-tw)/2:y=h*0.735:enable='between(t,${from},${to})'`)
+      .join(',');
+    const lightPlain = path.join(dir, 'light-plain.mp4');
+    const lightSubbed = path.join(dir, 'light-subbed.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', lightScene, '-t', '8', '-r', '25', ...encode, lightPlain]);
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-i', lightPlain, '-vf', lightSubs, ...encode, lightSubbed]);
+    const lightUtterances = lightLines.map(([text, start, end]) => ({ start, end, text }));
+    const lightRows = [{ start: 0, end: 4, dialogue: ['a'] }, { start: 4, end: 8, dialogue: ['b'] }];
+    const light = await sc.detectEpisodeBand({ ffmpeg, inputPath: lightSubbed, rows: lightRows, utterances: lightUtterances, size });
+    assert.ok(light.band, '浅色无描边的字幕也要找到');
+    assert.ok(Math.abs(light.band.y0 / light.band.frameHeight - 0.75) < 0.05, `横带在 75% 高度附近（${(light.band.y0 / light.band.frameHeight).toFixed(3)}）`);
+    for (const time of [1.4, 3.8, 6.3]) {
+      const original = await sc.grabRaw(ffmpeg, lightSubbed, time, light.dims);
+      const truth = await sc.grabRaw(ffmpeg, lightPlain, time, light.dims);
+      const cover = sc.subtitleCover(original, light.band);
+      assert.ok(cover, `${time}s 认出有字幕`);
+      const lb = sc.lineBox(cover, light.dims.width, light.dims.height, original);
+      // 字幕真正在哪：和没字幕的原片逐像素比，差得多的就是字（和阴影）
+      let text = 0;
+      let inside = 0;
+      for (let p = 0; p < light.dims.width * light.dims.height; p++) {
+        let diff = 0;
+        for (let c = 0; c < 3; c++) diff += Math.abs(original.data[p * 3 + c] - truth.data[p * 3 + c]);
+        if (diff / 3 < 18) continue;
+        text += 1;
+        if (lb.box[p]) inside += 1;
+      }
+      assert.ok(text > 200, `${time}s 字幕有足够的像素（${text}）`);
+      assert.ok(inside / text >= 0.99, `${time}s 整行框盖住了字幕的每个字（${inside}/${text}，框 x ${lb.x0}–${lb.x1}）`);
+    }
+    for (const time of [2.75, 5.0, 7.6]) {
+      const original = await sc.grabRaw(ffmpeg, lightSubbed, time, light.dims);
+      assert.equal(sc.subtitleCover(original, light.band), null, `${time}s 没台词，不补`);
+    }
+    console.log('PASS light serif subtitles without an outline are found; the line box covers every character, even one on a bright patch');
   } finally {
     await fsp.rm(dir, { recursive: true, force: true });
   }

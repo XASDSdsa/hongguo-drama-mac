@@ -75,7 +75,8 @@ function isBright(r, g, b) {
 }
 
 /**
- * y0–y1 行里「亮色、而且旁边 radius 像素内有深色描边」的像素。
+ * y0–y1 行里像字幕笔画的像素：亮色，而且旁边 radius 像素内有明显更暗的像素——
+ * 黑色描边（白字黑边）或者只是比它暗一截的阴影 / 背景（浅色细字、只带一点淡阴影、没有描边的字幕）都算。
  * 返回 { mask, runs }：mask 是整图大小的 0/1，runs[y] 是这一行有多少段连续的候选像素（字的笔画多，段数就多）。
  */
 function textCandidates(image, y0, y1, radius) {
@@ -83,28 +84,27 @@ function textCandidates(image, y0, y1, radius) {
   const top = Math.max(0, y0 - radius);
   const bottom = Math.min(H - 1, y1 + radius);
   const rows = bottom - top + 1;
-  // 深色像素，先横向、再纵向做最大值滤波 = 「附近有深色」
-  const dark = new Uint8Array(W * rows);
-  for (let y = top; y <= bottom; y++) {
+  const luma = new Float32Array(W * rows);
+  for (let y = top; y <= bottom; y++)
     for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 3;
-      const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      if (luma <= 90) dark[(y - top) * W + x] = 1;
+      luma[(y - top) * W + x] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
     }
-  }
-  const nearH = new Uint8Array(W * rows);
-  for (let r = 0; r < rows; r++) {
-    let last = -1e9;
+  // radius 内最暗的像素（先横向、再纵向取最小值）
+  const minH = new Float32Array(W * rows);
+  for (let r = 0; r < rows; r++)
     for (let x = 0; x < W; x++) {
-      if (dark[r * W + x]) last = x;
-      if (x - last <= radius) nearH[r * W + x] = 1;
+      let low = 255;
+      for (let k = Math.max(0, x - radius); k <= Math.min(W - 1, x + radius); k++) low = Math.min(low, luma[r * W + k]);
+      minH[r * W + x] = low;
     }
-    last = 1e9;
-    for (let x = W - 1; x >= 0; x--) {
-      if (dark[r * W + x]) last = x;
-      if (last - x <= radius) nearH[r * W + x] = 1;
+  const nearest = new Float32Array(W * rows);
+  for (let r = 0; r < rows; r++)
+    for (let x = 0; x < W; x++) {
+      let low = 255;
+      for (let k = Math.max(0, r - radius); k <= Math.min(rows - 1, r + radius); k++) low = Math.min(low, minH[k * W + x]);
+      nearest[r * W + x] = low;
     }
-  }
   // 亮像素的积分图：字幕是「细亮笔画 + 深色描边」，周围一圈亮的占不到六成；
   // 浅底深字（屏幕、招牌、白纸上的字）周围大多是亮的，不算。
   const bright = new Uint8Array(W * rows);
@@ -139,12 +139,10 @@ function textCandidates(image, y0, y1, radius) {
     for (let x = 0; x < W; x++) {
       let hit = false;
       if (bright[r0 * W + x]) {
-        let near = 0;
-        for (let dy = -radius; dy <= radius && !near; dy++) {
-          const r = r0 + dy;
-          if (r >= 0 && r < rows && nearH[r * W + x]) near = 1;
-        }
-        hit = !!near && brightShare(x, r0) < 0.6;
+        // 旁边有黑描边，或者旁边比它暗了一大截（浅色无描边的字）
+        const low = nearest[r0 * W + x];
+        const near = low <= 90 || luma[r0 * W + x] - low >= STROKE_CONTRAST;
+        hit = near && brightShare(x, r0) < 0.6;
       }
       if (hit) {
         mask[y * W + x] = 1;
@@ -157,6 +155,7 @@ function textCandidates(image, y0, y1, radius) {
 }
 
 const MIN_RUNS = 6; // 一行里至少这么多段笔画才算「有字」
+const STROKE_CONTRAST = 55; // 没有黑描边时，笔画要比旁边最暗的地方亮这么多（0–255）
 const radiusFor = (width) => Math.max(2, Math.round((width / WORK_WIDTH) * 3));
 
 /**
@@ -221,7 +220,7 @@ function findSubtitleBand(spokenImages, silentImages = []) {
     return pairs ? total / pairs : 0;
   };
   // 字幕是左右居中的：说话组各帧这条里字的左右中点都在画面正中附近（画面里的字多半靠一边）
-  const centered = (group) => {
+  const centerOf = (group) => {
     const centers = [];
     for (const { mask } of spokenScans) {
       let minX = W;
@@ -234,9 +233,13 @@ function findSubtitleBand(spokenImages, silentImages = []) {
           }
       if (maxX - minX > W * 0.08) centers.push((minX + maxX) / 2 / W);
     }
-    if (!centers.length) return false;
+    if (!centers.length) return null;
     centers.sort((a, b) => a - b);
-    return Math.abs(centers[Math.floor(centers.length / 2)] - 0.5) <= 0.08;
+    return centers[Math.floor(centers.length / 2)];
+  };
+  const centered = (group) => {
+    const center = centerOf(group);
+    return center != null && Math.abs(center - 0.5) <= 0.08;
   };
   const candidates = groups
     .filter((group) => {
@@ -289,7 +292,8 @@ function dilate(mask, W, H, radius) {
 function subtitleCover(image, band) {
   const { width: W, height: H } = image;
   const scale = H / (band.frameHeight || H);
-  const pad = Math.round(band.height * scale * 0.3) + 2;
+  // 细笔画（宋体这类）字的上半截横笔多、竖笔少，找横带时常常只框到字的下半截：上下多看大半个横带高
+  const pad = Math.round(band.height * scale * 0.8) + 2;
   const y0 = Math.max(0, Math.round(band.y0 * scale) - pad);
   const y1 = Math.min(H - 1, Math.round(band.y1 * scale) + pad);
   const radius = radiusFor(W);
@@ -310,14 +314,66 @@ function subtitleCover(image, band) {
     refRows += 1;
   }
   if (refRows && bandRuns / (y1 - y0 + 1) < (refRuns / refRows) * 2.5 + 1) return null;
-  // 只留有字的那几行附近、字的左右范围里的候选，别的亮边（白衣服、窗户）不碰
-  const rowTop = Math.max(y0, textRows[0] - radius);
-  const rowBottom = Math.min(y1, textRows.at(-1) + radius);
+  // 字的上下：从笔画多的那几行往上、往下接着找，字的左右范围里还有笔画（隔一两行也算）就算字的一部分
+  // （字头的横、字脚的点）。只看字的左右范围里：旁边一条竖着的边（衣服边、门框）每一行都有，不算。
+  const core = [];
+  for (const y of textRows) for (let x = 0; x < W; x++) if (mask[y * W + x]) core.push(x);
+  core.sort((a, b) => a - b);
+  const coreLeft = core[Math.floor(core.length * 0.1)];
+  const coreRight = core[Math.floor(core.length * 0.9)];
+  const strokesAt = (y) => {
+    let count = 0;
+    for (let x = coreLeft; x <= coreRight; x++) if (mask[y * W + x] && !mask[y * W + x - 1]) count += 1;
+    return count;
+  };
+  // 背景本来每行就有几笔（横带上面那条对照里的中位数）：比它多两笔以上才算字；最多往外长到笔画多那几行高度的六成
+  const background = [];
+  for (let y = refTop; y < y0 - radius; y++) background.push(strokesAt(y));
+  background.sort((a, b) => a - b);
+  const need = Math.max(2, (background.length ? background[Math.floor(background.length / 2)] : 0) + 2);
+  const reachY = Math.max(radius * 2, Math.round((textRows.at(-1) - textRows[0] + 1) * 0.6));
+  let rowTop = textRows[0];
+  let rowBottom = textRows.at(-1);
+  const anyAt = (y) => y >= Math.max(y0, textRows[0] - reachY) && y <= Math.min(y1, textRows.at(-1) + reachY) && strokesAt(y) >= need;
+  while (anyAt(rowTop - 1) || anyAt(rowTop - 2) || anyAt(rowTop - 3)) rowTop -= anyAt(rowTop - 1) ? 1 : anyAt(rowTop - 2) ? 2 : 3;
+  while (anyAt(rowBottom + 1) || anyAt(rowBottom + 2) || anyAt(rowBottom + 3)) rowBottom += anyAt(rowBottom + 1) ? 1 : anyAt(rowBottom + 2) ? 2 : 3;
+  rowTop = Math.max(y0, rowTop - radius);
+  rowBottom = Math.min(y1, rowBottom + radius);
+  const lineHeight = rowBottom - rowTop + 1;
+  // 字的左右：先取笔画最集中的一段，再往两边接：隔着不到大半个字宽还有笔画，就是同一行的下一个字（头尾的字不会漏掉）
   const xs = [];
   for (const y of textRows) for (let x = 0; x < W; x++) if (mask[y * W + x]) xs.push(x);
   xs.sort((a, b) => a - b);
-  const xLeft = Math.max(0, xs[Math.floor(xs.length * 0.01)] - radius * 2);
-  const xRight = Math.min(W - 1, xs[Math.floor(xs.length * 0.99)] + radius * 2);
+  const column = new Uint8Array(W);
+  for (let y = rowTop; y <= rowBottom; y++) for (let x = 0; x < W; x++) if (mask[y * W + x]) column[x] = 1;
+  const reach = Math.max(radius * 3, Math.round(lineHeight * 0.7));
+  let xLeft = xs[Math.floor(xs.length * 0.1)];
+  let xRight = xs[Math.floor(xs.length * 0.9)];
+  for (let grown = true; grown; ) {
+    grown = false;
+    for (let x = xLeft - 1; x >= Math.max(0, xLeft - reach); x--)
+      if (column[x]) {
+        xLeft = x;
+        grown = true;
+        break;
+      }
+  }
+  for (let grown = true; grown; ) {
+    grown = false;
+    for (let x = xRight + 1; x <= Math.min(W - 1, xRight + reach); x++)
+      if (column[x]) {
+        xRight = x;
+        grown = true;
+        break;
+      }
+  }
+  // 字幕左右居中：一头的字压在差不多颜色的亮背景上（浅色字压在白衣服、亮光上）认不出来时，
+  // 按另一头的位置对称地补上，免得头尾的字留下来
+  // （按画面正中对称：量出来的中线会被认不出的那头带偏，字幕本来就是按画面正中排的）
+  const middle = Math.round(W / 2);
+  const half = Math.max(middle - xLeft, xRight - middle);
+  xLeft = Math.max(0, middle - half - radius * 2);
+  xRight = Math.min(W - 1, middle + half + radius * 2);
   const kept = new Uint8Array(W * H);
   for (let y = rowTop; y <= rowBottom; y++)
     for (let x = xLeft; x <= xRight; x++) if (mask[y * W + x]) kept[y * W + x] = 1;
@@ -329,8 +385,10 @@ function subtitleCover(image, band) {
       const p = y * W + x;
       if (!kept[p] && zone[p] && isBright(data[p * 3], data[p * 3 + 1], data[p * 3 + 2])) kept[p] = 1;
     }
-  // 描边和外面那圈发虚的暗边也要盖住
-  return dilate(kept, W, H, radius + 2);
+  // 描边和外面那圈发虚的暗边也要盖住；extent 是整行字的范围（含对称补上、认不出的头尾），整行框按它定
+  const cover = dilate(kept, W, H, radius + 2);
+  cover.extent = { x0: xLeft, x1: xRight, y0: rowTop, y1: rowBottom };
+  return cover;
 }
 
 // ===== 本地补图：用旁边真实的纹理块补（不是从四周抹匀）=====
@@ -542,6 +600,10 @@ function lineBox(cover, W, H, image = null) {
       if (y > maxY) maxY = y;
     }
   if (maxX < 0) return null;
+  if (cover.extent) {
+    minX = Math.min(minX, cover.extent.x0);
+    maxX = Math.max(maxX, cover.extent.x1);
+  }
   const lineHeight = maxY - minY + 1;
   const padY = 4 + Math.round(lineHeight * 0.2);
   const padX = Math.round(Math.min(lineHeight, 60) * 0.5);

@@ -324,6 +324,10 @@ async function deriveEpisodePrompts({
           if (subtitle.band) {
             const { y0, y1, frameHeight } = subtitle.band;
             log('info', `关键帧去字幕：字幕在画面 ${Math.round((y0 / frameHeight) * 100)}%–${Math.round((y1 / frameHeight) * 100)}% 高度，四宫格关键帧和视频首帧都去掉字幕`);
+          } else if (transcript?.utterances?.some((u) => String(u.text || '').trim())) {
+            // 有台词却没找到字幕：可能是认不出的字幕样式，不能说「无字幕水印」
+            log('warn', '关键帧去字幕：这一集有台词，但没认出烧在画面里的字幕，关键帧照常截（画面校验里不写「无字幕水印」）');
+            for (const row of rows) frames[row.no].subtitleFree = false;
           } else log('info', '关键帧去字幕：没找到烧在画面里的字幕，关键帧照常截');
         } catch (error) {
           if (signal?.aborted) throw error;
