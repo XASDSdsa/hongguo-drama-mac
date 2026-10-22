@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { createLamaWorker, asciiJson, MODEL_FILE } = require('../src/native/video-prompt/lama');
 const sc = require('../src/native/video-prompt/subtitle-clean');
 const structureRuntime = require('../src/native/video-structure/runtime');
@@ -197,6 +197,9 @@ async function partB(dir) {
     }
   }
   if (!font) return console.log('SKIP real LaMa subtitle video (no CJK font for drawtext)');
+  // 软件自带的 FFmpeg 不一定带 drawtext（Mac 那份就没有）：造不了带字幕的视频就只做上面那项
+  if (!/\bdrawtext\b/.test(spawnSync(ffmpeg, ['-hide_banner', '-filters'], { encoding: 'utf8' }).stdout || ''))
+    return console.log('SKIP real LaMa subtitle video (this FFmpeg has no drawtext)');
   const fontArg = font.replace(/\\/g, '/').replace(/:/g, '\\:');
   const W = 540;
   const H = 960;

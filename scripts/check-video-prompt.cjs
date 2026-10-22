@@ -374,7 +374,8 @@ async function main() {
       '/System/Library/Fonts/PingFang.ttc',
       '/System/Library/Fonts/STHeiti Medium.ttc',
     ].find((file) => fs.existsSync(file));
-    if (!font) console.log('SKIP LaMa wiring: no CJK font for drawtext');
+    const drawtext = /\bdrawtext\b/.test(require('node:child_process').spawnSync(ffmpeg, ['-hide_banner', '-filters'], { encoding: 'utf8' }).stdout || '');
+    if (!font || !drawtext) console.log('SKIP LaMa wiring: no CJK font / drawtext');
     else {
       const fontArg = font.replace(/\\/g, '/').replace(/:/g, '\\:');
       const said = [['你终于来了，我等你很久了', 1, 2.6], ['这件事你必须给我一个交代', 3.2, 5.4], ['不然我们之间就到此为止', 6, 7.6]];
