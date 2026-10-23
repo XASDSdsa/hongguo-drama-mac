@@ -5620,7 +5620,7 @@ async function cachedEpisodeShape(ffprobePath, file) {
 }
 
 /** 这部剧的成本：去重文件夹里每一集按自己的时长和清晰度算。 */
-async function costSummary(dir, actorFee) {
+async function costSummary(dir, actorFee, draws) {
   const ffprobePath = resolveFfmpeg('ffprobe');
   if (!ffprobePath) throw new Error('未找到 ffprobe，读不出每集时长');
   const files = libraryDedupOutputs(dir);
@@ -5634,7 +5634,9 @@ async function costSummary(dir, actorFee) {
   };
   await Promise.all(Array.from({ length: Math.min(4, files.length) }, worker));
   const unreadable = files.filter((_, index) => !shapes[index]).map((file) => path.basename(file));
-  const cost = costPricing.seriesCost(shapes.filter(Boolean), { actorFee });
+  // 抽卡次数按文件名定：同一集不管排第几，次数都一样
+  const list = shapes.map((shape, index) => shape && { ...shape, name: path.basename(files[index]) }).filter(Boolean);
+  const cost = costPricing.seriesCost(list, { actorFee, draws: costPricing.normalizeDraws(draws || costPricing.DEFAULT_DRAWS) });
   return {
     unreadable,
     cost,
@@ -5659,7 +5661,7 @@ ipcMain.handle('library-cost-report', async (_event, payload = {}) => {
   try {
     const dir = storyboardDir(payload);
     if (!dir) return { success: false, error: '这不是剧文件夹' };
-    const summary = await costSummary(dir, payload.actorFee);
+    const summary = await costSummary(dir, payload.actorFee, payload.draws);
     const stat = await fsp.stat(costReportFile(dir)).catch(() => null);
     const { model, mode, checked, source, fps } = costPricing.PRICE;
     return {
@@ -5707,7 +5709,7 @@ ipcMain.handle('library-cost-report-make', async (_event, payload = {}) => {
     if (!costTemplateInfo().ready) return { success: false, error: '还没选报告模板' };
     const title = String(payload.title || '').trim() || seriesLayout.readNewInfo(dir).title;
     if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在这里填' };
-    const summary = await costSummary(dir, payload.actorFee);
+    const summary = await costSummary(dir, payload.actorFee, payload.draws);
     if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
     if (summary.unreadable.length)
       return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };

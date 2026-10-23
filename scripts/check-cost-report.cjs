@@ -59,6 +59,51 @@ const root = path.join(__dirname, '..');
   assert.ok(Math.abs(withActors.total - (expected + 1000)) < 1e-6);
   assert.ok(Math.abs(withActors.actorShare - 1000 / (expected + 1000)) < 1e-9);
   assert.equal(pricing.seriesCost(list, { actorFee: -5 }).actorFee, 0, '负数当 0');
+  assert.deepEqual(cost.draws.counts, { 1: 3 }, '没传抽卡：每集一次');
+
+  // 抽卡：每集随机 1～3 次，费用乘次数；同一个种子结果一样（按文件名定，和顺序无关），换种子才变
+  const sixty = Array.from({ length: 60 }, (_, i) => ({
+    name: `第${i + 1}集.mp4`,
+    seconds: 98,
+    width: 1080,
+    height: 1920,
+  }));
+  const once = pricing.episodeCost(sixty[0]).yuan;
+  const drawn = pricing.seriesCost(sixty, { draws: { min: 1, max: 3, seed: 'abc' } });
+  const times = sixty.map((item) => pricing.drawCount('abc', item.name, 1, 3));
+  assert.ok(times.every((n) => n >= 1 && n <= 3));
+  assert.ok(new Set(times).size === 3, '1、2、3 次都有');
+  assert.ok(
+    Math.abs(drawn.generation - once * times.reduce((a, b) => a + b, 0)) < 1e-6,
+    '费用 = 每集一次的价 × 抽卡次数',
+  );
+  assert.equal(
+    drawn.draws.total,
+    times.reduce((a, b) => a + b, 0),
+  );
+  assert.equal(
+    Object.values(drawn.draws.counts).reduce((a, b) => a + b, 0),
+    60,
+  );
+  assert.equal(drawn.tiers[0].generations, drawn.draws.total);
+  assert.equal(drawn.tokens, Math.round(pricing.episodeCost(sixty[0]).tokens * drawn.draws.total));
+  assert.equal(
+    pricing.seriesCost([...sixty].reverse(), { draws: { min: 1, max: 3, seed: 'abc' } }).generation.toFixed(6),
+    drawn.generation.toFixed(6),
+    '顺序不影响',
+  );
+  assert.notDeepEqual(
+    pricing.seriesCost(sixty, { draws: { min: 1, max: 3, seed: 'xyz' } }).draws.counts,
+    drawn.draws.counts,
+    '换种子重新随机',
+  );
+  assert.ok(
+    Math.abs(pricing.seriesCost(sixty, { draws: { min: 2, max: 2, seed: 'abc' } }).generation - once * 120) < 1e-6,
+    '固定 2 次',
+  );
+  assert.deepEqual(pricing.normalizeDraws({ min: 5, max: 2 }), { min: 5, max: 5, seed: '' }, '最多不小于最少');
+  assert.deepEqual(pricing.normalizeDraws({ min: 0, max: 99 }), { min: 1, max: 10, seed: '' }, '1～10 次');
+  assert.deepEqual(pricing.DEFAULT_DRAWS, { min: 1, max: 3 });
   // 写法
   assert.equal(pricing.formatEpisodes(60, 5874.4), '60集，共97分54秒');
   assert.equal(pricing.formatEpisodes(1, 42), '1集，共42秒');
@@ -224,6 +269,17 @@ const template = writeZip([
   const report = detail.indexOf('<CostReport');
   assert.ok(storyboard > 0 && report > storyboard, '成本配置报告在分镜工程图下面');
   assert.match(detail, /<b className="proc-title">成本配置报告<\/b>/);
-  assert.match(detail, /不含抽卡/);
+  assert.match(detail, /抽一次收一次全价/);
+  assert.match(detail, /libraryCostReport\?\.\(\{ dir, actorFee: fee, draws \}\)/, '算成本带上抽卡设置');
+  assert.match(
+    detail,
+    /libraryCostReportMake\?\.\(\{ dir, title: title\.trim\(\), actorFee: fee, draws \}\)/,
+    '生成报告用同一组抽卡次数',
+  );
+  assert.match(detail, /useState\(String\(stored\.drawMin \?\? 1\)\)/, '默认最少 1 次');
+  assert.match(detail, /useState\(String\(stored\.drawMax \?\? 3\)\)/, '默认最多 3 次');
+  assert.match(detail, /drawSeed/, '随机种子记住');
+  assert.match(main, /costSummary\(dir, payload\.actorFee, payload\.draws\)/);
+  assert.match(main, /name: path\.basename\(files\[index\]\)/, '抽卡次数按文件名定');
   console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');
 }

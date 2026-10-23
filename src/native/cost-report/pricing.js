@@ -5,7 +5,8 @@
 //     480p、720p 70 元 / 百万 token；1080p 77 元 / 百万 token
 //   token 用量 = 视频时长 × 宽 × 高 × 帧率 / 1024（输出 24 帧）
 //   官方示例（5 秒 16:9）：480p 3.36 元、720p 7.56 元、1080p 18.71 元——下面的算法和它一致（见 check-cost-report.cjs）
-// 暂不算抽卡（同一个镜头生成好几次挑一个）：每秒只按生成一次算。
+// 抽卡（同一集生成好几次挑一个，每次都收全价）：每集随机抽 min～max 次（默认 1～3 次），费用乘上次数。
+// 随机数由「种子 + 文件名」算出来：同一部剧不换种子，每次打开、每次生成报告都是同一组次数；换种子才重新随机。
 
 const PRICE = {
   model: 'doubao-seedance-2.5',
@@ -34,17 +35,50 @@ function episodeCost({ seconds, width, height }) {
   return { tier: tier.name, tokens, yuan: (tokens * tier.yuanPerMillion) / 1e6 };
 }
 
+// 抽卡次数能设的范围
+const DRAW_LIMIT = 10;
+const DEFAULT_DRAWS = { min: 1, max: 3 };
+
+/** 抽卡次数范围：整数，1～10，min 不大于 max。 */
+function normalizeDraws(draws = {}) {
+  const clamp = (value, fallback) => Math.min(DRAW_LIMIT, Math.max(1, Math.round(Number(value)) || fallback));
+  const min = clamp(draws.min, DEFAULT_DRAWS.min);
+  const max = Math.max(min, clamp(draws.max, DEFAULT_DRAWS.max));
+  return { min, max, seed: String(draws.seed ?? '') };
+}
+
+/** 一集抽几次：由种子和这一集的文件名定（FNV-1a 哈希），在 min～max 之间均匀分布。 */
+function drawCount(seed, key, min, max) {
+  let hash = 0x811c9dc5;
+  for (const ch of `${seed}|${key}`) {
+    hash ^= ch.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return min + (hash % (max - min + 1));
+}
+
 /**
- * 整部剧：每一集按自己的时长和清晰度算，加起来。actorFee 是演员片酬（元，AI 生成没有演员就是 0），算进总投资。
- * 返回 { episodes, seconds, tokens, generation, actorFee, total, actorShare, tiers: [{ name, episodes, seconds, tokens, yuan, yuanPerMillion }] }。
+ * 整部剧：每一集按自己的时长和清晰度算，乘上这一集的抽卡次数，加起来。actorFee 是演员片酬（元，AI 生成没有演员就是 0），
+ * 算进总投资。list 里每一集 { name, seconds, width, height }（name 用来定抽卡次数）。
+ * 返回 { episodes, seconds, tokens, generation, actorFee, total, actorShare, draws: { min, max, seed, total, average, counts },
+ *        tiers: [{ name, width, height, episodes, seconds, generations, tokens, yuan, yuanPerMillion }] }。
  */
-function seriesCost(list, { actorFee = 0 } = {}) {
+function seriesCost(list, { actorFee = 0, draws } = {}) {
+  // 没传 draws（旧调用）就是不抽卡：每集一次
+  const range = draws ? normalizeDraws(draws) : { min: 1, max: 1, seed: '' };
   const tiers = new Map();
+  const counts = {};
   let seconds = 0;
   let tokens = 0;
   let generation = 0;
-  for (const item of list) {
-    const cost = episodeCost(item);
+  let generations = 0;
+  for (const [index, item] of list.entries()) {
+    const once = episodeCost(item);
+    const times =
+      range.min === range.max ? range.min : drawCount(range.seed, item.name ?? String(index), range.min, range.max);
+    counts[times] = (counts[times] || 0) + 1;
+    generations += times;
+    const cost = { tier: once.tier, tokens: once.tokens * times, yuan: once.yuan * times };
     seconds += Number(item.seconds) || 0;
     tokens += cost.tokens;
     generation += cost.yuan;
@@ -55,12 +89,14 @@ function seriesCost(list, { actorFee = 0 } = {}) {
       height: tier.height,
       episodes: 0,
       seconds: 0,
+      generations: 0,
       tokens: 0,
       yuan: 0,
       yuanPerMillion: tier.yuanPerMillion,
     };
     row.episodes += 1;
     row.seconds += Number(item.seconds) || 0;
+    row.generations += times;
     row.tokens += cost.tokens;
     row.yuan += cost.yuan;
     tiers.set(cost.tier, row);
@@ -75,6 +111,7 @@ function seriesCost(list, { actorFee = 0 } = {}) {
     actorFee: fee,
     total,
     actorShare: total > 0 ? fee / total : 0,
+    draws: { ...range, total: generations, average: list.length ? generations / list.length : 0, counts },
     tiers: PRICE.tiers.map((tier) => tiers.get(tier.name)).filter(Boolean),
   };
 }
@@ -99,6 +136,10 @@ const LIMITS = { totalYuan: 1_000_000, actorShare: 0.4 };
 module.exports = {
   PRICE,
   LIMITS,
+  DRAW_LIMIT,
+  DEFAULT_DRAWS,
+  normalizeDraws,
+  drawCount,
   tierFor,
   episodeCost,
   seriesCost,

@@ -259,8 +259,9 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, st
   );
 }
 
-// 成本配置报告里每部剧自己填的：演员片酬、改过的剧名（按剧文件夹记住）
+// 成本配置报告里每部剧自己填的：演员片酬、改过的剧名、抽卡次数范围和随机种子（按剧文件夹记住）
 const COST_KEY = 'cost-report-v1';
+const newSeed = () => Math.random().toString(36).slice(2, 10);
 
 /**
  * 成本配置报告：总投资额按 Seedance 2.5 官方价格和去重成品的时长、清晰度算（明细都列出来，能对账），
@@ -270,18 +271,24 @@ function CostReport({ dir, refreshKey }) {
   const stored = useRef(readJson(COST_KEY)[dir] || {}).current;
   const [actorFee, setActorFee] = useState(stored.actorFee ?? '0');
   const [title, setTitle] = useState(stored.title ?? '');
+  // 抽卡：每集随机抽 drawMin～drawMax 次；种子记住，同一部剧每次打开都是同一组次数，点「重新随机」才换
+  const [drawMin, setDrawMin] = useState(String(stored.drawMin ?? 1));
+  const [drawMax, setDrawMax] = useState(String(stored.drawMax ?? 3));
+  const [drawSeed, setDrawSeed] = useState(() => stored.drawSeed || newSeed());
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
   const fee = Math.max(0, Number(actorFee) || 0);
+  const draws = { min: Number(drawMin) || 1, max: Number(drawMax) || 1, seed: drawSeed };
+  const drawsKey = `${draws.min}-${draws.max}-${draws.seed}`;
 
   useEffect(() => {
     let alive = true;
     const timer = setTimeout(() => {
       window.electronAPI
-        .libraryCostReport?.({ dir, actorFee: fee })
+        .libraryCostReport?.({ dir, actorFee: fee, draws })
         .then((result) => {
           if (!alive) return;
           if (result?.success) {
@@ -295,11 +302,12 @@ function CostReport({ dir, refreshKey }) {
       alive = false;
       clearTimeout(timer);
     };
-  }, [dir, fee, refreshKey, reload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir, fee, drawsKey, refreshKey, reload]);
 
   useEffect(() => {
-    writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: { actorFee, title } });
-  }, [dir, actorFee, title]);
+    writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: { actorFee, title, drawMin, drawMax, drawSeed } });
+  }, [dir, actorFee, title, drawMin, drawMax, drawSeed]);
 
   const pickTemplate = async () => {
     setError('');
@@ -314,7 +322,7 @@ function CostReport({ dir, refreshKey }) {
     setMessage('');
     setBusy('make');
     const result = await window.electronAPI
-      .libraryCostReportMake?.({ dir, title: title.trim(), actorFee: fee })
+      .libraryCostReportMake?.({ dir, title: title.trim(), actorFee: fee, draws })
       .catch(() => null);
     setBusy('');
     if (result?.success) setMessage(`已生成：剧集文件夹里的「${result.name}」`);
@@ -352,14 +360,57 @@ function CostReport({ dir, refreshKey }) {
               <span className="cost-sub cost-over">有 {info.unreadable.length} 集读不出时长，没算进去</span>
             )}
           </dd>
+          <dt>抽卡次数</dt>
+          <dd className="cost-inline">
+            每集随机
+            <input
+              className="input-field cost-input cost-draw"
+              type="number"
+              min="1"
+              max="10"
+              value={drawMin}
+              onChange={(e) => setDrawMin(e.target.value)}
+              aria-label="每集最少抽几次"
+            />
+            ～
+            <input
+              className="input-field cost-input cost-draw"
+              type="number"
+              min="1"
+              max="10"
+              value={drawMax}
+              onChange={(e) => setDrawMax(e.target.value)}
+              aria-label="每集最多抽几次"
+            />
+            次
+            {cost.draws.min !== cost.draws.max && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setDrawSeed(newSeed())}
+                title="给每一集重新随机抽卡次数"
+              >
+                重新随机
+              </button>
+            )}
+            {cost.episodes > 0 && (
+              <span className="cost-sub cost-line">
+                {Object.entries(cost.draws.counts)
+                  .sort(([a], [b]) => Number(a) - Number(b))
+                  .map(([times, count]) => `抽 ${times} 次 ${count} 集`)
+                  .join('，')}
+                ；共生成 {cost.draws.total} 次，平均每集 {cost.draws.average.toFixed(1)} 次，每次都按全价算
+              </span>
+            )}
+          </dd>
           <dt>AI 生成费用</dt>
           <dd>
             {info.text.generation}
             {cost.tiers.map((row) => (
               <span key={row.name} className="cost-sub">
                 {row.name}（按 {row.width}×{row.height}、{info.price.fps} 帧）{row.episodes} 集 ·{' '}
-                {Math.round(row.seconds)} 秒 · {Math.round(row.tokens).toLocaleString('zh-CN')} token ×{' '}
-                {row.yuanPerMillion} 元/百万 token
+                {Math.round(row.seconds)} 秒 × 抽卡共 {row.generations} 次 ·{' '}
+                {Math.round(row.tokens).toLocaleString('zh-CN')} token × {row.yuanPerMillion} 元/百万 token
               </span>
             ))}
           </dd>
@@ -394,7 +445,7 @@ function CostReport({ dir, refreshKey }) {
       {info && (
         <p className="cost-note">
           价格：火山方舟官方「模型价格」{info.price.model}，{info.price.mode}（{info.price.checked} 查）；token = 时长 ×
-          宽 × 高 × 帧率 ÷ 1024。每秒按生成一次算，不含抽卡。{' '}
+          宽 × 高 × 帧率 ÷ 1024；每集按抽卡次数乘上去（抽一次收一次全价）。{' '}
           <button
             type="button"
             className="cost-link"

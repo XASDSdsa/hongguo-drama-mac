@@ -767,6 +767,13 @@ button.lib-ep.is-missing:hover {
 .cost-fee {
   width: 120px;
 }
+.cost-draw {
+  width: 64px;
+}
+/* 抽卡分布单独一行 */
+.cost-line {
+  flex-basis: 100%;
+}
 .cost-sub {
   font-size: 12px;
   line-height: 1.5;
