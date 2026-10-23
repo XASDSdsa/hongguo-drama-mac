@@ -111,9 +111,10 @@ async function draw({ prompt, images = [], size, signal } = {}, base = {}) {
     prompt: text,
     size: normalizeSize(size),
     response_format: 'b64_json',
-    output_format: 'png',
     watermark: false,
   };
+  // output_format 是 5.0 才有的参数：自己填了老模型（4.x 等）就不传，免得接口不认
+  if (/seedream-5/i.test(model)) body.output_format = 'png';
   if (refs.length) body.image = refs.length === 1 ? refs[0] : refs;
   let response;
   try {

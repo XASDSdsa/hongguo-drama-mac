@@ -322,8 +322,9 @@ const template = writeZip([
   );
   assert.match(
     main,
-    /if \(costTask\?\.enabled && batch\.libraryDir && !batch\.cancelled\) runCostReportTask\(batch\.libraryDir, costTask\);/,
+    /if \(costTask\?\.enabled && batch\.libraryDir && !batch\.cancelled\) \{[\s\S]{0,400}runCostReportTask\(batch\.libraryDir, costTask\);/,
   );
+  assert.match(main, /报告按「去重」里现有的成品算/, '这一批有没做成的集要提醒');
   assert.match(main, /if \(side\?\.costReport\) await runCostReportTask\(dir, side\.costReport\);/);
   assert.match(main, /成本配置报告：已生成/);
   console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');

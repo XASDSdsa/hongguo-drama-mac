@@ -55,6 +55,8 @@ const { createVideoStructurePipeline } = require('./src/native/video-structure/p
 const { createJianyingDraft } = require('./src/native/video-structure/jianying');
 const arkVideo = require('./src/native/video-prompt/ark');
 const seedream = require('./src/native/seedream');
+// 文案改写、作图可选的几家服务（预填地址和模型，设置页也用这一份）和实际用哪家的算法
+const aiConfig = require('./src/native/ai-config');
 const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
 const jianyingLocator = require('./src/native/jianying-location');
@@ -287,6 +289,8 @@ function getDefaultSettings() {
     ai_image_model: openai.DEFAULT_IMAGE_MODEL,
     ai_text_model: openai.DEFAULT_TEXT_MODEL,
     // 文案改写（剧名、简介、海报画面描述）可以单独用 DeepSeek 等 OpenAI 兼容文本模型；Key 留空就和上面的文本模型共用。
+    // 文案改写用哪家：deepseek / doubao / qwen / kimi / glm / shared（和上面文本共用）/ custom
+    ai_copy_provider: 'deepseek',
     ai_copy_base_url: 'https://api.deepseek.com',
     ai_copy_api_key: '',
     ai_copy_model: 'deepseek-flash',
@@ -312,7 +316,8 @@ function getDefaultSettings() {
     ark_base_url: arkVideo.DEFAULT_BASE_URL,
     ark_api_key: '',
     ark_video_model: '',
-    // 海报 / 封面作图：火山方舟 Seedream 5.0 Pro（和视频理解共用上面的方舟地址和 Key）
+    // 海报 / 封面作图用哪家：seedream（火山方舟，和视频理解共用方舟地址和 Key）/ openai（OpenAI 兼容 images 接口）
+    image_provider: 'seedream',
     ark_image_model: seedream.DEFAULT_MODEL,
     video_prompt_max_seconds: 15,
     // 分镜工程图每集只分析前几个分镜（0 = 全部），后面的分镜占位、不问方舟。
@@ -448,6 +453,8 @@ function getCurrentSettings() {
   const jobs = merged.quchong_jobs;
   // 旧版本把文本模型默认存成了 gpt-5.6；没有改过的统一升到现在的默认值。
   if (merged.ai_text_model === 'gpt-5.6') merged.ai_text_model = openai.DEFAULT_TEXT_MODEL;
+  // 以前没有「文案改写用哪家」：按填过的地址认出来（认不出就是自定义）
+  if (!saved.ai_copy_provider) merged.ai_copy_provider = aiConfig.copyProviderFor(merged.ai_copy_base_url);
   // 以前的两个预设（「剧名 001」那种）没改过的，换成现在的「剧名 - 第1集」写法
   if (LEGACY_NAME_FORMATS[merged.name_format]) merged.name_format = LEGACY_NAME_FORMATS[merged.name_format];
   return {
@@ -2954,7 +2961,12 @@ function finishQuchongBatch(batch) {
   }
   // 勾选了「成本配置报告」：整批做完、成品都在「去重」里了再算（停止了就不算）
   const costTask = batch.sideTasks?.costReport;
-  if (costTask?.enabled && batch.libraryDir && !batch.cancelled) runCostReportTask(batch.libraryDir, costTask);
+  if (costTask?.enabled && batch.libraryDir && !batch.cancelled) {
+    const failedCount = batch.tasks.filter((task) => task.status === 'failed').length;
+    if (failedCount)
+      libLog(batch.libraryDir, 'warn', `成本配置报告：这一批有 ${failedCount} 集没做成，报告按「去重」里现有的成品算`, 'side');
+    runCostReportTask(batch.libraryDir, costTask);
+  }
   sendToRenderer('quchong-complete', {
     batchId: batch.id,
     cancelled: batch.cancelled,
@@ -3193,11 +3205,18 @@ function arkImageConfig(settings) {
     model: String(current.ark_image_model || '').trim() || seedream.DEFAULT_MODEL,
   };
 }
-// 文本（改写、看图检查）照旧走 openai.js；只有作图换成 Seedream
+// 作图用哪家：设置里选（默认 Seedream）；文本（改写、看图检查）照旧走 openai.js
+const useOpenAiImages = (settings) => aiConfig.usesOpenAiImages(settings || getCurrentSettings());
 const imageAi = {
   ...openai,
-  generateImage: (options, settings) => seedream.generateImage(options, arkImageConfig(settings)),
-  editImage: (options, settings) => seedream.editImage(options, arkImageConfig(settings)),
+  generateImage: (options, settings) =>
+    useOpenAiImages(settings)
+      ? openai.generateImage(options, settings || getCurrentSettings())
+      : seedream.generateImage(options, arkImageConfig(settings)),
+  editImage: (options, settings) =>
+    useOpenAiImages(settings)
+      ? openai.editImage(options, settings || getCurrentSettings())
+      : seedream.editImage(options, arkImageConfig(settings)),
 };
 
 // ===== 一键处理：独立菜单，自带任务状态，不读写其他页面的队列和记录 =====
@@ -3687,6 +3706,8 @@ function scanLibraryFolderRecords() {
       seriesId: entry ? String(entry.series_id) : '',
       totalEpisodes: entry ? Number(entry.total) || 0 : 0,
       linked: !!entry,
+      // 最后处理时间：成品 / 分镜工程图 / 新海报 / 成本报告里最新的，和最近一次去重记录比，取晚的
+      processedAt: Math.max(seriesLayout.lastProcessedAt(folder.path), Number(libraryDedupRecord(folder.path)?.at) || 0),
     };
   });
 }
@@ -4101,6 +4122,49 @@ ipcMain.handle('test-ai-text', async (_event, draft = {}) => {
       success: false,
       error: openai.redactError(error, settings.ai_api_key),
     };
+  }
+});
+
+/** 设置页「测试文案连接」：按表单里选的服务和填的值（不用先保存）发一句话；没单独设置就测上面的文本模型。 */
+ipcMain.handle('test-ai-copy', async (_event, draft = {}) => {
+  const settings = { ...getCurrentSettings(), ...draft };
+  const copy = copyWritingConfig(settings);
+  const config = copy || settings;
+  const started = Date.now();
+  try {
+    const normalized = openai.requireApiConfig(config);
+    await openai.chat([{ role: 'user', content: '只回复 OK' }], { timeout: 30000 }, config);
+    return { success: true, model: normalized.textModel, shared: !copy, elapsed: Date.now() - started };
+  } catch (error) {
+    let message = error;
+    for (const key of [config.ai_api_key, settings.ai_copy_api_key, settings.ark_api_key, settings.ai_api_key])
+      message = openai.redactError(message, key);
+    return { success: false, error: message };
+  }
+});
+
+/** 设置页「测试作图」：按表单里选的作图服务真画一张小图（会花一次作图的钱），看通不通、要多久。 */
+ipcMain.handle('test-ai-image', async (_event, draft = {}) => {
+  const settings = { ...getCurrentSettings(), ...draft };
+  const started = Date.now();
+  const openaiImages = useOpenAiImages(settings);
+  try {
+    const image = await imageAi.generateImage(
+      { prompt: '一只橘猫坐在木桌上，简单的浅色背景，柔和自然光', ...(openaiImages ? {} : { size: '1K' }) },
+      settings,
+    );
+    return {
+      success: true,
+      provider: openaiImages ? 'OpenAI 兼容接口' : '火山方舟 Seedream',
+      model: openaiImages ? openai.normalizeConfig(settings).imageModel : arkImageConfig(settings).model,
+      bytes: image.buffer.length,
+      elapsed: Date.now() - started,
+    };
+  } catch (error) {
+    let message = error;
+    for (const key of [settings.ark_api_key, settings.ai_image_api_key, settings.ai_api_key])
+      message = openai.redactError(message, key);
+    return { success: false, error: message };
   }
 });
 
@@ -8176,14 +8240,7 @@ function aiRedact(error) {
  * 否则 null（和通用文本模型共用）。检查海报底图要能看图，仍走通用文本模型。
  */
 function copyWritingConfig(settings) {
-  const apiKey = String(settings.ai_copy_api_key || '').trim();
-  if (!apiKey) return null;
-  return {
-    ...settings,
-    ai_base_url: String(settings.ai_copy_base_url || '').trim() || 'https://api.deepseek.com',
-    ai_api_key: apiKey,
-    ai_text_model: String(settings.ai_copy_model || '').trim() || 'deepseek-flash',
-  };
+  return aiConfig.copyWritingConfig(settings);
 }
 
 function aiInputFingerprint(filePath) {

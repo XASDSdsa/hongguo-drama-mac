@@ -119,6 +119,15 @@
   font-size: 11px;
   color: var(--text-secondary);
 }
+/* 剧卡片：最后处理时间（成品、分镜工程图、新海报、成本报告里最新的） */
+.lib-processed {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.lib-processed.is-none {
+  opacity: 0.7;
+}
 .lib-mask {
   position: fixed;
   inset: 0;

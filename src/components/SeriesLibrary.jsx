@@ -6,6 +6,7 @@ import SeriesDetail from './SeriesDetail';
 import TaskOverview, { overviewBusy } from './TaskOverview';
 import useLiveData from './useLiveData';
 import { clampPage, slicePage } from './pagination';
+import { processedText } from './processed-time.mjs';
 
 const VIEW_KEY = 'library-view';
 const LIST_PAGE_SIZES = [12, 24, 48, 96];
@@ -240,6 +241,12 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
               {folder.imported ? '导入的文件夹' : folder.source || '下载目录'}
               {folder.totalEpisodes > 0 && ` · 已下 ${folder.videoCount}/${folder.totalEpisodes}`}
               {folder.hasSynopsis && ' · 有简介'}
+            </div>
+            <div
+              className={`lib-processed ${folder.processedAt ? '' : 'is-none'}`}
+              title={folder.processedAt ? new Date(folder.processedAt).toLocaleString('zh-CN') : undefined}
+            >
+              {folder.processedAt ? `最后处理 ${processedText(folder.processedAt)}` : '还没处理'}
             </div>
           </div>
         ))}

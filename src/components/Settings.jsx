@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
+import AI_PROVIDERS from '../native/ai-providers.json';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 const FORMAT_PRESETS = [
@@ -55,6 +56,9 @@ function SettingsPage({ active = true }) {
   const [aiTesting, setAiTesting] = useState(false);
   const [copyTest, setCopyTest] = useState(null);
   const [copyTesting, setCopyTesting] = useState(false);
+  const [imageTest, setImageTest] = useState(null);
+  const [imageTesting, setImageTesting] = useState(false);
+  const [seedreamCustom, setSeedreamCustom] = useState(false); // Seedream 选了「其他（自己填模型名）」
   const [arkTest, setArkTest] = useState(null);
   const [arkTesting, setArkTesting] = useState(false);
   const [encoderCheck, setEncoderCheck] = useState(null); // { busy } | { result } | { error }
@@ -137,16 +141,21 @@ function SettingsPage({ active = true }) {
     }
   };
 
-  // 用表单里当前填的「文案改写」设置测一次（不需要先保存）。
+  // 用表单里当前选的「文案改写」服务和填的值测一次（不需要先保存）。
   const testCopy = async () => {
     setCopyTesting(true);
     setCopyTest(null);
     try {
       setCopyTest(
-        await window.electronAPI.testAiText({
-          ai_base_url: settings.ai_copy_base_url || 'https://api.deepseek.com',
-          ai_api_key: settings.ai_copy_api_key,
-          ai_text_model: settings.ai_copy_model || 'deepseek-flash',
+        await window.electronAPI.testAiCopy({
+          ai_copy_provider: copyProvider.id,
+          ai_copy_base_url: settings.ai_copy_base_url,
+          ai_copy_api_key: settings.ai_copy_api_key,
+          ai_copy_model: settings.ai_copy_model,
+          ai_base_url: settings.ai_base_url,
+          ai_api_key: settings.ai_api_key,
+          ai_text_model: settings.ai_text_model,
+          ark_api_key: settings.ark_api_key,
         }),
       );
     } catch (error) {
@@ -155,6 +164,53 @@ function SettingsPage({ active = true }) {
       setCopyTesting(false);
     }
   };
+
+  // 用表单里当前选的作图服务真画一张小图（会花一次作图的钱）。
+  const testImage = async () => {
+    setImageTesting(true);
+    setImageTest(null);
+    try {
+      setImageTest(
+        await window.electronAPI.testAiImage({
+          image_provider: imageProvider.id,
+          ark_base_url: settings.ark_base_url,
+          ark_api_key: settings.ark_api_key,
+          ark_image_model: settings.ark_image_model,
+          ai_image_model: settings.ai_image_model,
+          ai_image_base_url: settings.ai_image_base_url,
+          ai_image_api_key: settings.ai_image_api_key,
+          ai_base_url: settings.ai_base_url,
+          ai_api_key: settings.ai_api_key,
+        }),
+      );
+    } catch (error) {
+      setImageTest({ success: false, error: error.message || '测试失败' });
+    } finally {
+      setImageTesting(false);
+    }
+  };
+
+  // 文案改写 / 作图选的是哪家（没选过的按填过的地址认，认不出就是「其他」）
+  const form = settings || {};
+  const copyProvider =
+    AI_PROVIDERS.text.find((item) => item.id === form.ai_copy_provider) ||
+    AI_PROVIDERS.text.find(
+      (item) => item.baseUrl && item.baseUrl === String(form.ai_copy_base_url || '').replace(/\/+$/, ''),
+    ) ||
+    AI_PROVIDERS.text.find((item) => item.id === (form.ai_copy_base_url ? 'custom' : 'deepseek'));
+  // 换一家：地址和模型换成这家的预设（「其他」保留已经填的）
+  const chooseCopyProvider = (id) => {
+    const preset = AI_PROVIDERS.text.find((item) => item.id === id);
+    setSettings((previous) => ({
+      ...previous,
+      ai_copy_provider: id,
+      ...(preset?.baseUrl ? { ai_copy_base_url: preset.baseUrl, ai_copy_model: preset.model } : {}),
+    }));
+  };
+  const imageProvider = AI_PROVIDERS.image.find((item) => item.id === form.image_provider) || AI_PROVIDERS.image[0];
+  const seedreamModels = AI_PROVIDERS.image.find((item) => item.id === 'seedream').models;
+  const seedreamPreset =
+    !seedreamCustom && (!form.ark_image_model || seedreamModels.some((item) => item.id === form.ark_image_model));
 
   // 用表单里当前填的方舟设置，在这台电脑上发一段 3 秒的测试视频（不需要先保存）。
   const testArk = async () => {
@@ -201,6 +257,7 @@ function SettingsPage({ active = true }) {
         'ai_base_url',
         'ai_api_key',
         'ai_text_model',
+        'ai_copy_provider',
         'ai_copy_base_url',
         'ai_copy_api_key',
         'ai_copy_model',
@@ -208,6 +265,10 @@ function SettingsPage({ active = true }) {
         'ark_api_key',
         'ark_video_model',
         'ark_image_model',
+        'image_provider',
+        'ai_image_base_url',
+        'ai_image_api_key',
+        'ai_image_model',
         'video_prompt_max_seconds',
         'video_prompt_shot_limit',
         'structure_threads',
@@ -643,8 +704,8 @@ function SettingsPage({ active = true }) {
           <header className="settings-section-head">
             <h3>AI 发布素材</h3>
             <p>
-              改写剧名、简介用 OpenAI 兼容接口（中转地址通常以 <code>/v1</code> 结尾）。海报、封面用火山方舟的 Seedream
-              作图，方舟地址和 API Key 填在下面「视频反推提示词」里（和视频理解共用）。
+              改写剧名、简介、构思海报画面，和画海报、重绘封面用。文案和作图都能选用哪家服务；下面的文本模型还要负责看图检查海报（OpenAI
+              兼容接口，中转地址通常以 <code>/v1</code> 结尾）。
             </p>
           </header>
           <div className="ai-settings-grid">
@@ -673,7 +734,7 @@ function SettingsPage({ active = true }) {
               />
             </label>
             <label className="ai-field">
-              <span>文本模型（改写简介、剧名，检查画面）</span>
+              <span>文本模型（检查海报画面）</span>
               <input
                 className="input-field"
                 aria-label="AI 文本模型"
@@ -682,19 +743,7 @@ function SettingsPage({ active = true }) {
                 placeholder="gpt-6.1-sol"
                 spellCheck={false}
               />
-              <em>要能看图（检查海报底图有没有文字、人脸在哪）；不支持看图时会跳过检查。</em>
-            </label>
-            <label className="ai-field">
-              <span>海报模型（火山方舟 Seedream）</span>
-              <input
-                className="input-field"
-                aria-label="海报模型"
-                value={settings.ark_image_model || ''}
-                onChange={(e) => update('ark_image_model', e.target.value)}
-                placeholder="doubao-seedream-5-0-pro-260628"
-                spellCheck={false}
-              />
-              <em>画海报底图和重绘封面。默认 Seedream 5.0 Pro；用的是下面「视频反推提示词」里的方舟地址和 API Key。</em>
+              <em>要能看图（检查海报底图有没有文字、人脸在哪）；不支持看图时会跳过检查。文案改写选「和上面共用」时也用它。</em>
             </label>
           </div>
           <div className="preset-row">
@@ -708,59 +757,178 @@ function SettingsPage({ active = true }) {
             )}
           </div>
 
-          <h4 className="settings-subhead">文案改写（可选，如 DeepSeek）</h4>
-          <p className="settings-hint">
-            改写剧名、简介和构思海报画面用这里的模型；Key 留空就和上面的文本模型共用。
-            检查海报底图要能看图，仍用上面的文本模型。任何 OpenAI 兼容接口都可以。
-          </p>
+          <h4 className="settings-subhead">文案改写（剧名、简介、海报画面描述）</h4>
           <div className="ai-settings-grid">
-            <label className="ai-field ai-field-wide">
-              <span>接口地址</span>
-              <input
-                className="input-field"
-                aria-label="文案改写接口地址"
-                value={settings.ai_copy_base_url || ''}
-                onChange={(e) => update('ai_copy_base_url', e.target.value)}
-                placeholder="https://api.deepseek.com"
-                spellCheck={false}
-              />
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>API Key</span>
-              <input
-                className="input-field"
-                type="password"
-                autoComplete="off"
-                aria-label="文案改写 API Key"
-                value={settings.ai_copy_api_key || ''}
-                onChange={(e) => update('ai_copy_api_key', e.target.value)}
-                placeholder="留空 = 和上面的文本模型共用"
-                spellCheck={false}
-              />
-            </label>
             <label className="ai-field">
-              <span>模型</span>
-              <input
+              <span>用哪家</span>
+              <select
                 className="input-field"
-                aria-label="文案改写模型"
-                value={settings.ai_copy_model || ''}
-                onChange={(e) => update('ai_copy_model', e.target.value)}
-                placeholder="deepseek-flash"
-                spellCheck={false}
-              />
-              <em>DeepSeek 可填 deepseek-flash（快、便宜）或 deepseek-v4-pro。</em>
+                aria-label="文案改写用哪家"
+                value={copyProvider.id}
+                onChange={(e) => chooseCopyProvider(e.target.value)}
+              >
+                {AI_PROVIDERS.text.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <em>{copyProvider.hint}</em>
             </label>
+            {copyProvider.id !== 'shared' && (
+              <>
+                <label className="ai-field">
+                  <span>模型</span>
+                  <input
+                    className="input-field"
+                    aria-label="文案改写模型"
+                    value={settings.ai_copy_model || ''}
+                    onChange={(e) => update('ai_copy_model', e.target.value)}
+                    placeholder={copyProvider.model || '模型名'}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="ai-field ai-field-wide">
+                  <span>接口地址</span>
+                  <input
+                    className="input-field"
+                    aria-label="文案改写接口地址"
+                    value={settings.ai_copy_base_url || ''}
+                    onChange={(e) => update('ai_copy_base_url', e.target.value)}
+                    placeholder={copyProvider.baseUrl || 'https://…/v1'}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="ai-field ai-field-wide">
+                  <span>API Key</span>
+                  <input
+                    className="input-field"
+                    type="password"
+                    autoComplete="off"
+                    aria-label="文案改写 API Key"
+                    value={settings.ai_copy_api_key || ''}
+                    onChange={(e) => update('ai_copy_api_key', e.target.value)}
+                    placeholder={copyProvider.useArkKey ? '留空 = 用方舟 API Key' : '填这家服务的 Key；留空 = 用上面的文本模型'}
+                    spellCheck={false}
+                  />
+                </label>
+              </>
+            )}
           </div>
           <div className="preset-row">
-            <button className="btn btn-outline btn-sm" onClick={testCopy} disabled={copyTesting || !settings.ai_copy_api_key}>
+            <button className="btn btn-outline btn-sm" onClick={testCopy} disabled={copyTesting}>
               {copyTesting ? '正在测试…' : '测试文案连接'}
             </button>
             {copyTest && (
               <span className={`settings-hint ${copyTest.success ? '' : 'alert-error'}`} role="status">
-                {copyTest.success ? `连通正常（${copyTest.model}，${copyTest.elapsed} ms）` : copyTest.error}
+                {copyTest.success
+                  ? `连通正常（${copyTest.model}${copyTest.shared ? '，用的是上面的文本模型' : ''}，${copyTest.elapsed} ms）`
+                  : copyTest.error}
               </span>
             )}
           </div>
+
+          <h4 className="settings-subhead">作图（海报底图、重绘封面）</h4>
+          <div className="ai-settings-grid">
+            <label className="ai-field">
+              <span>用哪家</span>
+              <select
+                className="input-field"
+                aria-label="作图用哪家"
+                value={imageProvider.id}
+                onChange={(e) => update('image_provider', e.target.value)}
+              >
+                {AI_PROVIDERS.image.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <em>{imageProvider.hint}</em>
+            </label>
+            {imageProvider.id === 'seedream' ? (
+              <label className="ai-field">
+                <span>Seedream 模型</span>
+                <select
+                  className="input-field"
+                  aria-label="Seedream 模型"
+                  value={seedreamPreset ? settings.ark_image_model || imageProvider.models[0].id : 'custom'}
+                  onChange={(e) => {
+                    setSeedreamCustom(e.target.value === 'custom');
+                    if (e.target.value !== 'custom') update('ark_image_model', e.target.value);
+                  }}
+                >
+                  {imageProvider.models.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                  <option value="custom">其他（自己填模型名）</option>
+                </select>
+                {!seedreamPreset && (
+                  <input
+                    className="input-field"
+                    aria-label="Seedream 模型名"
+                    value={settings.ark_image_model || ''}
+                    onChange={(e) => update('ark_image_model', e.target.value)}
+                    placeholder="方舟控制台里的模型名或接入点 ID"
+                    spellCheck={false}
+                  />
+                )}
+              </label>
+            ) : (
+              <>
+                <label className="ai-field">
+                  <span>图片模型</span>
+                  <input
+                    className="input-field"
+                    aria-label="AI 图片模型"
+                    value={settings.ai_image_model || ''}
+                    onChange={(e) => update('ai_image_model', e.target.value)}
+                    placeholder={imageProvider.model}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="ai-field ai-field-wide">
+                  <span>作图中转地址（可选）</span>
+                  <input
+                    className="input-field"
+                    aria-label="AI 作图中转地址"
+                    value={settings.ai_image_base_url || ''}
+                    onChange={(e) => update('ai_image_base_url', e.target.value)}
+                    placeholder="留空 = 和上面的文本共用"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="ai-field ai-field-wide">
+                  <span>作图 API Key（可选）</span>
+                  <input
+                    className="input-field"
+                    type="password"
+                    autoComplete="off"
+                    aria-label="AI 作图 API Key"
+                    value={settings.ai_image_api_key || ''}
+                    onChange={(e) => update('ai_image_api_key', e.target.value)}
+                    placeholder="留空 = 和上面的文本共用"
+                    spellCheck={false}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+          <div className="preset-row">
+            <button className="btn btn-outline btn-sm" onClick={testImage} disabled={imageTesting}>
+              {imageTesting ? '正在画一张测试图…' : '测试作图'}
+            </button>
+            {imageTest && (
+              <span className={`settings-hint ${imageTest.success ? '' : 'alert-error'}`} role="status">
+                {imageTest.success
+                  ? `能画（${imageTest.provider} · ${imageTest.model}，${Math.round(imageTest.elapsed / 1000)} 秒）`
+                  : imageTest.error}
+              </span>
+            )}
+          </div>
+          <p className="settings-hint">「测试作图」会真画一张小图，花一次作图的钱。</p>
         </section>
 
         <section className="settings-section" aria-label="视频反推提示词">

@@ -238,6 +238,33 @@ function storyboardImageFor(htmlFile) {
 // ---------- 以前的结构自动挪过来 ----------
 
 /** 挪一个文件 / 文件夹：目标已经有了就不动（不覆盖）。返回是否挪了。 */
+/**
+ * 这部剧最后一次处理的时间（毫秒）：去重成品、分镜工程图、新剧集海报、成本配置报告里最新的修改时间；
+ * 一样都没有就是 0（还没处理过）。只看文件，不读视频。
+ */
+function lastProcessedAt(dir) {
+  let latest = 0;
+  const consider = (file) => {
+    try {
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (stat?.isFile() && stat.mtimeMs > latest) latest = stat.mtimeMs;
+    } catch (_) {}
+  };
+  const scan = (folder, test) => {
+    try {
+      for (const entry of fs.readdirSync(folder, { withFileTypes: true }))
+        if (entry.isFile() && !entry.name.startsWith('.') && test(entry.name)) consider(path.join(folder, entry.name));
+    } catch (_) {}
+  };
+  scan(path.join(dir, '去重'), (name) => /\.mp4$/i.test(name));
+  scan(path.join(dir, STORYBOARD_DIR), (name) => /\.(png|jpe?g|webp)$/i.test(name));
+  scan(storyboardPagesDir(dir), (name) => /\.html?$/i.test(name));
+  const poster = findNewPoster(dir);
+  if (poster) consider(poster);
+  consider(path.join(dir, COST_REPORT));
+  return Math.round(latest);
+}
+
 function move(from, to) {
   if (!fs.existsSync(from) || fs.existsSync(to)) return false;
   try {
@@ -313,5 +340,6 @@ module.exports = {
   storyboardPagesDir,
   storyboardHtml,
   storyboardImageFor,
+  lastProcessedAt,
   migrateLayout,
 };

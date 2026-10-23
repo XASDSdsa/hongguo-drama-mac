@@ -165,6 +165,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryJobCancel: (id) => ipcRenderer.invoke('library-job-cancel', id),
   libraryJobDismiss: (id) => ipcRenderer.invoke('library-job-dismiss', id),
   testAiText: (draft) => ipcRenderer.invoke('test-ai-text', draft),
+  testAiCopy: (draft) => ipcRenderer.invoke('test-ai-copy', draft),
+  testAiImage: (draft) => ipcRenderer.invoke('test-ai-image', draft),
   arkTest: (draft) => ipcRenderer.invoke('ark-test', draft),
   publishState: (dir) => ipcRenderer.invoke('publish-state', dir),
   publishGenerate: (payload) => ipcRenderer.invoke('publish-generate', payload),

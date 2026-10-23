@@ -52,6 +52,7 @@ async function main() {
     assert.equal(body.model, 'doubao-seedream-5-0-pro-260628', '没填模型用默认的 Seedream 5.0 Pro');
     assert.equal(body.size, '1664x2496');
     assert.equal(body.response_format, 'b64_json');
+    assert.equal(body.output_format, 'png');
     assert.equal(body.watermark, false, '不加「AI生成」水印（海报要叠标题）');
     assert.equal(body.image, `data:image/jpeg;base64,${jpeg.toString('base64')}`, '参考图转成小写格式的 data URI');
 
@@ -61,6 +62,7 @@ async function main() {
     const plain = JSON.parse(calls[0].init.body);
     assert.equal(plain.image, undefined);
     assert.equal(plain.model, 'my-model');
+    assert.equal(plain.output_format, undefined, '自己填的老模型不传 5.0 才有的 output_format');
     assert.equal(calls[0].url, 'https://ark.cn-beijing.volces.com/api/v3/images/generations', '没填地址用方舟默认地址');
 
     // 返回的是链接：马上下载（链接只保留 24 小时）
@@ -92,21 +94,25 @@ async function main() {
   }
   console.log('PASS Seedream: official request (model, data-URI reference, size, no watermark, base64), url download, clear errors without the key');
 
-  // main.js：海报（AI 发布素材）、一键处理的海报、封面重绘都走 Seedream；方舟地址、Key 和视频理解共用
+  // main.js：海报（AI 发布素材）、一键处理的海报、封面重绘都走同一个作图入口 imageAi：
+  // 默认火山方舟 Seedream（方舟地址、Key 和视频理解共用），设置里选「OpenAI 兼容接口」就走 OpenAI 中转
   const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   assert.match(mainSource, /ark_image_model: seedream\.DEFAULT_MODEL/, '设置默认 Seedream 5.0 Pro');
-  assert.match(mainSource, /generateImage: \(options, settings\) => seedream\.generateImage\(options, arkImageConfig\(settings\)\)/);
-  assert.match(mainSource, /editImage: \(options, settings\) => seedream\.editImage\(options, arkImageConfig\(settings\)\)/);
+  assert.match(mainSource, /image_provider: 'seedream'/, '默认用 Seedream');
+  const adapter = mainSource.slice(mainSource.indexOf('const imageAi = {'), mainSource.indexOf('};', mainSource.indexOf('const imageAi = {')));
+  assert.match(adapter, /useOpenAiImages\(settings\)\s*\?\s*openai\.generateImage\(options, settings \|\| getCurrentSettings\(\)\)\s*:\s*seedream\.generateImage\(options, arkImageConfig\(settings\)\)/);
+  assert.match(adapter, /useOpenAiImages\(settings\)\s*\?\s*openai\.editImage\(options, settings \|\| getCurrentSettings\(\)\)\s*:\s*seedream\.editImage\(options, arkImageConfig\(settings\)\)/);
+  assert.equal((mainSource.match(/openai\.(editImage|generateImage)\(/g) || []).length, 2, '作图只从 imageAi 这一个入口走');
   assert.match(mainSource, /copyConfig: copyWritingConfig\(settings\),\s*openai: imageAi,/, 'AI 发布素材的海报');
   assert.match(mainSource, /createOneclick\(\{\s*quchong,\s*openai: imageAi,/, '一键处理的海报');
   assert.match(mainSource, /\? await imageAi\.editImage\(/, '封面重绘');
-  assert.doesNotMatch(mainSource, /openai\.(editImage|generateImage)\(/, '作图不再走 OpenAI 中转');
   assert.match(mainSource, /seedream\._setFetch\(chromiumFetch\)/, '走 Chromium 网络栈（跟随代理）');
   assert.match(mainSource, /settings\.ark_api_key,\s*\);/, '错误里抹掉方舟 Key');
   const settingsUi = fs.readFileSync(path.join(root, 'src/components/Settings.jsx'), 'utf8');
-  assert.ok(settingsUi.includes("'ark_image_model'"), '设置页保存海报模型');
-  assert.match(settingsUi, /海报模型（火山方舟 Seedream）/);
-  assert.match(settingsUi, /placeholder="doubao-seedream-5-0-pro-260628"/);
+  for (const key of ['ark_image_model', 'image_provider', 'ai_image_model', 'ai_image_base_url', 'ai_image_api_key'])
+    assert.ok(settingsUi.includes(`'${key}'`), `设置页保存 ${key}`);
+  assert.match(settingsUi, /aria-label="作图用哪家"/);
+  assert.match(settingsUi, /aria-label="Seedream 模型"/);
 
   // 提示词：结构和原海报相同，人物换成完全不同的人，画面元素不能一样
   const publish = require('../src/native/publish-materials');

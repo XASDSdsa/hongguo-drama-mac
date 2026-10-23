@@ -1,0 +1,72 @@
+{
+  "_note": "文案改写（剧名、简介、海报画面描述）和作图（海报、封面）可选的服务。地址和模型是预填值，设置页里都能改。查于 2026-10。",
+  "text": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "baseUrl": "https://api.deepseek.com",
+      "model": "deepseek-flash",
+      "hint": "deepseek-flash 快、便宜；要更强可填 deepseek-v4-pro。"
+    },
+    {
+      "id": "doubao",
+      "name": "豆包（火山方舟）",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-2-1-pro-260628",
+      "useArkKey": true,
+      "hint": "Key 留空就用「视频反推提示词」里的方舟 Key；模型名也可以填方舟控制台里的接入点 ID。"
+    },
+    {
+      "id": "qwen",
+      "name": "通义千问（阿里云百炼）",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-plus",
+      "hint": "要更强可填 qwen-max；用业务空间专属地址的，把地址换成控制台里给的。"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi（月之暗面）",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k3",
+      "hint": "模型名以 Kimi 开放平台控制台为准。"
+    },
+    {
+      "id": "glm",
+      "name": "智谱 GLM",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-5.2",
+      "hint": "模型名以智谱开放平台控制台为准。"
+    },
+    {
+      "id": "shared",
+      "name": "和上面的文本模型共用",
+      "baseUrl": "",
+      "model": "",
+      "hint": "不单独设置，直接用上面「文本中转地址 / Key / 文本模型」。"
+    },
+    {
+      "id": "custom",
+      "name": "其他（OpenAI 兼容接口）",
+      "baseUrl": "",
+      "model": "",
+      "hint": "任何 OpenAI 兼容的对话接口都可以：填地址、Key 和模型名。"
+    }
+  ],
+  "image": [
+    {
+      "id": "seedream",
+      "name": "火山方舟 Seedream",
+      "models": [
+        { "id": "doubao-seedream-5-0-pro-260628", "name": "Seedream 5.0 Pro（效果好）" },
+        { "id": "doubao-seedream-5-0-flash-260915", "name": "Seedream 5.0 Flash（更快、更便宜）" }
+      ],
+      "hint": "用「视频反推提示词」里的方舟地址和 API Key；要先在方舟控制台开通对应模型。"
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI 兼容接口（gpt-image 等）",
+      "model": "gpt-image-2.5",
+      "hint": "走 OpenAI 兼容的 images 接口（/images/edits、/images/generations），可以是官方或中转站；地址和 Key 留空就和上面的文本共用。"
+    }
+  ]
+}

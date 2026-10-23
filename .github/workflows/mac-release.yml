@@ -154,6 +154,7 @@ jobs:
           node scripts/check-series-library.cjs
           node scripts/check-cost-report.cjs
           node scripts/check-seedream.cjs
+          node scripts/check-ai-config.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-draft-capacity.cjs
           node scripts/check-storyboard-reuse.cjs

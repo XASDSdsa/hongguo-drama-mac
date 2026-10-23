@@ -95,6 +95,10 @@ function mount(file, api, props = {}) {
             ? loadHelper()
             : name === './downloadSeries.mjs'
               ? require('./downloadSeries.mjs')
+              : name === './processed-time.mjs'
+                ? require('./processed-time.mjs')
+                : name === '../native/ai-providers.json'
+                  ? require('../native/ai-providers.json')
               : name === './pagination'
                 ? loadModule('pagination.js')
                 : name === './useLiveData'
