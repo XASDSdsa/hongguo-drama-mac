@@ -196,6 +196,7 @@ jobs:
           run_check node scripts/check-jianying-location.cjs
           run_check node scripts/check-native-performance.cjs
           run_check node scripts/check-cost-report.cjs
+          run_check node scripts/check-seedream.cjs
           # 更新脚本是 PowerShell：先确认语法没问题（Ubuntu 打包机自带 pwsh）。
           run_check pwsh -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("scripts/quick-update/update.ps1",[ref]$null,[ref]$e); if ($e) { $e | ForEach-Object { $_.ToString() }; exit 1 }'
 
@@ -478,6 +479,7 @@ jobs:
           node scripts/check-download-index.cjs
           node scripts/check-series-library.cjs
           node scripts/check-cost-report.cjs
+          node scripts/check-seedream.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-draft-capacity.cjs
           node scripts/check-storyboard-reuse.cjs

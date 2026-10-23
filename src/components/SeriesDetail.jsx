@@ -545,6 +545,7 @@ export default function SeriesDetail({ folder, active = true }) {
   // 成本配置报告：勾上后「开始处理」做完自动生成（去重了就等成品都出来再算）；设置在弹窗里
   const [costOn, setCostOn] = useState(saved.costOn === true);
   const [costOpen, setCostOpen] = useState(false);
+  const [costFile, setCostFile] = useState(null); // 剧文件夹里的报告：{ exists, updatedAt }
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
   // 做草稿的同时，从视频里反推 Seedance 2.5 提示词（要在设置里填火山方舟）。
   const [draftPrompts, setDraftPrompts] = useState(saved.draftPrompts === true);
@@ -791,6 +792,26 @@ export default function SeriesDetail({ folder, active = true }) {
       setNotice(e?.message || '操作失败');
     }
     reload();
+  };
+
+  // 成本配置报告生成过没有：打开这部剧、处理进度有变化（报告是处理完自动生成的）时看一眼文件
+  const lastLog = activity?.logs?.[activity.logs.length - 1];
+  const costRefresh = `${detail?.dir || ''}|${activity?.logs?.length || 0}|${lastLog?.t || ''}`;
+  useEffect(() => {
+    if (!detail?.dir) return undefined;
+    let alive = true;
+    window.electronAPI
+      .libraryCostReportFile?.({ dir: detail.dir })
+      .then((result) => alive && setCostFile(result?.success ? result : null))
+      .catch(() => alive && setCostFile(null));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [costRefresh]);
+  const openCostReport = async () => {
+    const result = await window.electronAPI.libraryCostReportOpen?.({ dir: detail.dir }).catch(() => null);
+    if (!result?.success) setNotice(result?.error || '打不开报告');
   };
 
   // 点「开始处理」：要去重时先重新读一次「去重」里已有多少成品，已经去重过就在确认窗里强提醒。
@@ -1423,9 +1444,24 @@ export default function SeriesDetail({ folder, active = true }) {
                   />
                   <b>成本配置报告</b>
                 </label>
-                <button type="button" className="btn btn-sm proc-more" onClick={() => setCostOpen(true)}>
-                  报告设置
-                </button>
+                <span className="proc-more proc-btns">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={openCostReport}
+                    disabled={!costFile?.exists}
+                    title={
+                      costFile?.exists
+                        ? `用 Word 打开「${costFile.name}」（${new Date(costFile.updatedAt).toLocaleString('zh-CN')} 生成）`
+                        : '还没生成：勾上后点「开始处理」'
+                    }
+                  >
+                    查看报告
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => setCostOpen(true)}>
+                    报告设置
+                  </button>
+                </span>
               </div>
               {costOpen && (
                 <CostReportDialog

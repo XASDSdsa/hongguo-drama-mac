@@ -519,6 +519,12 @@ button.lib-head-frame:focus-visible {
 .proc-more {
   margin-left: auto;
 }
+/* 右边并排几个按钮（成本配置报告：查看报告、报告设置） */
+.proc-btns {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
 .proc-options {
   display: flex;
   flex-wrap: wrap;

@@ -54,6 +54,7 @@ const { createAiMaterialQueue } = require('./src/native/ai-material-queue');
 const { createVideoStructurePipeline } = require('./src/native/video-structure/pipeline');
 const { createJianyingDraft } = require('./src/native/video-structure/jianying');
 const arkVideo = require('./src/native/video-prompt/ark');
+const seedream = require('./src/native/seedream');
 const { draftCapacity } = require('./src/native/draft-capacity');
 const jianyingRelink = require('./src/native/jianying-relink');
 const jianyingLocator = require('./src/native/jianying-location');
@@ -311,6 +312,8 @@ function getDefaultSettings() {
     ark_base_url: arkVideo.DEFAULT_BASE_URL,
     ark_api_key: '',
     ark_video_model: '',
+    // 海报 / 封面作图：火山方舟 Seedream 5.0 Pro（和视频理解共用上面的方舟地址和 Key）
+    ark_image_model: seedream.DEFAULT_MODEL,
     video_prompt_max_seconds: 15,
     // 分镜工程图每集只分析前几个分镜（0 = 全部），后面的分镜占位、不问方舟。
     video_prompt_shot_limit: 2,
@@ -3181,11 +3184,27 @@ ipcMain.handle('quchong-select-audio', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+// ===== 海报 / 封面作图走火山方舟 Seedream（方舟地址、Key 和视频理解共用，模型在设置里改） =====
+function arkImageConfig(settings) {
+  const current = settings || getCurrentSettings();
+  return {
+    baseUrl: String(current.ark_base_url || '').trim() || arkVideo.DEFAULT_BASE_URL,
+    apiKey: String(current.ark_api_key || '').trim(),
+    model: String(current.ark_image_model || '').trim() || seedream.DEFAULT_MODEL,
+  };
+}
+// 文本（改写、看图检查）照旧走 openai.js；只有作图换成 Seedream
+const imageAi = {
+  ...openai,
+  generateImage: (options, settings) => seedream.generateImage(options, arkImageConfig(settings)),
+  editImage: (options, settings) => seedream.editImage(options, arkImageConfig(settings)),
+};
+
 // ===== 一键处理：独立菜单，自带任务状态，不读写其他页面的队列和记录 =====
 const { createOneclick } = require('./src/native/oneclick');
 const oneclick = createOneclick({
   quchong,
-  openai,
+  openai: imageAi,
   resolveFfmpeg: (name) => resolveFfmpeg(name),
   getSettings: () => getCurrentSettings(),
   send: (channel, payload) => sendToRenderer(channel, payload),
@@ -4205,7 +4224,7 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
             workDir: context.workDir,
             config: settings,
             copyConfig: copyWritingConfig(settings),
-            openai,
+            openai: imageAi,
             renderer,
             signal: controller.signal,
             onProgress: ({ stage, message }) => {
@@ -5681,6 +5700,32 @@ ipcMain.handle('library-cost-report', async (_event, payload = {}) => {
       price: { model, mode, checked, source, fps },
       ...summary,
     };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 报告生成过没有（「查看报告」按钮用，只看文件，不算成本）。 */
+ipcMain.handle('library-cost-report-file', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const stat = await fsp.stat(costReportFile(dir)).catch(() => null);
+    return { success: true, exists: !!stat, name: seriesLayout.COST_REPORT, updatedAt: stat ? Math.round(stat.mtimeMs) : 0 };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 查看报告：用系统默认程序（Word / WPS）打开剧文件夹里的报告。 */
+ipcMain.handle('library-cost-report-open', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const file = costReportFile(dir);
+    if (!fs.existsSync(file)) return { success: false, error: '报告还没生成：勾上「成本配置报告」后点「开始处理」' };
+    const error = await shell.openPath(file);
+    return error ? { success: false, error } : { success: true };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -8116,10 +8161,13 @@ function aiConcurrency() {
 
 function aiRedact(error) {
   const settings = getCurrentSettings();
-  // 文本、作图、文案改写可能是三把不同的 Key，错误信息里都要抹掉。
+  // 文本、作图（方舟）、文案改写可能是几把不同的 Key，错误信息里都要抹掉。
   return openai.redactError(
-    openai.redactError(openai.redactError(error, settings.ai_api_key), settings.ai_image_api_key),
-    settings.ai_copy_api_key,
+    openai.redactError(
+      openai.redactError(openai.redactError(error, settings.ai_api_key), settings.ai_image_api_key),
+      settings.ai_copy_api_key,
+    ),
+    settings.ark_api_key,
   );
 }
 
@@ -8349,7 +8397,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
     update({ stage: 'generating', progress: 10 });
     const source = task.sourceCover || entry.cover || '';
     const image = source
-      ? await openai.editImage(
+      ? await imageAi.editImage(
           {
             image: source,
             prompt: task.prompt,
@@ -8359,7 +8407,7 @@ async function executeAiMaterialTask(task, { signal, update }) {
           },
           settings,
         )
-      : await openai.generateImage(
+      : await imageAi.generateImage(
           { prompt: task.prompt, size: settings.ai_image_size, quality: settings.ai_image_quality, signal },
           settings,
         );
@@ -9585,15 +9633,19 @@ app.whenReady().then(async () => {
   installFileLog();
   // AI 文案/海报请求走 Chromium 网络栈：跟随设置里的代理和系统代理，长时间作图不会被 Node 的 5 分钟限制断开。
   // Chromium 拒绝的少数端口（ERR_UNSAFE_PORT）退回 Node 自带的 fetch。
-  if (typeof net?.fetch === 'function')
-    openai.setFetch(async (url, init) => {
+  if (typeof net?.fetch === 'function') {
+    const chromiumFetch = async (url, init) => {
       try {
         return await net.fetch(url, init);
       } catch (error) {
         if (/ERR_UNSAFE_PORT/.test(String(error?.message))) return globalThis.fetch(url, init);
         throw error;
       }
-    });
+    };
+    openai.setFetch(chromiumFetch);
+    // 海报作图（Seedream）一样走 Chromium 网络栈
+    seedream._setFetch(chromiumFetch);
+  }
   // 主进程里的未捕获错误只记录，不弹出 Electron 的致命错误对话框，也不让正在运行的下载/处理任务陪葬。
   process.on('unhandledRejection', (reason) => console.error('[Main] 未处理的 Promise 拒绝:', reason?.stack || reason));
   process.on('uncaughtException', (error) => console.error('[Main] 未捕获异常:', error?.stack || error));

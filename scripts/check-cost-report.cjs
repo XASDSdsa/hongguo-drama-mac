@@ -262,15 +262,19 @@ const template = writeZip([
   assert.match(main, /costDocx\.checkTemplate\(buffer\)/, '选模板时先核对能不能填');
   assert.match(main, /ipcMain\.handle\('library-cost-report'/);
   // 报告只在「开始处理」里生成：没有单独的「生成 / 打开报告」接口
-  assert.doesNotMatch(main, /ipcMain\.handle\('library-cost-report-(make|open)'/);
+  assert.doesNotMatch(main, /ipcMain\.handle\('library-cost-report-make'/);
+  // 查看报告：只看文件在不在、用系统默认程序打开
+  assert.match(main, /ipcMain\.handle\('library-cost-report-file'/);
+  assert.match(main, /ipcMain\.handle\('library-cost-report-open'[\s\S]{0,400}shell\.openPath\(file\)/);
   assert.match(main, /ipcMain\.handle\('cost-report-template-pick'/);
   assert.match(main, /libraryDedupOutputs\(dir\)/, '按「去重」里的成品算');
   assert.match(main, /报告正在 Word 里打开着/);
   const layout = require('../src/native/series-layout');
   assert.equal(layout.COST_REPORT, '成本配置比例情况报告.docx');
   const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
-  for (const name of ['libraryCostReport:', 'costReportTemplatePick:']) assert.ok(preload.includes(name), name);
-  assert.ok(!/libraryCostReport(Make|Open):/.test(preload));
+  for (const name of ['libraryCostReport:', 'libraryCostReportFile:', 'libraryCostReportOpen:', 'costReportTemplatePick:'])
+    assert.ok(preload.includes(name), name);
+  assert.ok(!/libraryCostReportMake:/.test(preload));
   const detail = fs.readFileSync(path.join(root, 'src/components/SeriesDetail.jsx'), 'utf8');
   // 页面上只有「☑ 成本配置报告」和旁边的「报告设置」，在分镜工程图下面；其余都在弹窗里
   const storyboard = detail.indexOf('<StoryboardResults');
@@ -279,6 +283,9 @@ const template = writeZip([
   const pageItem = detail.slice(item - 600, detail.indexOf('{costOpen && (', item));
   assert.match(pageItem, /<input\s+type="checkbox"\s+checked=\{costOn\}/, '一个勾选框');
   assert.match(pageItem, /onClick=\{\(\) => setCostOpen\(true\)\}>\s*报告设置/, '旁边点「报告设置」弹窗');
+  assert.match(pageItem, /onClick=\{openCostReport\}\s*disabled=\{!costFile\?\.exists\}[\s\S]*查看报告/, '旁边一个「查看报告」，生成过才能点');
+  assert.match(detail, /libraryCostReportFile\?\.\(\{ dir: detail\.dir \}\)/, '打开这部剧、日志有新内容时看报告在不在');
+  assert.match(detail, /const costRefresh = `\$\{detail\?\.dir \|\| ''\}\|\$\{activity\?\.logs\?\.length \|\| 0\}/);
   assert.doesNotMatch(pageItem, /cost-grid|proc-summary|生成报告|抽卡/, '页面上不放别的');
   assert.match(detail, /const \[costOn, setCostOn\] = useState\(saved\.costOn === true\)/, '勾选记住');
   assert.match(

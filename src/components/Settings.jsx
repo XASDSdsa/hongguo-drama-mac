@@ -200,9 +200,6 @@ function SettingsPage({ active = true }) {
         'proxy_password',
         'ai_base_url',
         'ai_api_key',
-        'ai_image_base_url',
-        'ai_image_api_key',
-        'ai_image_model',
         'ai_text_model',
         'ai_copy_base_url',
         'ai_copy_api_key',
@@ -210,6 +207,7 @@ function SettingsPage({ active = true }) {
         'ark_base_url',
         'ark_api_key',
         'ark_video_model',
+        'ark_image_model',
         'video_prompt_max_seconds',
         'video_prompt_shot_limit',
         'structure_threads',
@@ -645,8 +643,8 @@ function SettingsPage({ active = true }) {
           <header className="settings-section-head">
             <h3>AI 发布素材</h3>
             <p>
-              改写剧名、简介和生成海报用。填写 OpenAI 兼容接口的中转地址（通常以 <code>/v1</code> 结尾）和
-              Key；文本和作图可以走不同的中转站，作图那组留空就和文本共用。
+              改写剧名、简介用 OpenAI 兼容接口（中转地址通常以 <code>/v1</code> 结尾）。海报、封面用火山方舟的 Seedream
+              作图，方舟地址和 API Key 填在下面「视频反推提示词」里（和视频理解共用）。
             </p>
           </header>
           <div className="ai-settings-grid">
@@ -687,39 +685,16 @@ function SettingsPage({ active = true }) {
               <em>要能看图（检查海报底图有没有文字、人脸在哪）；不支持看图时会跳过检查。</em>
             </label>
             <label className="ai-field">
-              <span>图片模型（重绘海报底图）</span>
+              <span>海报模型（火山方舟 Seedream）</span>
               <input
                 className="input-field"
-                aria-label="AI 图片模型"
-                value={settings.ai_image_model || ''}
-                onChange={(e) => update('ai_image_model', e.target.value)}
-                placeholder="gpt-image-2.5"
+                aria-label="海报模型"
+                value={settings.ark_image_model || ''}
+                onChange={(e) => update('ark_image_model', e.target.value)}
+                placeholder="doubao-seedream-5-0-pro-260628"
                 spellCheck={false}
               />
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>作图中转地址（可选）</span>
-              <input
-                className="input-field"
-                aria-label="AI 作图中转地址"
-                value={settings.ai_image_base_url || ''}
-                onChange={(e) => update('ai_image_base_url', e.target.value)}
-                placeholder="留空 = 和文本共用"
-                spellCheck={false}
-              />
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>作图 API Key（可选）</span>
-              <input
-                className="input-field"
-                type="password"
-                autoComplete="off"
-                aria-label="AI 作图 API Key"
-                value={settings.ai_image_api_key || ''}
-                onChange={(e) => update('ai_image_api_key', e.target.value)}
-                placeholder="留空 = 和文本共用"
-                spellCheck={false}
-              />
+              <em>画海报底图和重绘封面。默认 Seedream 5.0 Pro；用的是下面「视频反推提示词」里的方舟地址和 API Key。</em>
             </label>
           </div>
           <div className="preset-row">

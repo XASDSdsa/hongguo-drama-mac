@@ -185,7 +185,14 @@ const COPY = {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '退婚之后_第001集.mp4'), Buffer.alloc(4096, 1));
   fs.writeFileSync(path.join(dir, '封面.png'), Buffer.from(png(256, 384)));
-  const settings = { ai_base_url: `${server.base}/v1`, ai_api_key: 'secret-key-123', ai_text_model: 'gpt-6.1-sol' };
+  // 海报作图走火山方舟 Seedream（方舟地址、Key 和视频理解共用）
+  const settings = {
+    ai_base_url: `${server.base}/v1`,
+    ai_api_key: 'secret-key-123',
+    ai_text_model: 'gpt-6.1-sol',
+    ark_base_url: `${server.base}/api/v3`,
+    ark_api_key: 'ark-key-456',
+  };
   const { handlers, events } = makeMain(root, path.join(tmp, 'userData'), settings);
   const updates = () => events.filter(([name]) => name === 'publish-update').map(([, data]) => data);
 
@@ -262,6 +269,15 @@ const COPY = {
       assert.equal(savedSyn.result.proposedSynopsis, '');
       assert.ok(!fs.existsSync(path.join(dir, '新剧集海报.jpg')));
       await runTask('poster');
+      // 海报底图是 Seedream 画的：方舟接口、默认 Seedream 5.0 Pro、原海报做参考图（结构相同，人物和物件换掉）
+      const draw = server.log.filter((entry) => entry.url.includes('/images/')).pop();
+      assert.equal(draw.url, '/api/v3/images/generations');
+      assert.equal(draw.auth, 'Bearer ark-key-456');
+      assert.equal(draw.json.model, 'doubao-seedream-5-0-pro-260628');
+      assert.match(draw.json.image, /^data:image\/png;base64,/);
+      assert.equal(draw.json.watermark, false);
+      assert.match(draw.json.prompt, /结构和原海报相同/);
+      assert.match(draw.json.prompt, /人物必须换成完全不同的人/);
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
         ['原剧', '原剧集信息.txt', '原剧集海报.png', '新剧集信息.txt', '新剧集海报.jpg'].sort(),
