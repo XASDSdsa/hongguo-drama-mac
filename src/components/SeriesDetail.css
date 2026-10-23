@@ -763,19 +763,13 @@ button.lib-ep.is-missing:hover {
 }
 /* 成本设置弹窗：一项一块，名字、输入、说明三行 */
 .lib-confirm.cost-dialog {
-  max-width: 480px;
+  max-width: 660px;
 }
-.cost-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 0;
-  border-top: 1px solid var(--border-muted);
-}
-.cost-field-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
+.lib-confirm .cost-lead {
+  margin: -4px 0 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
 }
 .cost-inline {
   display: flex;
@@ -786,6 +780,10 @@ button.lib-ep.is-missing:hover {
 }
 .cost-dialog .lib-confirm-actions {
   justify-content: flex-end;
+}
+/* 左边「打开 / 生成报告」，右边「取消 / 确定」 */
+.cost-gap {
+  flex: 1;
 }
 .cost-sub {
   font-size: 12px;

@@ -2949,6 +2949,9 @@ function finishQuchongBatch(batch) {
       for (const task of batch.tasks) if (rest.includes(task.dst)) startSideTaskForOutput(batch, task);
     }
   }
+  // 勾选了「成本配置报告」：整批做完、成品都在「去重」里了再算（停止了就不算）
+  const costTask = batch.sideTasks?.costReport;
+  if (costTask?.enabled && batch.libraryDir && !batch.cancelled) runCostReportTask(batch.libraryDir, costTask);
   sendToRenderer('quchong-complete', {
     batchId: batch.id,
     cancelled: batch.cancelled,
@@ -4418,18 +4421,20 @@ const DRAFT_MODULES = [
   'jianying',
 ];
 
-/** 支线任务：目前只有剪映草稿；没勾选就当没有。 */
+/** 支线任务：剪映草稿、成本配置报告；都没勾选就当没有。 */
 function normalizeSideTasks(value) {
   const draft = value?.jianyingDraft;
-  if (!draft?.enabled) return null;
-  return {
-    jianyingDraft: {
+  const cost = value?.costReport;
+  const tasks = {};
+  if (draft?.enabled)
+    tasks.jianyingDraft = {
       enabled: true,
       mode: normalizeDraftMode(draft.mode),
       scope: normalizeDraftScope(draft.scope),
       prompts: draft.prompts === true,
-    },
-  };
+    };
+  if (cost?.enabled) tasks.costReport = { enabled: true, ...normalizeCostRequest(cost) };
+  return Object.keys(tasks).length ? tasks : null;
 }
 
 const DRAFT_SLOTS = 4;
@@ -5705,35 +5710,69 @@ ipcMain.handle('cost-report-template-pick', async () => {
   }
 });
 
+/** 成本设置（界面发来的）：剧名、演员片酬占比、抽卡范围和种子。 */
+function normalizeCostRequest(value = {}) {
+  return {
+    title: String(value.title || '')
+      .trim()
+      .slice(0, 200),
+    actorPercent: costPricing.normalizeActorPercent(value.actorPercent),
+    draws: costPricing.normalizeDraws(value.draws || costPricing.DEFAULT_DRAWS),
+  };
+}
+
 /** 生成报告：放在剧文件夹根目录，已经有就换成新的。 */
+async function makeCostReport(dir, request = {}) {
+  if (!costTemplateInfo().ready) return { success: false, error: '还没选报告模板（在「报告设置」里选）' };
+  const payload = normalizeCostRequest(request);
+  const title = payload.title || seriesLayout.readNewInfo(dir).title;
+  if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在「报告设置」里填' };
+  const summary = await costSummary(dir, payload.actorPercent, payload.draws);
+  if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
+  if (summary.unreadable.length)
+    return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };
+  const buffer = costDocx.fillCostReport(await fsp.readFile(costTemplateFile()), {
+    name: title,
+    episodes: summary.text.episodes,
+    total: summary.text.total,
+    share: summary.text.share,
+    date: new Date(),
+  });
+  const file = costReportFile(dir);
+  await fsp.writeFile(`${file}.tmp`, buffer);
+  try {
+    await fsp.rename(`${file}.tmp`, file);
+  } catch (error) {
+    await fsp.rm(`${file}.tmp`, { force: true }).catch(() => {});
+    if (/EBUSY|EPERM|EACCES/.test(error?.code || '')) return { success: false, error: '报告正在 Word 里打开着：先关掉再生成' };
+    throw error;
+  }
+  return { success: true, name: seriesLayout.COST_REPORT, title, ...summary };
+}
+
+/** 处理做完（或没勾去重、直接开始）时自动生成，结果写进这部剧的处理日志。 */
+async function runCostReportTask(dir, task) {
+  if (!task?.enabled || !dir) return;
+  try {
+    const made = await makeCostReport(dir, task);
+    if (made.success)
+      libLog(
+        dir,
+        'ok',
+        `成本配置报告：已生成「${made.name}」（${made.text.episodes}，总投资 ${made.text.total}，演员片酬占比 ${made.text.share}；抽卡每集 ${made.cost.draws.min === made.cost.draws.max ? made.cost.draws.min : `${made.cost.draws.min}～${made.cost.draws.max}`} 次，共 ${made.cost.draws.total} 次）`,
+        'side',
+      );
+    else libLog(dir, 'error', `成本配置报告：没有生成：${made.error}`, 'side');
+  } catch (error) {
+    libLog(dir, 'error', `成本配置报告：没有生成：${error?.message || error}`, 'side');
+  }
+}
+
 ipcMain.handle('library-cost-report-make', async (_event, payload = {}) => {
   try {
     const dir = storyboardDir(payload);
     if (!dir) return { success: false, error: '这不是剧文件夹' };
-    if (!costTemplateInfo().ready) return { success: false, error: '还没选报告模板' };
-    const title = String(payload.title || '').trim() || seriesLayout.readNewInfo(dir).title;
-    if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在这里填' };
-    const summary = await costSummary(dir, payload.actorPercent, payload.draws);
-    if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
-    if (summary.unreadable.length)
-      return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };
-    const buffer = costDocx.fillCostReport(await fsp.readFile(costTemplateFile()), {
-      name: title,
-      episodes: summary.text.episodes,
-      total: summary.text.total,
-      share: summary.text.share,
-      date: new Date(),
-    });
-    const file = costReportFile(dir);
-    await fsp.writeFile(`${file}.tmp`, buffer);
-    try {
-      await fsp.rename(`${file}.tmp`, file);
-    } catch (error) {
-      await fsp.rm(`${file}.tmp`, { force: true }).catch(() => {});
-      if (/EBUSY|EPERM|EACCES/.test(error?.code || '')) return { success: false, error: '报告正在 Word 里打开着：先关掉再生成' };
-      throw error;
-    }
-    return { success: true, name: seriesLayout.COST_REPORT, ...summary };
+    return await makeCostReport(dir, payload);
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -5819,10 +5858,13 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
     if (payload.dedup !== false && libraryDraftJobs.get(dir)?.status === 'running') {
       return { success: false, error: '剪映草稿正在生成，等它做完，或先点「停止」' };
     }
-    // 没勾选「去重」、只勾了剪映草稿：直接拿已有的去重成品生成草稿。
+    // 没勾选「去重」：直接拿已有的去重成品生成草稿 / 成本配置报告。
     if (payload.dedup === false) {
-      const draft = normalizeSideTasks(payload.sideTasks)?.jianyingDraft;
-      if (!draft) return { success: false, error: '请至少勾选一项要做的事' };
+      const side = normalizeSideTasks(payload.sideTasks);
+      const draft = side?.jianyingDraft;
+      if (!draft && !side?.costReport) return { success: false, error: '请至少勾选一项要做的事' };
+      if (side?.costReport) await runCostReportTask(dir, side.costReport);
+      if (!draft) return { success: true, costOnly: true };
       const started = await startLibraryDrafts({
         dir,
         files: libraryDedupOutputs(dir),

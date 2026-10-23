@@ -277,33 +277,55 @@ const template = writeZip([
   ])
     assert.ok(preload.includes(name), name);
   const detail = fs.readFileSync(path.join(root, 'src/components/SeriesDetail.jsx'), 'utf8');
+  // 页面上只有「☑ 成本配置报告」和旁边的「报告设置」，在分镜工程图下面；其余都在弹窗里
   const storyboard = detail.indexOf('<StoryboardResults');
-  const report = detail.indexOf('<CostReport');
-  assert.ok(storyboard > 0 && report > storyboard, '成本配置报告在分镜工程图下面');
-  assert.match(detail, /<b className="proc-title">成本配置报告<\/b>/);
-  assert.match(detail, /抽一次收一次全价/);
-  assert.match(detail, /libraryCostReport\?\.\(\{ dir, \.\.\.request \}\)/, '算成本带上设置');
+  const item = detail.indexOf('<b>成本配置报告</b>');
+  assert.ok(storyboard > 0 && item > storyboard, '成本配置报告在分镜工程图下面');
+  const pageItem = detail.slice(item - 600, detail.indexOf('{costOpen && (', item));
+  assert.match(pageItem, /<input\s+type="checkbox"\s+checked=\{costOn\}/, '一个勾选框');
+  assert.match(pageItem, /onClick=\{\(\) => setCostOpen\(true\)\}>\s*报告设置/, '旁边点「报告设置」弹窗');
+  assert.doesNotMatch(pageItem, /cost-grid|proc-summary|生成报告|抽卡/, '页面上不放别的');
+  assert.match(detail, /const \[costOn, setCostOn\] = useState\(saved\.costOn === true\)/, '勾选记住');
   assert.match(
     detail,
-    /libraryCostReportMake\?\.\(\{ dir, title: title\.trim\(\), \.\.\.request \}\)/,
-    '生成报告用同一组设置',
+    /costReport: \{ enabled: costOn, \.\.\.costRequest\(readCostSettings\(detail\.dir\)\) \}/,
+    '开始处理带上报告设置',
   );
-  assert.match(detail, /actorPercent: settings\.actorPercent,\s*draws: \{ min: Number\(settings\.drawMin\)/);
+  assert.match(detail, /const nothingToDo = dedupOn \? !selectedCount : !draftOn && !costOn;/, '只勾报告也能开始');
+  // 弹窗：明细、设置（抽卡、片酬占比）、模板、马上生成；边改边算，「确定」/「生成报告」才记住
+  const dialog = detail.slice(detail.indexOf('function CostReportDialog'), detail.indexOf('/** 剧的子页面：'));
+  assert.match(dialog, /className="lib-confirm cost-dialog"[\s\S]*aria-label="成本配置报告"/);
+  assert.match(dialog, /aria-label="每集最少抽几次"[\s\S]*aria-label="每集最多抽几次"/);
+  assert.match(dialog, /aria-label="演员片酬占总投资的百分比"/);
+  assert.match(dialog, /libraryCostReport\?\.\(\{ dir, \.\.\.request \}\)/, '边改边算');
+  assert.match(
+    dialog,
+    /saveCostSettings\(dir, settings\);\s*const result = await window\.electronAPI\.libraryCostReportMake\?\.\(\{ dir, \.\.\.request \}\)/,
+    '马上生成用弹窗里的设置并记住',
+  );
+  assert.match(dialog, /saveCostSettings\(dir, settings\);\s*onClose\(\);/, '确定才记住');
+  assert.match(dialog, /useDialogKeyboard\(true, onClose, '\.cost-dialog'\)/, 'Esc 关闭');
+  assert.match(dialog, /抽一次收一次全价/);
   assert.match(detail, /drawMin: String\(stored\.drawMin \?\? 1\)/, '默认最少 1 次');
   assert.match(detail, /drawMax: String\(stored\.drawMax \?\? 3\)/, '默认最多 3 次');
   assert.match(detail, /actorPercent: String\(stored\.actorPercent \?\? DEFAULT_ACTOR_PERCENT\)/, '片酬占比默认 15%');
   assert.match(detail, /const DEFAULT_ACTOR_PERCENT = 15;/);
-  assert.match(detail, /drawSeed: stored\.drawSeed \|\| newSeed\(\)/, '随机种子记住');
-  // 设置不放在页面里：点「成本设置」弹窗改，点「确定」才生效
-  assert.match(detail, /onClick=\{\(\) => setEditing\(\{ \.\.\.settings \}\)\}>\s*成本设置/);
-  assert.match(detail, /className="lib-confirm cost-dialog"[\s\S]*aria-label="成本设置"/);
-  assert.match(detail, /setSettings\(editing\);\s*setEditing\(null\);/, '确定才生效');
-  assert.match(detail, /useDialogKeyboard\(!!editing, \(\) => setEditing\(null\), '\.cost-dialog'\)/, 'Esc 关闭');
-  const page = detail.slice(detail.indexOf('function CostReport'), detail.indexOf('{editing && ('));
-  assert.ok(!/aria-label="每集最少抽几次"|aria-label="演员片酬占总投资的百分比"/.test(page), '页面上不放输入框');
+  assert.match(detail, /drawSeed: stored\.drawSeed \|\| newSeed\(\)/);
+  assert.match(detail, /if \(!stored\.drawSeed\) writeJson\(COST_KEY/, '第一次用就把随机种子记住');
   assert.doesNotMatch(detail, /演员片酬（元）|actorFee: fee/, '不再按元填片酬');
+  // 主进程：勾了就在处理做完时自动生成（停止了不生成），写进日志
   assert.match(main, /costSummary\(dir, payload\.actorPercent, payload\.draws\)/);
-  assert.match(main, /costPricing\.normalizeActorPercent\(actorPercent\)/);
+  assert.match(main, /costPricing\.normalizeActorPercent\(value\.actorPercent\)/);
   assert.match(main, /name: path\.basename\(files\[index\]\)/, '抽卡次数按文件名定');
+  assert.match(
+    main,
+    /if \(cost\?\.enabled\) tasks\.costReport = \{ enabled: true, \.\.\.normalizeCostRequest\(cost\) \};/,
+  );
+  assert.match(
+    main,
+    /if \(costTask\?\.enabled && batch\.libraryDir && !batch\.cancelled\) runCostReportTask\(batch\.libraryDir, costTask\);/,
+  );
+  assert.match(main, /if \(side\?\.costReport\) await runCostReportTask\(dir, side\.costReport\);/);
+  assert.match(main, /成本配置报告：已生成/);
   console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');
 }

@@ -271,8 +271,14 @@ async function check(name, fn) {
       assert.ok(fs.existsSync(path.join(root, '同名剧', '原剧', name)), `${name} moved into 原剧`);
       assert.ok(!fs.existsSync(path.join(root, '同名剧', name)), `${name} no longer outside`);
     }
-    assert.ok(fs.existsSync(path.join(root, '同名剧', '原剧集海报.jpg')) && !fs.existsSync(path.join(root, '同名剧', '封面.jpg')));
-    assert.match(fs.readFileSync(path.join(root, '同名剧', '原剧集信息.txt'), 'utf8'), /^剧名：同名剧\n来源：红果\n总集数：5 集\n已下载：2 集\n[\s\S]*\n简介：\n这是简介\n$/);
+    assert.ok(
+      fs.existsSync(path.join(root, '同名剧', '原剧集海报.jpg')) &&
+        !fs.existsSync(path.join(root, '同名剧', '封面.jpg')),
+    );
+    assert.match(
+      fs.readFileSync(path.join(root, '同名剧', '原剧集信息.txt'), 'utf8'),
+      /^剧名：同名剧\n来源：红果\n总集数：5 集\n已下载：2 集\n[\s\S]*\n简介：\n这是简介\n$/,
+    );
     assert.ok(!fs.existsSync(path.join(root, '同名剧', '简介.txt')));
 
     const imported = await handlers['library-import']({});
@@ -384,6 +390,56 @@ async function check(name, fn) {
       'multi',
     );
     assert.equal(vm.runInContext('normalizeSideTasks({ jianyingDraft: { enabled: false } })', context), null);
+    // 成本配置报告也是支线任务：设置按规矩收好（片酬占比默认 15%，抽卡 1～10 次）
+    assert.equal(
+      vm.runInContext(
+        "JSON.stringify(normalizeSideTasks({ costReport: { enabled: true, title: ' 新剧 ', actorPercent: 'x', draws: { min: 0, max: 99, seed: 's' } } }))",
+        context,
+      ),
+      JSON.stringify({
+        costReport: { enabled: true, title: '新剧', actorPercent: 15, draws: { min: 1, max: 10, seed: 's' } },
+      }),
+    );
+    assert.equal(vm.runInContext('normalizeSideTasks({ costReport: { enabled: false } })', context), null);
+    // 没勾去重、只勾成本配置报告：直接生成（不要求有草稿），结果写进日志
+    {
+      const made = [];
+      context.__made = made;
+      vm.runInContext(
+        "makeCostReport = async (dir, task) => { __made.push({ dir, task }); return { success: false, error: '还没选报告模板' }; }",
+        context,
+      );
+      const costOnly = await handlers['library-dedup'](
+        {},
+        {
+          dir: series.path,
+          dedup: false,
+          sideTasks: { costReport: { enabled: true, actorPercent: 20, draws: { min: 1, max: 3, seed: 'abc' } } },
+        },
+      );
+      assert.equal(costOnly.success, true, costOnly.error);
+      assert.equal(costOnly.costOnly, true);
+      assert.equal(made.length, 1);
+      assert.equal(made[0].task.actorPercent, 20);
+      assert.deepEqual({ ...made[0].task.draws }, { min: 1, max: 3, seed: 'abc' });
+      // 去重做完一整批：勾了就生成，停止了不生成
+      vm.runInContext(
+        'persistQuchongBatch = () => {}; releaseQuchongDestinations = () => {}; sendToRenderer = () => {};',
+        context,
+      );
+      const finish = (cancelled) =>
+        vm.runInContext(
+          `finishQuchongBatch({ id: 'b', finished: false, active: 0, queue: [], cancelled: ${cancelled}, tasks: [], libraryDir: ${JSON.stringify(series.path)}, sideTasks: { costReport: { enabled: true, actorPercent: 15, draws: { min: 1, max: 3, seed: 'x' } } } })`,
+          context,
+        );
+      finish(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(made.length, 1, '停止了不生成报告');
+      finish(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(made.length, 2, '整批做完生成报告');
+      assert.equal(made[1].task.draws.seed, 'x');
+    }
     // 草稿只做几集：默认前 4 集，或按成品集号指定
     const pickFiles = (scope) =>
       JSON.parse(

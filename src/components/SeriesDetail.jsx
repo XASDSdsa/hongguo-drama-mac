@@ -266,31 +266,43 @@ const DEFAULT_ACTOR_PERCENT = 15;
 const ACTOR_PERCENT_LIMIT = 95;
 
 /**
- * 成本配置报告：总投资额按 Seedance 2.5 官方价格和去重成品的时长、清晰度算（明细都列出来，能对账），
- * 填进用户自己的 Word 模板（有公章和签名，只存在这台电脑上），报告放在剧文件夹根目录。
+ * 这部剧的成本设置（按剧文件夹记在本机）：改过的剧名、每集随机抽卡次数范围和随机种子、演员片酬占比。
+ * 没设置过就用默认值（1～3 次、15%），第一次用时定下随机种子并记住：同一部剧以后每次算都是同一组抽卡次数。
  */
-function CostReport({ dir, refreshKey }) {
-  const stored = useRef(readJson(COST_KEY)[dir] || {}).current;
-  const [title, setTitle] = useState(stored.title ?? '');
-  // 成本设置（弹窗里改）：每集随机抽卡 drawMin～drawMax 次，种子记住（同一部剧每次打开都是同一组次数，「重新随机」才换）；
-  // 演员片酬占总投资的百分比，默认 15%
-  const [settings, setSettings] = useState(() => ({
+function readCostSettings(dir) {
+  const stored = readJson(COST_KEY)[dir] || {};
+  const settings = {
+    title: String(stored.title ?? ''),
     drawMin: String(stored.drawMin ?? 1),
     drawMax: String(stored.drawMax ?? 3),
     drawSeed: stored.drawSeed || newSeed(),
     actorPercent: String(stored.actorPercent ?? DEFAULT_ACTOR_PERCENT),
-  }));
-  const [editing, setEditing] = useState(null); // 弹窗里正在改的设置（没点「确定」前不生效）
+  };
+  if (!stored.drawSeed) writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: settings });
+  return settings;
+}
+const saveCostSettings = (dir, settings) => writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: settings });
+/** 发给主进程的：剧名、演员片酬占比、抽卡（范围 + 种子）。 */
+const costRequest = (settings) => ({
+  title: settings.title.trim(),
+  actorPercent: settings.actorPercent,
+  draws: { min: Number(settings.drawMin) || 1, max: Number(settings.drawMax) || 1, seed: settings.drawSeed },
+});
+
+/**
+ * 成本配置报告弹窗：页面上只有「☑ 成本配置报告」和「报告设置」，其余都在这里——
+ * 剧名、算法明细（Seedance 2.5 官方价格 × 成品时长和清晰度 × 抽卡次数）、抽卡和片酬占比设置、模板、马上生成。
+ * 改的东西边改边算；点「确定」或「生成报告」才记住，「取消」/ Esc 不改。
+ */
+function CostReportDialog({ dir, refreshKey, onClose }) {
+  const [settings, setSettings] = useState(() => readCostSettings(dir));
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
-  const request = {
-    actorPercent: settings.actorPercent,
-    draws: { min: Number(settings.drawMin) || 1, max: Number(settings.drawMax) || 1, seed: settings.drawSeed },
-  };
-  const requestKey = JSON.stringify(request);
+  const request = costRequest(settings);
+  const requestKey = JSON.stringify({ ...request, title: '' });
 
   useEffect(() => {
     let alive = true;
@@ -313,12 +325,9 @@ function CostReport({ dir, refreshKey }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir, requestKey, refreshKey, reload]);
 
-  useEffect(() => {
-    writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: { title, ...settings } });
-  }, [dir, title, settings]);
+  useDialogKeyboard(true, onClose, '.cost-dialog');
 
-  useDialogKeyboard(!!editing, () => setEditing(null), '.cost-dialog');
-
+  const set = (key) => (e) => setSettings((value) => ({ ...value, [key]: e.target.value }));
   const pickTemplate = async () => {
     setError('');
     setBusy('template');
@@ -331,9 +340,8 @@ function CostReport({ dir, refreshKey }) {
     setError('');
     setMessage('');
     setBusy('make');
-    const result = await window.electronAPI
-      .libraryCostReportMake?.({ dir, title: title.trim(), ...request })
-      .catch(() => null);
+    saveCostSettings(dir, settings);
+    const result = await window.electronAPI.libraryCostReportMake?.({ dir, ...request }).catch(() => null);
     setBusy('');
     if (result?.success) setMessage(`已生成：剧集文件夹里的「${result.name}」`);
     else setError(result?.error || '报告没生成出来');
@@ -344,152 +352,52 @@ function CostReport({ dir, refreshKey }) {
     const result = await window.electronAPI.libraryCostReportOpen?.({ dir }).catch(() => null);
     if (!result?.success) setError(result?.error || '打不开报告');
   };
-  const edit = (key) => (e) => setEditing((value) => ({ ...value, [key]: e.target.value }));
 
   const cost = info?.cost;
-  const name = title.trim() || info?.title || '';
+  const name = request.title || info?.title || '';
   const ready = info?.template?.ready && cost?.episodes > 0 && !!name && !info?.unreadable?.length;
-  const drawText = cost
-    ? cost.draws.min === cost.draws.max
-      ? `每集 ${cost.draws.min} 次`
-      : `每集随机 ${cost.draws.min}～${cost.draws.max} 次`
-    : '';
   return (
-    <div className="cost-report">
-      <div className="proc-line">
-        <b className="proc-title">成本配置报告</b>
-        <span className="proc-summary">
-          按 Seedance 2.5 官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里
-          {cost && `；抽卡${drawText}，演员片酬占 ${info.text.share}`}
-        </span>
-        <button type="button" className="btn btn-sm proc-more" onClick={() => setEditing({ ...settings })}>
-          成本设置
-        </button>
-      </div>
-      {info && (
-        <dl className="cost-grid">
-          <dt>微短剧名称</dt>
-          <dd>
-            <input
-              className="input-field cost-input cost-name"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={info.title || '还没有新剧名：在这里填，或者先在「AI 发布素材」里定'}
-              aria-label="微短剧名称"
-            />
-            {!title.trim() && info.title && <span className="cost-sub">用新剧名；要换就在框里填</span>}
-          </dd>
-          <dt>集数和总时长</dt>
-          <dd>
-            {cost.episodes ? info.text.episodes : '「去重」文件夹里还没有成品'}
-            {info.unreadable?.length > 0 && (
-              <span className="cost-sub cost-over">有 {info.unreadable.length} 集读不出时长，没算进去</span>
-            )}
-          </dd>
-          <dt>AI 生成费用</dt>
-          <dd>
-            {info.text.generation}
-            {cost.tiers.map((row) => (
-              <span key={row.name} className="cost-sub">
-                {row.name}（按 {row.width}×{row.height}、{info.price.fps} 帧）{row.episodes} 集 ·{' '}
-                {Math.round(row.seconds)} 秒 × 抽卡共 {row.generations} 次 ·{' '}
-                {Math.round(row.tokens).toLocaleString('zh-CN')} token × {row.yuanPerMillion} 元/百万 token
-              </span>
-            ))}
-            {cost.episodes > 0 && (
-              <span className="cost-sub">
-                抽卡{drawText}：
-                {Object.entries(cost.draws.counts)
-                  .sort(([a], [b]) => Number(a) - Number(b))
-                  .map(([times, count]) => `抽 ${times} 次 ${count} 集`)
-                  .join('，')}
-                ，平均每集 {cost.draws.average.toFixed(1)} 次
-              </span>
-            )}
-          </dd>
-          <dt>演员片酬</dt>
-          <dd>
-            <span>
-              {info.text.actorFee}（占总投资 {info.text.share}）
-            </span>
-          </dd>
-          <dt>总投资额</dt>
-          <dd className={info.over.total ? 'cost-over' : ''}>
-            <span>
-              <b>{info.text.total}</b>（{info.text.totalYuan}）{info.over.total && ' 超过了报审要求的 100 万'}
-            </span>
-            <span className="cost-sub">= AI 生成费用 ÷（1 − 演员片酬占比）</span>
-          </dd>
-          <dt>演员总片酬占比</dt>
-          <dd className={info.over.share ? 'cost-over' : ''}>
-            <span>
-              <b>{info.text.share}</b>
-              {info.over.share && ' 超过了报审要求的 40%'}
-            </span>
-          </dd>
-        </dl>
-      )}
-      {info && (
-        <p className="cost-note">
-          价格：火山方舟官方「模型价格」{info.price.model}，{info.price.mode}（{info.price.checked} 查）；token = 时长 ×
-          宽 × 高 × 帧率 ÷ 1024；每集按抽卡次数乘上去（抽一次收一次全价）。{' '}
-          <button
-            type="button"
-            className="cost-link"
-            onClick={() => window.electronAPI.openExternalUrl?.(info.price.source)}
-          >
-            看官方价格页
+    <div className="lib-mask lib-mask-top" onClick={onClose}>
+      <div
+        className="lib-confirm cost-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="成本配置报告"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="lib-params-dialog-head">
+          <h3>成本配置报告</h3>
+          <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={onClose}>
+            ×
           </button>
+        </div>
+        <p className="cost-lead">
+          按 Seedance 2.5
+          官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里。勾上「成本配置报告」后点「开始处理」，处理完会自动生成。
         </p>
-      )}
-      <div className="cost-foot">
-        {info?.template?.ready ? (
-          <span className="cost-sub">模板：{info.template.name}</span>
-        ) : (
-          info && (
-            <span className="cost-sub">还没选报告模板：选你那份 Word 模板（有公章和签名的），只存在这台电脑上</span>
-          )
-        )}
-        <span className="cost-btns">
-          <button type="button" className="btn btn-sm" onClick={pickTemplate} disabled={!!busy}>
-            {info?.template?.ready ? '换模板' : '选择模板'}
-          </button>
-          {info?.report && (
-            <button type="button" className="btn btn-sm" onClick={open} title="用 Word 打开剧集文件夹里的报告">
-              打开报告
-            </button>
-          )}
-          <button type="button" className="btn btn-sm btn-primary" onClick={make} disabled={!ready || !!busy}>
-            {busy === 'make' ? '正在生成…' : info?.report ? '重新生成报告' : '生成报告'}
-          </button>
-        </span>
-      </div>
-      {message && <p className="cost-msg">{message}</p>}
-      {error && <p className="sb-card-error">{error}</p>}
-
-      {editing && (
-        <div className="lib-mask lib-mask-top" onClick={() => setEditing(null)}>
-          <div
-            className="lib-confirm cost-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="成本设置"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="lib-params-dialog-head">
-              <h3>成本设置</h3>
-              <button
-                type="button"
-                className="lib-dialog-close"
-                aria-label="关闭"
-                title="关闭（Esc）"
-                onClick={() => setEditing(null)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="cost-field">
-              <span className="cost-field-name">抽卡次数</span>
+        {!info && !error && <p className="cost-sub">正在算…</p>}
+        {info && (
+          <dl className="cost-grid">
+            <dt>微短剧名称</dt>
+            <dd>
+              <input
+                className="input-field cost-input cost-name"
+                value={settings.title}
+                onChange={set('title')}
+                placeholder={info.title || '还没有新剧名：在这里填，或者先在「AI 发布素材」里定'}
+                aria-label="微短剧名称"
+              />
+              {!request.title && info.title && <span className="cost-sub">用新剧名；要换就在框里填</span>}
+            </dd>
+            <dt>集数和总时长</dt>
+            <dd>
+              {cost.episodes ? info.text.episodes : '「去重」文件夹里还没有成品'}
+              {info.unreadable?.length > 0 && (
+                <span className="cost-sub cost-over">有 {info.unreadable.length} 集读不出时长，没算进去</span>
+              )}
+            </dd>
+            <dt>抽卡次数</dt>
+            <dd>
               <span className="cost-inline">
                 每集随机
                 <input
@@ -497,8 +405,8 @@ function CostReport({ dir, refreshKey }) {
                   type="number"
                   min="1"
                   max="10"
-                  value={editing.drawMin}
-                  onChange={edit('drawMin')}
+                  value={settings.drawMin}
+                  onChange={set('drawMin')}
                   aria-label="每集最少抽几次"
                 />
                 ～
@@ -507,26 +415,45 @@ function CostReport({ dir, refreshKey }) {
                   type="number"
                   min="1"
                   max="10"
-                  value={editing.drawMax}
-                  onChange={edit('drawMax')}
+                  value={settings.drawMax}
+                  onChange={set('drawMax')}
                   aria-label="每集最多抽几次"
                 />
                 次
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => setEditing((value) => ({ ...value, drawSeed: newSeed() }))}
-                  title="给每一集重新随机抽卡次数"
-                >
-                  重新随机
-                </button>
+                {cost.draws.min !== cost.draws.max && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setSettings((value) => ({ ...value, drawSeed: newSeed() }))}
+                    title="给每一集重新随机抽卡次数"
+                  >
+                    重新随机
+                  </button>
+                )}
               </span>
-              <span className="cost-sub">
-                同一集生成几次挑一个，每次都按全价算。两个数填一样就是固定次数；次数会记住，点「重新随机」才换一组。
-              </span>
-            </div>
-            <div className="cost-field">
-              <span className="cost-field-name">演员片酬占比</span>
+              {cost.episodes > 0 && (
+                <span className="cost-sub">
+                  {Object.entries(cost.draws.counts)
+                    .sort(([a], [b]) => Number(a) - Number(b))
+                    .map(([times, count]) => `抽 ${times} 次 ${count} 集`)
+                    .join('，')}
+                  ；平均每集 {cost.draws.average.toFixed(1)} 次，每次都按全价算。次数会记住，点「重新随机」才换一组
+                </span>
+              )}
+            </dd>
+            <dt>AI 生成费用</dt>
+            <dd>
+              {info.text.generation}
+              {cost.tiers.map((row) => (
+                <span key={row.name} className="cost-sub">
+                  {row.name}（按 {row.width}×{row.height}、{info.price.fps} 帧）{row.episodes} 集 ·{' '}
+                  {Math.round(row.seconds)} 秒 × 抽卡共 {row.generations} 次 ·{' '}
+                  {Math.round(row.tokens).toLocaleString('zh-CN')} token × {row.yuanPerMillion} 元/百万 token
+                </span>
+              ))}
+            </dd>
+            <dt>演员片酬占比</dt>
+            <dd>
               <span className="cost-inline">
                 <input
                   className="input-field cost-input cost-draw"
@@ -534,48 +461,87 @@ function CostReport({ dir, refreshKey }) {
                   min="0"
                   max={ACTOR_PERCENT_LIMIT}
                   step="0.5"
-                  value={editing.actorPercent}
-                  onChange={edit('actorPercent')}
+                  value={settings.actorPercent}
+                  onChange={set('actorPercent')}
                   aria-label="演员片酬占总投资的百分比"
                 />
-                %
+                %<span className="cost-sub">片酬 {info.text.actorFee}；默认 15%，报审要求低于 40%</span>
               </span>
-              <span className="cost-sub">
-                演员片酬占总投资的比例，默认 15%：总投资 = AI 生成费用 ÷（1 − 占比）。报审要求低于 40%。
+            </dd>
+            <dt>总投资额</dt>
+            <dd className={info.over.total ? 'cost-over' : ''}>
+              <span>
+                <b>{info.text.total}</b>（{info.text.totalYuan}）{info.over.total && ' 超过了报审要求的 100 万'}
               </span>
-            </div>
-            <div className="lib-confirm-actions">
-              <button
-                type="button"
-                className="btn"
-                onClick={() =>
-                  setEditing((value) => ({
-                    ...value,
-                    drawMin: '1',
-                    drawMax: '3',
-                    actorPercent: String(DEFAULT_ACTOR_PERCENT),
-                  }))
-                }
-              >
-                恢复默认
-              </button>
-              <button type="button" className="btn" onClick={() => setEditing(null)}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => {
-                  setSettings(editing);
-                  setEditing(null);
-                }}
-              >
-                确定
-              </button>
-            </div>
-          </div>
+              <span className="cost-sub">= AI 生成费用 ÷（1 − 演员片酬占比）</span>
+            </dd>
+            <dt>演员总片酬占比</dt>
+            <dd className={info.over.share ? 'cost-over' : ''}>
+              <span>
+                <b>{info.text.share}</b>
+                {info.over.share && ' 超过了报审要求的 40%'}
+              </span>
+            </dd>
+            <dt>报告模板</dt>
+            <dd>
+              <span className="cost-inline">
+                {info.template.ready ? info.template.name : '还没选'}
+                <button type="button" className="btn btn-sm" onClick={pickTemplate} disabled={!!busy}>
+                  {info.template.ready ? '换模板' : '选择模板'}
+                </button>
+              </span>
+              {!info.template.ready && (
+                <span className="cost-sub">选你那份 Word 模板（有公章和签名的），只存在这台电脑上</span>
+              )}
+            </dd>
+          </dl>
+        )}
+        {info && (
+          <p className="cost-note">
+            价格：火山方舟官方「模型价格」{info.price.model}，{info.price.mode}（{info.price.checked} 查）；token = 时长
+            × 宽 × 高 × 帧率 ÷ 1024；每集按抽卡次数乘上去（抽一次收一次全价）。{' '}
+            <button
+              type="button"
+              className="cost-link"
+              onClick={() => window.electronAPI.openExternalUrl?.(info.price.source)}
+            >
+              看官方价格页
+            </button>
+          </p>
+        )}
+        {message && <p className="cost-msg">{message}</p>}
+        {error && <p className="sb-card-error">{error}</p>}
+        <div className="lib-confirm-actions">
+          {info?.report && (
+            <button type="button" className="btn" onClick={open} title="用 Word 打开剧集文件夹里的报告">
+              打开报告
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn"
+            onClick={make}
+            disabled={!ready || !!busy}
+            title="按现在的设置马上生成一份（勾选后点「开始处理」也会自动生成）"
+          >
+            {busy === 'make' ? '正在生成…' : info?.report ? '重新生成报告' : '马上生成报告'}
+          </button>
+          <span className="cost-gap" />
+          <button type="button" className="btn" onClick={onClose}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              saveCostSettings(dir, settings);
+              onClose();
+            }}
+          >
+            确定
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -596,6 +562,9 @@ export default function SeriesDetail({ folder, active = true }) {
   const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
+  // 成本配置报告：勾上后「开始处理」做完自动生成（去重了就等成品都出来再算）；设置在弹窗里
+  const [costOn, setCostOn] = useState(saved.costOn === true);
+  const [costOpen, setCostOpen] = useState(false);
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
   // 做草稿的同时，从视频里反推 Seedance 2.5 提示词（要在设置里填火山方舟）。
   const [draftPrompts, setDraftPrompts] = useState(saved.draftPrompts === true);
@@ -747,9 +716,9 @@ export default function SeriesDetail({ folder, active = true }) {
   useEffect(() => {
     if (opts) {
       const { jobs: _jobs, encoder: _encoder, ...keep } = opts;
-      writeJson(STORAGE_KEY, { opts: keep, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums });
+      writeJson(STORAGE_KEY, { opts: keep, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn });
     }
-  }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums]);
+  }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn]);
   useEffect(() => {
     writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize, foldEpisodes, foldOutputs });
   }, [pageSize, foldEpisodes, foldOutputs]);
@@ -869,6 +838,7 @@ export default function SeriesDetail({ folder, active = true }) {
         gapPolicy,
         sideTasks: {
           jianyingDraft: { enabled: draftOn, mode: draftMode, scope: draftScopeValue, prompts: draftPrompts },
+          costReport: { enabled: costOn, ...costRequest(readCostSettings(detail.dir)) },
         },
       });
     } catch (_) {
@@ -981,7 +951,7 @@ export default function SeriesDetail({ folder, active = true }) {
     setNotice('');
     setDraftNums([0, 1, 2, 3].map((i) => (chosen[i] != null ? String(chosen[i]) : '')));
   };
-  const nothingToDo = dedupOn ? !selectedCount : !draftOn;
+  const nothingToDo = dedupOn ? !selectedCount : !draftOn && !costOn;
   // 成品用「AI 发布素材」里选定的新剧名命名：没选定不能开始去重。
   const releaseTitle = (publish?.title || '').trim();
   const needTitle = dedupOn && !releaseTitle;
@@ -1460,10 +1430,30 @@ export default function SeriesDetail({ folder, active = true }) {
             </div>
 
             <div className="proc-item">
-              <CostReport
-                dir={detail.dir}
-                refreshKey={`${outputs.map((output) => `${output.name}:${output.size}`).join('|')}-${publish?.title || ''}-${runningDone}`}
-              />
+              <div className="proc-line">
+                <label
+                  className="proc-check"
+                  title="勾上后点「开始处理」：处理完按 Seedance 2.5 官方价格和成品时长算总投资额，填进你的报告模板，放在剧集文件夹里"
+                >
+                  <input
+                    type="checkbox"
+                    checked={costOn}
+                    onChange={(e) => setCostOn(e.target.checked)}
+                    disabled={submitting}
+                  />
+                  <b>成本配置报告</b>
+                </label>
+                <button type="button" className="btn btn-sm proc-more" onClick={() => setCostOpen(true)}>
+                  报告设置
+                </button>
+              </div>
+              {costOpen && (
+                <CostReportDialog
+                  dir={detail.dir}
+                  onClose={() => setCostOpen(false)}
+                  refreshKey={`${outputs.map((output) => `${output.name}:${output.size}`).join('|')}-${publish?.title || ''}-${runningDone}`}
+                />
+              )}
             </div>
 
             <div className="proc-foot">
