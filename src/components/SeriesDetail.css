@@ -746,12 +746,6 @@ button.lib-ep.is-missing:hover {
   margin: 0;
   color: var(--text);
 }
-.cost-grid dd.cost-inline {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-}
 .cost-grid dd b {
   font-size: 14px;
   font-weight: 650;
@@ -764,15 +758,34 @@ button.lib-ep.is-missing:hover {
 .cost-name {
   max-width: 360px;
 }
-.cost-fee {
-  width: 120px;
-}
 .cost-draw {
-  width: 64px;
+  width: 72px;
 }
-/* 抽卡分布单独一行 */
-.cost-line {
-  flex-basis: 100%;
+/* 成本设置弹窗：一项一块，名字、输入、说明三行 */
+.lib-confirm.cost-dialog {
+  max-width: 480px;
+}
+.cost-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-muted);
+}
+.cost-field-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cost-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-size: 13px;
+}
+.cost-dialog .lib-confirm-actions {
+  justify-content: flex-end;
 }
 .cost-sub {
   font-size: 12px;

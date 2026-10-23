@@ -38,6 +38,16 @@ function episodeCost({ seconds, width, height }) {
 // 抽卡次数能设的范围
 const DRAW_LIMIT = 10;
 const DEFAULT_DRAWS = { min: 1, max: 3 };
+// 演员片酬占总投资的比例（百分数），默认 15%；最多 95%（再大总投资就没法算了）
+const DEFAULT_ACTOR_PERCENT = 15;
+const ACTOR_PERCENT_LIMIT = 95;
+
+/** 演员片酬占比（百分数）：0～95，没填 / 填错按 15。 */
+function normalizeActorPercent(value) {
+  const number = value === '' || value == null ? NaN : Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_ACTOR_PERCENT;
+  return Math.min(ACTOR_PERCENT_LIMIT, Math.max(0, Math.round(number * 10) / 10));
+}
 
 /** 抽卡次数范围：整数，1～10，min 不大于 max。 */
 function normalizeDraws(draws = {}) {
@@ -58,12 +68,13 @@ function drawCount(seed, key, min, max) {
 }
 
 /**
- * 整部剧：每一集按自己的时长和清晰度算，乘上这一集的抽卡次数，加起来。actorFee 是演员片酬（元，AI 生成没有演员就是 0），
- * 算进总投资。list 里每一集 { name, seconds, width, height }（name 用来定抽卡次数）。
+ * 整部剧：每一集按自己的时长和清晰度算，乘上这一集的抽卡次数，加起来就是 AI 生成费用。
+ * actorPercent 是演员片酬占总投资的百分比：总投资 = AI 生成费用 ÷ (1 − 占比)，演员片酬 = 总投资 × 占比。
+ * list 里每一集 { name, seconds, width, height }（name 用来定抽卡次数）。
  * 返回 { episodes, seconds, tokens, generation, actorFee, total, actorShare, draws: { min, max, seed, total, average, counts },
  *        tiers: [{ name, width, height, episodes, seconds, generations, tokens, yuan, yuanPerMillion }] }。
  */
-function seriesCost(list, { actorFee = 0, draws } = {}) {
+function seriesCost(list, { actorPercent = 0, draws } = {}) {
   // 没传 draws（旧调用）就是不抽卡：每集一次
   const range = draws ? normalizeDraws(draws) : { min: 1, max: 1, seed: '' };
   const tiers = new Map();
@@ -101,8 +112,9 @@ function seriesCost(list, { actorFee = 0, draws } = {}) {
     row.yuan += cost.yuan;
     tiers.set(cost.tier, row);
   }
-  const fee = Math.max(0, Number(actorFee) || 0);
-  const total = generation + fee;
+  const percent = normalizeActorPercent(actorPercent);
+  const total = generation / (1 - percent / 100);
+  const fee = total - generation;
   return {
     episodes: list.length,
     seconds,
@@ -110,7 +122,7 @@ function seriesCost(list, { actorFee = 0, draws } = {}) {
     generation,
     actorFee: fee,
     total,
-    actorShare: total > 0 ? fee / total : 0,
+    actorShare: percent / 100,
     draws: { ...range, total: generations, average: list.length ? generations / list.length : 0, counts },
     tiers: PRICE.tiers.map((tier) => tiers.get(tier.name)).filter(Boolean),
   };
@@ -138,6 +150,9 @@ module.exports = {
   LIMITS,
   DRAW_LIMIT,
   DEFAULT_DRAWS,
+  DEFAULT_ACTOR_PERCENT,
+  ACTOR_PERCENT_LIMIT,
+  normalizeActorPercent,
   normalizeDraws,
   drawCount,
   tierFor,

@@ -47,7 +47,8 @@ const root = path.join(__dirname, '..');
   assert.equal(cost.episodes, 3);
   assert.equal(cost.seconds, 260);
   assert.equal(cost.actorFee, 0);
-  assert.equal(cost.actorShare, 0, 'AI 生成没有演员：片酬占比 0');
+  assert.equal(cost.actorShare, 0, '没传占比：0');
+  assert.equal(cost.total, cost.generation);
   assert.deepEqual(
     cost.tiers.map((row) => [row.name, row.episodes, row.width, row.height]),
     [
@@ -55,10 +56,21 @@ const root = path.join(__dirname, '..');
       ['720p', 1, 1280, 720],
     ],
   );
-  const withActors = pricing.seriesCost(list, { actorFee: 1000 });
-  assert.ok(Math.abs(withActors.total - (expected + 1000)) < 1e-6);
-  assert.ok(Math.abs(withActors.actorShare - 1000 / (expected + 1000)) < 1e-9);
-  assert.equal(pricing.seriesCost(list, { actorFee: -5 }).actorFee, 0, '负数当 0');
+  // 演员片酬按占总投资的比例算（默认 15%）：总投资 = AI 生成费用 ÷ (1 − 15%)，片酬 = 总投资 × 15%
+  const withActors = pricing.seriesCost(list, { actorPercent: 15 });
+  assert.ok(Math.abs(withActors.total - expected / 0.85) < 1e-6);
+  assert.ok(Math.abs(withActors.actorFee - (expected / 0.85) * 0.15) < 1e-6);
+  assert.ok(Math.abs(withActors.actorFee / withActors.total - 0.15) < 1e-12, '片酬正好占总投资 15%');
+  assert.equal(withActors.actorShare, 0.15);
+  assert.equal(pricing.formatShare(withActors.actorShare), '15%');
+  assert.equal(pricing.DEFAULT_ACTOR_PERCENT, 15);
+  assert.equal(pricing.normalizeActorPercent(undefined), 15, '没填按 15%');
+  assert.equal(pricing.normalizeActorPercent(''), 15);
+  assert.equal(pricing.normalizeActorPercent('abc'), 15);
+  assert.equal(pricing.normalizeActorPercent(0), 0, '填 0 就是 0');
+  assert.equal(pricing.normalizeActorPercent(-5), 0, '负数当 0');
+  assert.equal(pricing.normalizeActorPercent(120), 95, '最多 95%');
+  assert.equal(pricing.normalizeActorPercent('12.34'), 12.3);
   assert.deepEqual(cost.draws.counts, { 1: 3 }, '没传抽卡：每集一次');
 
   // 抽卡：每集随机 1～3 次，费用乘次数；同一个种子结果一样（按文件名定，和顺序无关），换种子才变
@@ -114,7 +126,7 @@ const root = path.join(__dirname, '..');
   assert.equal(pricing.formatShare(0.153), '15.3%');
   assert.equal(pricing.formatYuan(21981.682), '21,981.68 元');
   console.log(
-    'PASS cost: Seedance 2.5 official prices (matches the official 5 s examples), per-episode resolution, actor fee share',
+    'PASS cost: Seedance 2.5 official prices (matches the official 5 s examples), per-episode resolution, random draws, actor share (default 15%)',
   );
 }
 
@@ -270,16 +282,28 @@ const template = writeZip([
   assert.ok(storyboard > 0 && report > storyboard, '成本配置报告在分镜工程图下面');
   assert.match(detail, /<b className="proc-title">成本配置报告<\/b>/);
   assert.match(detail, /抽一次收一次全价/);
-  assert.match(detail, /libraryCostReport\?\.\(\{ dir, actorFee: fee, draws \}\)/, '算成本带上抽卡设置');
+  assert.match(detail, /libraryCostReport\?\.\(\{ dir, \.\.\.request \}\)/, '算成本带上设置');
   assert.match(
     detail,
-    /libraryCostReportMake\?\.\(\{ dir, title: title\.trim\(\), actorFee: fee, draws \}\)/,
-    '生成报告用同一组抽卡次数',
+    /libraryCostReportMake\?\.\(\{ dir, title: title\.trim\(\), \.\.\.request \}\)/,
+    '生成报告用同一组设置',
   );
-  assert.match(detail, /useState\(String\(stored\.drawMin \?\? 1\)\)/, '默认最少 1 次');
-  assert.match(detail, /useState\(String\(stored\.drawMax \?\? 3\)\)/, '默认最多 3 次');
-  assert.match(detail, /drawSeed/, '随机种子记住');
-  assert.match(main, /costSummary\(dir, payload\.actorFee, payload\.draws\)/);
+  assert.match(detail, /actorPercent: settings\.actorPercent,\s*draws: \{ min: Number\(settings\.drawMin\)/);
+  assert.match(detail, /drawMin: String\(stored\.drawMin \?\? 1\)/, '默认最少 1 次');
+  assert.match(detail, /drawMax: String\(stored\.drawMax \?\? 3\)/, '默认最多 3 次');
+  assert.match(detail, /actorPercent: String\(stored\.actorPercent \?\? DEFAULT_ACTOR_PERCENT\)/, '片酬占比默认 15%');
+  assert.match(detail, /const DEFAULT_ACTOR_PERCENT = 15;/);
+  assert.match(detail, /drawSeed: stored\.drawSeed \|\| newSeed\(\)/, '随机种子记住');
+  // 设置不放在页面里：点「成本设置」弹窗改，点「确定」才生效
+  assert.match(detail, /onClick=\{\(\) => setEditing\(\{ \.\.\.settings \}\)\}>\s*成本设置/);
+  assert.match(detail, /className="lib-confirm cost-dialog"[\s\S]*aria-label="成本设置"/);
+  assert.match(detail, /setSettings\(editing\);\s*setEditing\(null\);/, '确定才生效');
+  assert.match(detail, /useDialogKeyboard\(!!editing, \(\) => setEditing\(null\), '\.cost-dialog'\)/, 'Esc 关闭');
+  const page = detail.slice(detail.indexOf('function CostReport'), detail.indexOf('{editing && ('));
+  assert.ok(!/aria-label="每集最少抽几次"|aria-label="演员片酬占总投资的百分比"/.test(page), '页面上不放输入框');
+  assert.doesNotMatch(detail, /演员片酬（元）|actorFee: fee/, '不再按元填片酬');
+  assert.match(main, /costSummary\(dir, payload\.actorPercent, payload\.draws\)/);
+  assert.match(main, /costPricing\.normalizeActorPercent\(actorPercent\)/);
   assert.match(main, /name: path\.basename\(files\[index\]\)/, '抽卡次数按文件名定');
   console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');
 }

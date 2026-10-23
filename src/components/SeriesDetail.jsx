@@ -259,9 +259,11 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, st
   );
 }
 
-// 成本配置报告里每部剧自己填的：演员片酬、改过的剧名、抽卡次数范围和随机种子（按剧文件夹记住）
+// 成本配置报告里每部剧自己的：改过的剧名、抽卡次数范围和随机种子、演员片酬占比（按剧文件夹记住）
 const COST_KEY = 'cost-report-v1';
 const newSeed = () => Math.random().toString(36).slice(2, 10);
+const DEFAULT_ACTOR_PERCENT = 15;
+const ACTOR_PERCENT_LIMIT = 95;
 
 /**
  * 成本配置报告：总投资额按 Seedance 2.5 官方价格和去重成品的时长、清晰度算（明细都列出来，能对账），
@@ -269,26 +271,32 @@ const newSeed = () => Math.random().toString(36).slice(2, 10);
  */
 function CostReport({ dir, refreshKey }) {
   const stored = useRef(readJson(COST_KEY)[dir] || {}).current;
-  const [actorFee, setActorFee] = useState(stored.actorFee ?? '0');
   const [title, setTitle] = useState(stored.title ?? '');
-  // 抽卡：每集随机抽 drawMin～drawMax 次；种子记住，同一部剧每次打开都是同一组次数，点「重新随机」才换
-  const [drawMin, setDrawMin] = useState(String(stored.drawMin ?? 1));
-  const [drawMax, setDrawMax] = useState(String(stored.drawMax ?? 3));
-  const [drawSeed, setDrawSeed] = useState(() => stored.drawSeed || newSeed());
+  // 成本设置（弹窗里改）：每集随机抽卡 drawMin～drawMax 次，种子记住（同一部剧每次打开都是同一组次数，「重新随机」才换）；
+  // 演员片酬占总投资的百分比，默认 15%
+  const [settings, setSettings] = useState(() => ({
+    drawMin: String(stored.drawMin ?? 1),
+    drawMax: String(stored.drawMax ?? 3),
+    drawSeed: stored.drawSeed || newSeed(),
+    actorPercent: String(stored.actorPercent ?? DEFAULT_ACTOR_PERCENT),
+  }));
+  const [editing, setEditing] = useState(null); // 弹窗里正在改的设置（没点「确定」前不生效）
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
-  const fee = Math.max(0, Number(actorFee) || 0);
-  const draws = { min: Number(drawMin) || 1, max: Number(drawMax) || 1, seed: drawSeed };
-  const drawsKey = `${draws.min}-${draws.max}-${draws.seed}`;
+  const request = {
+    actorPercent: settings.actorPercent,
+    draws: { min: Number(settings.drawMin) || 1, max: Number(settings.drawMax) || 1, seed: settings.drawSeed },
+  };
+  const requestKey = JSON.stringify(request);
 
   useEffect(() => {
     let alive = true;
     const timer = setTimeout(() => {
       window.electronAPI
-        .libraryCostReport?.({ dir, actorFee: fee, draws })
+        .libraryCostReport?.({ dir, ...request })
         .then((result) => {
           if (!alive) return;
           if (result?.success) {
@@ -297,17 +305,19 @@ function CostReport({ dir, refreshKey }) {
           } else setError(result?.error || '算不出来');
         })
         .catch(() => alive && setError('算不出来'));
-    }, 250);
+    }, 150);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dir, fee, drawsKey, refreshKey, reload]);
+  }, [dir, requestKey, refreshKey, reload]);
 
   useEffect(() => {
-    writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: { actorFee, title, drawMin, drawMax, drawSeed } });
-  }, [dir, actorFee, title, drawMin, drawMax, drawSeed]);
+    writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: { title, ...settings } });
+  }, [dir, title, settings]);
+
+  useDialogKeyboard(!!editing, () => setEditing(null), '.cost-dialog');
 
   const pickTemplate = async () => {
     setError('');
@@ -322,7 +332,7 @@ function CostReport({ dir, refreshKey }) {
     setMessage('');
     setBusy('make');
     const result = await window.electronAPI
-      .libraryCostReportMake?.({ dir, title: title.trim(), actorFee: fee, draws })
+      .libraryCostReportMake?.({ dir, title: title.trim(), ...request })
       .catch(() => null);
     setBusy('');
     if (result?.success) setMessage(`已生成：剧集文件夹里的「${result.name}」`);
@@ -334,12 +344,28 @@ function CostReport({ dir, refreshKey }) {
     const result = await window.electronAPI.libraryCostReportOpen?.({ dir }).catch(() => null);
     if (!result?.success) setError(result?.error || '打不开报告');
   };
+  const edit = (key) => (e) => setEditing((value) => ({ ...value, [key]: e.target.value }));
 
   const cost = info?.cost;
   const name = title.trim() || info?.title || '';
   const ready = info?.template?.ready && cost?.episodes > 0 && !!name && !info?.unreadable?.length;
+  const drawText = cost
+    ? cost.draws.min === cost.draws.max
+      ? `每集 ${cost.draws.min} 次`
+      : `每集随机 ${cost.draws.min}～${cost.draws.max} 次`
+    : '';
   return (
     <div className="cost-report">
+      <div className="proc-line">
+        <b className="proc-title">成本配置报告</b>
+        <span className="proc-summary">
+          按 Seedance 2.5 官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里
+          {cost && `；抽卡${drawText}，演员片酬占 ${info.text.share}`}
+        </span>
+        <button type="button" className="btn btn-sm proc-more" onClick={() => setEditing({ ...settings })}>
+          成本设置
+        </button>
+      </div>
       {info && (
         <dl className="cost-grid">
           <dt>微短剧名称</dt>
@@ -360,49 +386,6 @@ function CostReport({ dir, refreshKey }) {
               <span className="cost-sub cost-over">有 {info.unreadable.length} 集读不出时长，没算进去</span>
             )}
           </dd>
-          <dt>抽卡次数</dt>
-          <dd className="cost-inline">
-            每集随机
-            <input
-              className="input-field cost-input cost-draw"
-              type="number"
-              min="1"
-              max="10"
-              value={drawMin}
-              onChange={(e) => setDrawMin(e.target.value)}
-              aria-label="每集最少抽几次"
-            />
-            ～
-            <input
-              className="input-field cost-input cost-draw"
-              type="number"
-              min="1"
-              max="10"
-              value={drawMax}
-              onChange={(e) => setDrawMax(e.target.value)}
-              aria-label="每集最多抽几次"
-            />
-            次
-            {cost.draws.min !== cost.draws.max && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setDrawSeed(newSeed())}
-                title="给每一集重新随机抽卡次数"
-              >
-                重新随机
-              </button>
-            )}
-            {cost.episodes > 0 && (
-              <span className="cost-sub cost-line">
-                {Object.entries(cost.draws.counts)
-                  .sort(([a], [b]) => Number(a) - Number(b))
-                  .map(([times, count]) => `抽 ${times} 次 ${count} 集`)
-                  .join('，')}
-                ；共生成 {cost.draws.total} 次，平均每集 {cost.draws.average.toFixed(1)} 次，每次都按全价算
-              </span>
-            )}
-          </dd>
           <dt>AI 生成费用</dt>
           <dd>
             {info.text.generation}
@@ -413,25 +396,29 @@ function CostReport({ dir, refreshKey }) {
                 {Math.round(row.tokens).toLocaleString('zh-CN')} token × {row.yuanPerMillion} 元/百万 token
               </span>
             ))}
+            {cost.episodes > 0 && (
+              <span className="cost-sub">
+                抽卡{drawText}：
+                {Object.entries(cost.draws.counts)
+                  .sort(([a], [b]) => Number(a) - Number(b))
+                  .map(([times, count]) => `抽 ${times} 次 ${count} 集`)
+                  .join('，')}
+                ，平均每集 {cost.draws.average.toFixed(1)} 次
+              </span>
+            )}
           </dd>
           <dt>演员片酬</dt>
-          <dd className="cost-inline">
-            <input
-              className="input-field cost-input cost-fee"
-              type="number"
-              min="0"
-              step="100"
-              value={actorFee}
-              onChange={(e) => setActorFee(e.target.value)}
-              aria-label="演员片酬（元）"
-            />
-            元<span className="cost-sub">AI 生成没有演员就填 0；请了配音演员就填付的钱，算进总投资</span>
+          <dd>
+            <span>
+              {info.text.actorFee}（占总投资 {info.text.share}）
+            </span>
           </dd>
           <dt>总投资额</dt>
           <dd className={info.over.total ? 'cost-over' : ''}>
             <span>
               <b>{info.text.total}</b>（{info.text.totalYuan}）{info.over.total && ' 超过了报审要求的 100 万'}
             </span>
+            <span className="cost-sub">= AI 生成费用 ÷（1 − 演员片酬占比）</span>
           </dd>
           <dt>演员总片酬占比</dt>
           <dd className={info.over.share ? 'cost-over' : ''}>
@@ -479,6 +466,116 @@ function CostReport({ dir, refreshKey }) {
       </div>
       {message && <p className="cost-msg">{message}</p>}
       {error && <p className="sb-card-error">{error}</p>}
+
+      {editing && (
+        <div className="lib-mask lib-mask-top" onClick={() => setEditing(null)}>
+          <div
+            className="lib-confirm cost-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="成本设置"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="lib-params-dialog-head">
+              <h3>成本设置</h3>
+              <button
+                type="button"
+                className="lib-dialog-close"
+                aria-label="关闭"
+                title="关闭（Esc）"
+                onClick={() => setEditing(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="cost-field">
+              <span className="cost-field-name">抽卡次数</span>
+              <span className="cost-inline">
+                每集随机
+                <input
+                  className="input-field cost-input cost-draw"
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={editing.drawMin}
+                  onChange={edit('drawMin')}
+                  aria-label="每集最少抽几次"
+                />
+                ～
+                <input
+                  className="input-field cost-input cost-draw"
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={editing.drawMax}
+                  onChange={edit('drawMax')}
+                  aria-label="每集最多抽几次"
+                />
+                次
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setEditing((value) => ({ ...value, drawSeed: newSeed() }))}
+                  title="给每一集重新随机抽卡次数"
+                >
+                  重新随机
+                </button>
+              </span>
+              <span className="cost-sub">
+                同一集生成几次挑一个，每次都按全价算。两个数填一样就是固定次数；次数会记住，点「重新随机」才换一组。
+              </span>
+            </div>
+            <div className="cost-field">
+              <span className="cost-field-name">演员片酬占比</span>
+              <span className="cost-inline">
+                <input
+                  className="input-field cost-input cost-draw"
+                  type="number"
+                  min="0"
+                  max={ACTOR_PERCENT_LIMIT}
+                  step="0.5"
+                  value={editing.actorPercent}
+                  onChange={edit('actorPercent')}
+                  aria-label="演员片酬占总投资的百分比"
+                />
+                %
+              </span>
+              <span className="cost-sub">
+                演员片酬占总投资的比例，默认 15%：总投资 = AI 生成费用 ÷（1 − 占比）。报审要求低于 40%。
+              </span>
+            </div>
+            <div className="lib-confirm-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() =>
+                  setEditing((value) => ({
+                    ...value,
+                    drawMin: '1',
+                    drawMax: '3',
+                    actorPercent: String(DEFAULT_ACTOR_PERCENT),
+                  }))
+                }
+              >
+                恢复默认
+              </button>
+              <button type="button" className="btn" onClick={() => setEditing(null)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  setSettings(editing);
+                  setEditing(null);
+                }}
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1363,12 +1460,6 @@ export default function SeriesDetail({ folder, active = true }) {
             </div>
 
             <div className="proc-item">
-              <div className="proc-line">
-                <b className="proc-title">成本配置报告</b>
-                <span className="proc-summary">
-                  按 Seedance 2.5 官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里
-                </span>
-              </div>
               <CostReport
                 dir={detail.dir}
                 refreshKey={`${outputs.map((output) => `${output.name}:${output.size}`).join('|')}-${publish?.title || ''}-${runningDone}`}
