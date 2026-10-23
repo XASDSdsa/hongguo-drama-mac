@@ -338,6 +338,13 @@ button.lib-head-frame:focus-visible {
 .lib-toolbar-btns {
   align-items: center;
 }
+/* 集列表「收起 / 展开」：收起时箭头朝右 */
+.lib-fold svg {
+  transition: transform 0.15s;
+}
+.lib-fold svg.is-folded {
+  transform: rotate(-90deg);
+}
 .lib-range-hint {
   margin: -4px 0 10px;
   font-size: 12px;
@@ -617,25 +624,37 @@ button.lib-ep.is-missing:hover {
 .sb-hint.is-error {
   color: var(--danger, #d64550);
 }
-/* 每集一张截图：固定大小横排一行，不换行（窄了就左右滑） */
+/* 每集一张截图，跟着窗口宽度排：够宽一行 4 张（每张最宽 260），窄了 2 张一行，再窄 1 张一行；不会横着滑 */
+.sb-wrap {
+  container-type: inline-size;
+}
 .sb-row {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+  max-width: calc(4 * 260px + 3 * 12px);
   margin: 12px 0 0;
-  padding-bottom: 4px;
-  overflow-x: auto;
+}
+@container (max-width: 600px) {
+  .sb-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: calc(2 * 260px + 12px);
+  }
+}
+@container (max-width: 300px) {
+  .sb-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .sb-card {
-  flex: 0 0 232px;
-  width: 232px;
+  min-width: 0;
 }
 .sb-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 232px;
-  height: 290px;
+  width: 100%;
+  aspect-ratio: 4 / 5;
   padding: 0;
   overflow: hidden;
   font: inherit;
@@ -674,18 +693,24 @@ button.lib-ep.is-missing:hover {
   padding: 0 12px;
   text-align: center;
 }
+/* 卡片窄了，按钮换到集号下面一行 */
 .sb-card-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
   margin-top: 8px;
   font-size: 13px;
 }
+.sb-card-foot b {
+  white-space: nowrap;
+}
 .sb-card-btns {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  margin-left: auto;
 }
 .sb-card-error {
   margin: 6px 0 0;

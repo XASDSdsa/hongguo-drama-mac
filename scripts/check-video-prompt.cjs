@@ -356,8 +356,8 @@ async function main() {
   assert.match(detail, /const TRASH = .*'废纸篓' : '回收站'/);
   assert.match(preload, /libraryStoryboardHtml:/);
   assert.match(preload, /libraryStoryboardOpen:/);
-  // 界面里按集显示截图（页头 + 前两个分镜），固定大小横排；点开看大图；完整页面点「网页」打开；每集能单独重新生成
-  assert.match(detail, /className="sb-row"/, '分镜工程图截图横排');
+  // 界面里按集显示截图（页头 + 前两个分镜），跟着窗口宽度排；点开看大图；完整页面点「网页」打开；每集能单独重新生成
+  assert.match(detail, /className="sb-wrap"[\s\S]{0,40}className="sb-row"/, '分镜工程图截图放在按宽度排版的容器里');
   assert.match(detail, /onView\?\.\(\{ url: item\.image/, '点截图看大图');
   assert.match(detail, /libraryStoryboardRegenerate/, '单集重新生成');
   assert.match(preload, /libraryStoryboardShot:/);
@@ -365,8 +365,21 @@ async function main() {
   assert.match(main, /ipcMain\.handle\('library-storyboard-regenerate'/);
   assert.match(main, /fresh: true/, '重新生成不用上次的结果');
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'SeriesDetail.css'), 'utf8');
-  assert.match(css, /\.sb-row \{[^}]*flex-wrap: nowrap/, '一行不换行');
-  assert.match(css, /\.sb-thumb \{[^}]*width: 232px;[^}]*height: 290px/, '截图固定大小');
+  // 响应式：够宽一行 4 张，窄了 2 张一行、再窄 1 张；截图跟着卡片宽度缩放，不会横着滑出去
+  assert.match(css, /\.sb-wrap \{[^}]*container-type: inline-size/, '按容器宽度排版');
+  assert.match(css, /\.sb-row \{[^}]*display: grid;[^}]*repeat\(4, minmax\(0, 1fr\)\)/, '宽的时候一行 4 张');
+  assert.match(css, /@container \(max-width: 600px\) \{\s*\.sb-row \{[^}]*repeat\(2, minmax\(0, 1fr\)\)/, '窄了 2 张一行');
+  assert.match(css, /@container \(max-width: 300px\) \{\s*\.sb-row \{[^}]*grid-template-columns: minmax\(0, 1fr\)/, '再窄 1 张一行');
+  assert.doesNotMatch(css, /\.sb-row \{[^}]*(overflow-x: auto|flex-wrap: nowrap)/, '不再横着滑');
+  assert.match(css, /\.sb-thumb \{[^}]*width: 100%;[^}]*aspect-ratio: 4 \/ 5/, '截图按卡片宽度缩放，比例不变');
+  assert.match(css, /\.sb-card-foot \{[^}]*flex-wrap: wrap/, '卡片窄了按钮换行，不挤出去');
+  // 两个集列表（原剧、去重处理后）可以收起，收起后列表和翻页都不显示；记住上次的选择
+  assert.match(detail, /<FoldButton\s+folded=\{foldEpisodes\}/, '原剧集列表能收起');
+  assert.match(detail, /<FoldButton\s+folded=\{foldOutputs\}/, '去重成品列表能收起');
+  assert.match(detail, /\{!foldEpisodes && \(\s*<>\s*<div className="lib-eps">/, '收起后不显示原剧集');
+  assert.match(detail, /\{!foldOutputs && \(\s*<>\s*\{!outputs\.length && \(/, '收起后不显示去重成品');
+  assert.match(detail, /writeJson\(VIEW_KEY, \{[^}]*foldEpisodes, foldOutputs \}\)/, '记住收起状态');
+  assert.match(detail, /aria-expanded=\{!folded\}/);
   const settingsUi = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Settings.jsx'), 'utf8');
   for (const key of ['ark_base_url', 'ark_api_key', 'ark_video_model', 'video_prompt_max_seconds']) assert.ok(settingsUi.includes(`'${key}'`), `设置页要保存 ${key}`);
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './SeriesDetail.css';
-import { Check, Folder, RefreshCw } from './icons';
+import { Check, ChevronDown, Folder, RefreshCw } from './icons';
 import DedupParams, { rangeProblems } from './DedupParams';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
@@ -81,8 +81,24 @@ function ghostLabel(item) {
   return item.text;
 }
 
+/** 集列表右上角的「收起 / 展开」：收起后只留标题这一行，页面不会太长。 */
+function FoldButton({ folded, onToggle, label }) {
+  return (
+    <button
+      type="button"
+      className="btn btn-sm lib-fold"
+      aria-expanded={!folded}
+      onClick={onToggle}
+      title={folded ? `展开${label}` : `收起${label}，只留这一行`}
+    >
+      <ChevronDown size={14} className={folded ? 'is-folded' : ''} />
+      {folded ? '展开' : '收起'}
+    </button>
+  );
+}
+
 /**
- * 所选几集的分镜工程图：每集一张截图（页头 + 前两个分镜），固定大小横排一行、不换行；点图看大图。
+ * 所选几集的分镜工程图：每集一张截图（页头 + 前两个分镜），按窗口宽度排（宽一行 4 张，窄了 2 张一行）；点图看大图。
  * 每集可以单独「重新生成」（重新看视频写提示词，不用上次的结果）；完整的交互页面点「网页」打开。
  */
 function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, storyboardRunning }) {
@@ -154,7 +170,9 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, st
   const regenerate = async (item) => {
     setFor(setErrors, item.number, null);
     setFor(setBusy, item.number, { kind: 'regen', since: item.updatedAt || 0 });
-    const result = await window.electronAPI.libraryStoryboardRegenerate?.({ dir, number: item.number, mode }).catch(() => null);
+    const result = await window.electronAPI
+      .libraryStoryboardRegenerate?.({ dir, number: item.number, mode })
+      .catch(() => null);
     if (!result?.success) {
       setFor(setBusy, item.number, null);
       setFor(setErrors, item.number, result?.error || '没能开始重新生成');
@@ -171,65 +189,72 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, st
     return enabled ? <p className="sb-hint">分镜处理完、提示词写好后，所选集的分镜工程图会出现在这里。</p> : null;
   }
   return (
-    <div className="sb-row" role="list" aria-label="分镜工程图">
-      {items.map((item) => {
-        const state = busy[item.number];
-        const placeholder =
-          state?.kind === 'regen'
-            ? '正在重新生成…'
-            : state?.kind === 'shot'
-              ? '正在出图…'
-              : item.state === 'no-episode'
-                ? '去重成品里没有这一集'
-                : item.state === 'none'
-                  ? '还没生成'
-                  : '截图没出来';
-        return (
-          <div key={item.number} className="sb-card" role="listitem">
-            <button
-              type="button"
-              className="sb-thumb"
-              disabled={!item.image || state?.kind === 'regen'}
-              onClick={() => onView?.({ url: item.image, title: `第 ${item.number} 集分镜工程图`, wide: true })}
-              title={item.image ? '点击查看大图' : undefined}
-            >
-              {item.image && state?.kind !== 'regen' ? (
-                <img src={item.image} alt={`第 ${item.number} 集分镜工程图`} loading="lazy" />
-              ) : (
-                <span className={state ? 'is-busy' : ''}>
-                  {state && <RefreshCw size={14} className="spin" />}
-                  {placeholder}
+    <div className="sb-wrap">
+      <div className="sb-row" role="list" aria-label="分镜工程图">
+        {items.map((item) => {
+          const state = busy[item.number];
+          const placeholder =
+            state?.kind === 'regen'
+              ? '正在重新生成…'
+              : state?.kind === 'shot'
+                ? '正在出图…'
+                : item.state === 'no-episode'
+                  ? '去重成品里没有这一集'
+                  : item.state === 'none'
+                    ? '还没生成'
+                    : '截图没出来';
+          return (
+            <div key={item.number} className="sb-card" role="listitem">
+              <button
+                type="button"
+                className="sb-thumb"
+                disabled={!item.image || state?.kind === 'regen'}
+                onClick={() => onView?.({ url: item.image, title: `第 ${item.number} 集分镜工程图`, wide: true })}
+                title={item.image ? '点击查看大图' : undefined}
+              >
+                {item.image && state?.kind !== 'regen' ? (
+                  <img src={item.image} alt={`第 ${item.number} 集分镜工程图`} loading="lazy" />
+                ) : (
+                  <span className={state ? 'is-busy' : ''}>
+                    {state && <RefreshCw size={14} className="spin" />}
+                    {placeholder}
+                  </span>
+                )}
+              </button>
+              <div className="sb-card-foot">
+                <b>第 {item.number} 集</b>
+                <span className="sb-card-btns">
+                  {item.state === 'ready' && !item.image && !state && (
+                    <button type="button" className="btn btn-sm" onClick={() => makeShot(item.number)}>
+                      重新出图
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => regenerate(item)}
+                    disabled={item.state === 'no-episode' || !!state}
+                    title="重新看视频、写提示词、去字幕、截图（不用上次的结果）"
+                  >
+                    {item.state === 'ready' ? '重新生成' : '生成'}
+                  </button>
+                  {item.state === 'ready' && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => open(item.number)}
+                      title="在浏览器里打开完整的分镜工程图页面"
+                    >
+                      网页
+                    </button>
+                  )}
                 </span>
-              )}
-            </button>
-            <div className="sb-card-foot">
-              <b>第 {item.number} 集</b>
-              <span className="sb-card-btns">
-                {item.state === 'ready' && !item.image && !state && (
-                  <button type="button" className="btn btn-sm" onClick={() => makeShot(item.number)}>
-                    重新出图
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => regenerate(item)}
-                  disabled={item.state === 'no-episode' || !!state}
-                  title="重新看视频、写提示词、去字幕、截图（不用上次的结果）"
-                >
-                  {item.state === 'ready' ? '重新生成' : '生成'}
-                </button>
-                {item.state === 'ready' && (
-                  <button type="button" className="btn btn-sm" onClick={() => open(item.number)} title="在浏览器里打开完整的分镜工程图页面">
-                    网页
-                  </button>
-                )}
-              </span>
+              </div>
+              {errors[item.number] && <p className="sb-card-error">{errors[item.number]}</p>}
             </div>
-            {errors[item.number] && <p className="sb-card-error">{errors[item.number]}</p>}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -243,6 +268,9 @@ export default function SeriesDetail({ folder, active = true }) {
   const [selected, setSelected] = useState(new Set());
   const saved = useRef(readJson(STORAGE_KEY)).current;
   const view = useRef(readJson(VIEW_KEY)).current;
+  // 两个集列表（原剧、去重处理后）可以收起来；记住上次的选择，所有剧通用
+  const [foldEpisodes, setFoldEpisodes] = useState(view.foldEpisodes === true);
+  const [foldOutputs, setFoldOutputs] = useState(view.foldOutputs === true);
   const [opts, setOpts] = useState(null);
   const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
@@ -402,8 +430,8 @@ export default function SeriesDetail({ folder, active = true }) {
     }
   }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums]);
   useEffect(() => {
-    writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize });
-  }, [pageSize]);
+    writeJson(VIEW_KEY, { ...readJson(VIEW_KEY), episodePageSize: pageSize, foldEpisodes, foldOutputs });
+  }, [pageSize, foldEpisodes, foldOutputs]);
 
   const resetParams = async () => {
     const defaults = await window.electronAPI.quchongDefaults?.().catch(() => null);
@@ -787,91 +815,100 @@ export default function SeriesDetail({ folder, active = true }) {
                 >
                   整部
                 </button>
+                <FoldButton
+                  folded={foldEpisodes}
+                  onToggle={() => setFoldEpisodes((value) => !value)}
+                  label="原剧集列表"
+                />
               </span>
             </div>
             {remoteNote && <div className="lib-remote-note">{remoteNote}</div>}
-            {!episodes.length && !loading && <div className="lib-empty">这个文件夹里没有视频。</div>}
+            {!foldEpisodes && !episodes.length && !loading && <div className="lib-empty">这个文件夹里没有视频。</div>}
 
-            <div className="lib-eps">
-              {visible.map((card) => {
-                if (card.kind === 'missing') {
-                  const item = card.item;
-                  const action = tileAction(item);
-                  const reason = item.task?.reason?.text || item.text;
-                  const inner = (
-                    <>
-                      <span className="lib-ep-no">第{item.index}集</span>
-                      <span className="lib-ep-state">{ghostLabel(item)}</span>
-                    </>
-                  );
-                  return action ? (
-                    <button
-                      type="button"
-                      key={card.key}
-                      className={`lib-ep is-missing is-${item.state}`}
-                      onClick={() => runTile(action)}
-                      title={`第${item.index}集：${reason}。点一下${item.state === 'failed' ? '重试' : '下载'}`}
-                    >
-                      {inner}
-                    </button>
-                  ) : (
-                    <div
-                      key={card.key}
-                      className={`lib-ep is-missing is-${item.state}`}
-                      title={`第${item.index}集：${reason}`}
-                    >
-                      {inner}
-                    </div>
-                  );
-                }
-                const episode = card.episode;
-                const on = selected.has(episode.path);
-                return (
-                  <div key={episode.path} className="lib-ep-cell">
-                    <button
-                      type="button"
-                      className={`lib-ep ${on ? 'is-selected' : ''}`}
-                      aria-pressed={on}
-                      onClick={() => clickEpisode(episode, episodes.indexOf(episode))}
-                      title={`${episode.name}（${formatSize(episode.size)}${durations[durationId(episode)] > 0 ? ` · ${formatDuration(durations[durationId(episode)])}` : ''}）`}
-                    >
-                      <span className="lib-ep-no">
-                        {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
-                      </span>
-                      {durations[durationId(episode)] > 0 && (
-                        <span className="lib-ep-dur">{formatDuration(durations[durationId(episode)])}</span>
-                      )}
-                    </button>
-                    {on && (
-                      <span className="lib-ep-check">
-                        <Check size={11} />
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className="lib-ep-reveal"
-                      aria-label={`定位${episode.name}`}
-                      title="在文件管理器里定位这个视频"
-                      onClick={() => window.electronAPI.showInFolder(episode.path)}
-                    >
-                      <Folder size={15} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <Pager
-              total={cards.length}
-              page={currentPage}
-              pageSize={pageSize}
-              onPage={setPage}
-              onPageSize={(size) => {
-                setPageSize(size);
-                setPage(1);
-              }}
-              sizes={EPISODE_PAGE_SIZES}
-              unit="集"
-            />
+            {!foldEpisodes && (
+              <>
+                <div className="lib-eps">
+                  {visible.map((card) => {
+                    if (card.kind === 'missing') {
+                      const item = card.item;
+                      const action = tileAction(item);
+                      const reason = item.task?.reason?.text || item.text;
+                      const inner = (
+                        <>
+                          <span className="lib-ep-no">第{item.index}集</span>
+                          <span className="lib-ep-state">{ghostLabel(item)}</span>
+                        </>
+                      );
+                      return action ? (
+                        <button
+                          type="button"
+                          key={card.key}
+                          className={`lib-ep is-missing is-${item.state}`}
+                          onClick={() => runTile(action)}
+                          title={`第${item.index}集：${reason}。点一下${item.state === 'failed' ? '重试' : '下载'}`}
+                        >
+                          {inner}
+                        </button>
+                      ) : (
+                        <div
+                          key={card.key}
+                          className={`lib-ep is-missing is-${item.state}`}
+                          title={`第${item.index}集：${reason}`}
+                        >
+                          {inner}
+                        </div>
+                      );
+                    }
+                    const episode = card.episode;
+                    const on = selected.has(episode.path);
+                    return (
+                      <div key={episode.path} className="lib-ep-cell">
+                        <button
+                          type="button"
+                          className={`lib-ep ${on ? 'is-selected' : ''}`}
+                          aria-pressed={on}
+                          onClick={() => clickEpisode(episode, episodes.indexOf(episode))}
+                          title={`${episode.name}（${formatSize(episode.size)}${durations[durationId(episode)] > 0 ? ` · ${formatDuration(durations[durationId(episode)])}` : ''}）`}
+                        >
+                          <span className="lib-ep-no">
+                            {episode.index != null ? `第${episode.index}集` : episode.name.replace(/\.[^.]+$/, '')}
+                          </span>
+                          {durations[durationId(episode)] > 0 && (
+                            <span className="lib-ep-dur">{formatDuration(durations[durationId(episode)])}</span>
+                          )}
+                        </button>
+                        {on && (
+                          <span className="lib-ep-check">
+                            <Check size={11} />
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className="lib-ep-reveal"
+                          aria-label={`定位${episode.name}`}
+                          title="在文件管理器里定位这个视频"
+                          onClick={() => window.electronAPI.showInFolder(episode.path)}
+                        >
+                          <Folder size={15} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <Pager
+                  total={cards.length}
+                  page={currentPage}
+                  pageSize={pageSize}
+                  onPage={setPage}
+                  onPageSize={(size) => {
+                    setPageSize(size);
+                    setPage(1);
+                  }}
+                  sizes={EPISODE_PAGE_SIZES}
+                  unit="集"
+                />
+              </>
+            )}
           </section>
 
           <section className="lib-section" aria-label="去重处理后">
@@ -890,7 +927,7 @@ export default function SeriesDetail({ folder, active = true }) {
                 )}
               </span>
               <span className="lib-toolbar-btns">
-                {draftOn && outputs.length > 0 && (
+                {draftOn && outputs.length > 0 && !foldOutputs && (
                   <span className="lib-toolbar-hint">点集数选做剪映草稿的集（最多 4 集）</span>
                 )}
                 {record && (
@@ -898,70 +935,79 @@ export default function SeriesDetail({ folder, active = true }) {
                     查看处理参数
                   </button>
                 )}
+                <FoldButton
+                  folded={foldOutputs}
+                  onToggle={() => setFoldOutputs((value) => !value)}
+                  label="去重成品列表"
+                />
               </span>
             </div>
-            {!outputs.length && (
-              <div className="lib-empty">
-                {runningTotal > 0
-                  ? '正在去重，做好的集会出现在这里。'
-                  : '还没有去重。勾选下面的「视频去重」开始处理后，成品按集显示在这里。'}
-              </div>
-            )}
-            {!record && outputs.length > 0 && (
-              <div className="lib-remote-note">
-                这些成品是以前的版本做的，没有记录原剧范围和处理参数；下次去重后会显示。
-              </div>
-            )}
-            <div className="lib-eps">
-              {visibleOutputs.map((output) => {
-                const on = draftOn && output.index != null && draftNumbers.includes(output.index);
-                return (
-                  <div key={output.path} className="lib-ep-cell">
-                    <button
-                      type="button"
-                      className={`lib-ep ${on ? 'is-selected' : ''}`}
-                      aria-pressed={on}
-                      onClick={() => draftOn && toggleDraftEpisode(output.index)}
-                      title={`${output.name}（${formatSize(output.size)}${durations[durationId(output)] > 0 ? ` · ${formatDuration(durations[durationId(output)])}` : ''}）${draftOn ? (on ? '，点一下不做剪映草稿' : '，点一下做剪映草稿') : ''}`}
-                    >
-                      <span className="lib-ep-no">
-                        {output.index != null ? `第${output.index}集` : output.name.replace(/\.[^.]+$/, '')}
-                      </span>
-                      {durations[durationId(output)] > 0 && (
-                        <span className="lib-ep-dur">{formatDuration(durations[durationId(output)])}</span>
-                      )}
-                    </button>
-                    {on && (
-                      <span className="lib-ep-check">
-                        <Check size={11} />
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className="lib-ep-reveal"
-                      aria-label={`定位${output.name}`}
-                      title="在文件管理器里定位这个成品"
-                      onClick={() => window.electronAPI.showInFolder(output.path)}
-                    >
-                      <Folder size={15} />
-                    </button>
+            {!foldOutputs && (
+              <>
+                {!outputs.length && (
+                  <div className="lib-empty">
+                    {runningTotal > 0
+                      ? '正在去重，做好的集会出现在这里。'
+                      : '还没有去重。勾选下面的「视频去重」开始处理后，成品按集显示在这里。'}
                   </div>
-                );
-              })}
-            </div>
-            {outputs.length > 0 && (
-              <Pager
-                total={outputs.length}
-                page={currentOutPage}
-                pageSize={pageSize}
-                onPage={setOutPage}
-                onPageSize={(size) => {
-                  setPageSize(size);
-                  setOutPage(1);
-                }}
-                sizes={EPISODE_PAGE_SIZES}
-                unit="集"
-              />
+                )}
+                {!record && outputs.length > 0 && (
+                  <div className="lib-remote-note">
+                    这些成品是以前的版本做的，没有记录原剧范围和处理参数；下次去重后会显示。
+                  </div>
+                )}
+                <div className="lib-eps">
+                  {visibleOutputs.map((output) => {
+                    const on = draftOn && output.index != null && draftNumbers.includes(output.index);
+                    return (
+                      <div key={output.path} className="lib-ep-cell">
+                        <button
+                          type="button"
+                          className={`lib-ep ${on ? 'is-selected' : ''}`}
+                          aria-pressed={on}
+                          onClick={() => draftOn && toggleDraftEpisode(output.index)}
+                          title={`${output.name}（${formatSize(output.size)}${durations[durationId(output)] > 0 ? ` · ${formatDuration(durations[durationId(output)])}` : ''}）${draftOn ? (on ? '，点一下不做剪映草稿' : '，点一下做剪映草稿') : ''}`}
+                        >
+                          <span className="lib-ep-no">
+                            {output.index != null ? `第${output.index}集` : output.name.replace(/\.[^.]+$/, '')}
+                          </span>
+                          {durations[durationId(output)] > 0 && (
+                            <span className="lib-ep-dur">{formatDuration(durations[durationId(output)])}</span>
+                          )}
+                        </button>
+                        {on && (
+                          <span className="lib-ep-check">
+                            <Check size={11} />
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className="lib-ep-reveal"
+                          aria-label={`定位${output.name}`}
+                          title="在文件管理器里定位这个成品"
+                          onClick={() => window.electronAPI.showInFolder(output.path)}
+                        >
+                          <Folder size={15} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {outputs.length > 0 && (
+                  <Pager
+                    total={outputs.length}
+                    page={currentOutPage}
+                    pageSize={pageSize}
+                    onPage={setOutPage}
+                    onPageSize={(size) => {
+                      setPageSize(size);
+                      setOutPage(1);
+                    }}
+                    sizes={EPISODE_PAGE_SIZES}
+                    unit="集"
+                  />
+                )}
+              </>
             )}
           </section>
 
@@ -1133,7 +1179,13 @@ export default function SeriesDetail({ folder, active = true }) {
             <div className="lib-params-dialog-head">
               <h3>去重参数</h3>
               <span>{estimateText || `每集 ${split.min_len}–${split.max_len} 秒`}</span>
-              <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={() => setShowParams(false)}>
+              <button
+                type="button"
+                className="lib-dialog-close"
+                aria-label="关闭"
+                title="关闭（Esc）"
+                onClick={() => setShowParams(false)}
+              >
                 ×
               </button>
             </div>
@@ -1172,7 +1224,13 @@ export default function SeriesDetail({ folder, active = true }) {
             <div className="lib-params-dialog-head">
               <h3>上次处理参数</h3>
               <span>{formatTime(detail.lastDedup.at)} 开始的那次去重（只读）</span>
-              <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={() => setShowSaved(false)}>
+              <button
+                type="button"
+                className="lib-dialog-close"
+                aria-label="关闭"
+                title="关闭（Esc）"
+                onClick={() => setShowSaved(false)}
+              >
                 ×
               </button>
             </div>
@@ -1216,7 +1274,13 @@ export default function SeriesDetail({ folder, active = true }) {
           >
             <div className="lib-viewer-head">
               <b>{viewing.title}</b>
-              <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={() => setViewing(null)}>
+              <button
+                type="button"
+                className="lib-dialog-close"
+                aria-label="关闭"
+                title="关闭（Esc）"
+                onClick={() => setViewing(null)}
+              >
                 ×
               </button>
             </div>
