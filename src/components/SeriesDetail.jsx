@@ -290,15 +290,13 @@ const costRequest = (settings) => ({
 });
 
 /**
- * 成本配置报告弹窗：页面上只有「☑ 成本配置报告」和「报告设置」，其余都在这里——
- * 剧名、算法明细（Seedance 2.5 官方价格 × 成品时长和清晰度 × 抽卡次数）、抽卡和片酬占比设置、模板、马上生成。
- * 改的东西边改边算；点「确定」或「生成报告」才记住，「取消」/ Esc 不改。
+ * 「报告设置」弹窗：只管设置——剧名、抽卡次数、演员片酬占比、报告模板；下面按现在「去重」里的成品估一下数，方便对照。
+ * 报告不在这里生成：勾上「成本配置报告」后点「开始处理」，处理完自动生成。改的东西点「确定」才记住，「取消」/ Esc 不改。
  */
 function CostReportDialog({ dir, refreshKey, onClose }) {
   const [settings, setSettings] = useState(() => readCostSettings(dir));
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
   const request = costRequest(settings);
@@ -336,44 +334,26 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
     if (!result?.success) setError(result?.error || '模板没选上');
     setReload((value) => value + 1);
   };
-  const make = async () => {
-    setError('');
-    setMessage('');
-    setBusy('make');
-    saveCostSettings(dir, settings);
-    const result = await window.electronAPI.libraryCostReportMake?.({ dir, ...request }).catch(() => null);
-    setBusy('');
-    if (result?.success) setMessage(`已生成：剧集文件夹里的「${result.name}」`);
-    else setError(result?.error || '报告没生成出来');
-    setReload((value) => value + 1);
-  };
-  const open = async () => {
-    setError('');
-    const result = await window.electronAPI.libraryCostReportOpen?.({ dir }).catch(() => null);
-    if (!result?.success) setError(result?.error || '打不开报告');
-  };
 
   const cost = info?.cost;
-  const name = request.title || info?.title || '';
-  const ready = info?.template?.ready && cost?.episodes > 0 && !!name && !info?.unreadable?.length;
   return (
     <div className="lib-mask lib-mask-top" onClick={onClose}>
       <div
         className="lib-confirm cost-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="成本配置报告"
+        aria-label="成本配置报告设置"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="lib-params-dialog-head">
-          <h3>成本配置报告</h3>
+          <h3>成本配置报告设置</h3>
           <button type="button" className="lib-dialog-close" aria-label="关闭" title="关闭（Esc）" onClick={onClose}>
             ×
           </button>
         </div>
         <p className="cost-lead">
-          按 Seedance 2.5
-          官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里。勾上「成本配置报告」后点「开始处理」，处理完会自动生成。
+          这里只是设置。报告在勾上「成本配置报告」、点「开始处理」后自动生成：处理完按 Seedance 2.5
+          官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里。下面的数按「去重」里现有的成品估算，供参考。
         </p>
         {!info && !error && <p className="cost-sub">正在算…</p>}
         {info && (
@@ -509,22 +489,22 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
             </button>
           </p>
         )}
-        {message && <p className="cost-msg">{message}</p>}
         {error && <p className="sb-card-error">{error}</p>}
         <div className="lib-confirm-actions">
-          {info?.report && (
-            <button type="button" className="btn" onClick={open} title="用 Word 打开剧集文件夹里的报告">
-              打开报告
-            </button>
-          )}
           <button
             type="button"
             className="btn"
-            onClick={make}
-            disabled={!ready || !!busy}
-            title="按现在的设置马上生成一份（勾选后点「开始处理」也会自动生成）"
+            onClick={() =>
+              setSettings((value) => ({
+                ...value,
+                drawMin: '1',
+                drawMax: '3',
+                actorPercent: String(DEFAULT_ACTOR_PERCENT),
+              }))
+            }
+            title="抽卡每集随机 1～3 次，演员片酬占比 15%"
           >
-            {busy === 'make' ? '正在生成…' : info?.report ? '重新生成报告' : '马上生成报告'}
+            恢复默认
           </button>
           <span className="cost-gap" />
           <button type="button" className="btn" onClick={onClose}>

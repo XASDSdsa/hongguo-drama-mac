@@ -826,11 +826,6 @@ button.lib-ep.is-missing:hover {
   gap: 6px;
   margin-left: auto;
 }
-.cost-msg {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--accent);
-}
 
 /* 已经去重过时的强提醒 */
 .lib-confirm-warn {

@@ -149,8 +149,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryEstimate: (payload) => ipcRenderer.invoke('library-estimate', payload),
   libraryDurations: (payload) => ipcRenderer.invoke('library-durations', payload),
   libraryCostReport: (payload) => ipcRenderer.invoke('library-cost-report', payload),
-  libraryCostReportMake: (payload) => ipcRenderer.invoke('library-cost-report-make', payload),
-  libraryCostReportOpen: (payload) => ipcRenderer.invoke('library-cost-report-open', payload),
   costReportTemplatePick: () => ipcRenderer.invoke('cost-report-template-pick'),
   libraryStoryboardShot: (payload) => ipcRenderer.invoke('library-storyboard-shot', payload),
   libraryStoryboardRegenerate: (payload) => ipcRenderer.invoke('library-storyboard-regenerate', payload),

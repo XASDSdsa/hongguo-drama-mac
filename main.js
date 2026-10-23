@@ -5768,29 +5768,6 @@ async function runCostReportTask(dir, task) {
   }
 }
 
-ipcMain.handle('library-cost-report-make', async (_event, payload = {}) => {
-  try {
-    const dir = storyboardDir(payload);
-    if (!dir) return { success: false, error: '这不是剧文件夹' };
-    return await makeCostReport(dir, payload);
-  } catch (error) {
-    return { success: false, error: error?.message || String(error) };
-  }
-});
-
-ipcMain.handle('library-cost-report-open', async (_event, payload = {}) => {
-  try {
-    const dir = storyboardDir(payload);
-    if (!dir) return { success: false, error: '这不是剧文件夹' };
-    const file = costReportFile(dir);
-    if (!fs.existsSync(file)) return { success: false, error: '报告还没生成' };
-    const error = await shell.openPath(file);
-    return error ? { success: false, error } : { success: true };
-  } catch (error) {
-    return { success: false, error: error?.message || String(error) };
-  }
-});
-
 /** 开始处理前的预览：按这些集的时长和当前参数，估一下会得到多少集。 */
 ipcMain.handle('library-estimate', async (_event, payload = {}) => {
   try {

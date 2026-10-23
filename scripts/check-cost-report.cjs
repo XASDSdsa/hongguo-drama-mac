@@ -261,21 +261,16 @@ const template = writeZip([
   );
   assert.match(main, /costDocx\.checkTemplate\(buffer\)/, '选模板时先核对能不能填');
   assert.match(main, /ipcMain\.handle\('library-cost-report'/);
-  assert.match(main, /ipcMain\.handle\('library-cost-report-make'/);
-  assert.match(main, /ipcMain\.handle\('library-cost-report-open'/);
+  // 报告只在「开始处理」里生成：没有单独的「生成 / 打开报告」接口
+  assert.doesNotMatch(main, /ipcMain\.handle\('library-cost-report-(make|open)'/);
   assert.match(main, /ipcMain\.handle\('cost-report-template-pick'/);
   assert.match(main, /libraryDedupOutputs\(dir\)/, '按「去重」里的成品算');
   assert.match(main, /报告正在 Word 里打开着/);
   const layout = require('../src/native/series-layout');
   assert.equal(layout.COST_REPORT, '成本配置比例情况报告.docx');
   const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
-  for (const name of [
-    'libraryCostReport:',
-    'libraryCostReportMake:',
-    'libraryCostReportOpen:',
-    'costReportTemplatePick:',
-  ])
-    assert.ok(preload.includes(name), name);
+  for (const name of ['libraryCostReport:', 'costReportTemplatePick:']) assert.ok(preload.includes(name), name);
+  assert.ok(!/libraryCostReport(Make|Open):/.test(preload));
   const detail = fs.readFileSync(path.join(root, 'src/components/SeriesDetail.jsx'), 'utf8');
   // 页面上只有「☑ 成本配置报告」和旁边的「报告设置」，在分镜工程图下面；其余都在弹窗里
   const storyboard = detail.indexOf('<StoryboardResults');
@@ -292,17 +287,14 @@ const template = writeZip([
     '开始处理带上报告设置',
   );
   assert.match(detail, /const nothingToDo = dedupOn \? !selectedCount : !draftOn && !costOn;/, '只勾报告也能开始');
-  // 弹窗：明细、设置（抽卡、片酬占比）、模板、马上生成；边改边算，「确定」/「生成报告」才记住
+  // 「报告设置」弹窗只管设置（剧名、抽卡、片酬占比、模板），下面估个数；不在这里生成报告；「确定」才记住
   const dialog = detail.slice(detail.indexOf('function CostReportDialog'), detail.indexOf('/** 剧的子页面：'));
-  assert.match(dialog, /className="lib-confirm cost-dialog"[\s\S]*aria-label="成本配置报告"/);
+  assert.match(dialog, /className="lib-confirm cost-dialog"[\s\S]*aria-label="成本配置报告设置"/);
   assert.match(dialog, /aria-label="每集最少抽几次"[\s\S]*aria-label="每集最多抽几次"/);
   assert.match(dialog, /aria-label="演员片酬占总投资的百分比"/);
   assert.match(dialog, /libraryCostReport\?\.\(\{ dir, \.\.\.request \}\)/, '边改边算');
-  assert.match(
-    dialog,
-    /saveCostSettings\(dir, settings\);\s*const result = await window\.electronAPI\.libraryCostReportMake\?\.\(\{ dir, \.\.\.request \}\)/,
-    '马上生成用弹窗里的设置并记住',
-  );
+  assert.doesNotMatch(dialog, /libraryCostReportMake|libraryCostReportOpen|生成报告|打开报告/, '设置里不生成报告');
+  assert.match(dialog, /恢复默认/);
   assert.match(dialog, /saveCostSettings\(dir, settings\);\s*onClose\(\);/, '确定才记住');
   assert.match(dialog, /useDialogKeyboard\(true, onClose, '\.cost-dialog'\)/, 'Esc 关闭');
   assert.match(dialog, /抽一次收一次全价/);
