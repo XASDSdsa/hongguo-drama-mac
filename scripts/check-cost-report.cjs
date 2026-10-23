@@ -1,0 +1,229 @@
+'use strict';
+// 成本配置报告：总投资额按 Seedance 2.5 官方价格算（和官方价格页的示例对得上）；按模板填 Word 只改表格那一行和日期，
+// 其余（公章、签名图片、其他文字）一个字节不动；模板只存在用户电脑上，不进仓库；界面和主进程接好了。
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const pricing = require('../src/native/cost-report/pricing');
+const { readZip, writeZip } = require('../src/native/cost-report/zip');
+const { fillCostReport, checkTemplate, readCostReport } = require('../src/native/cost-report/docx');
+
+const root = path.join(__dirname, '..');
+
+// ---- 价格：官方示例（doubao-seedance-2.5，输入不含视频，5 秒 16:9）480p 3.36、720p 7.56、1080p 18.71 元 ----
+{
+  const five = (width, height) => pricing.episodeCost({ seconds: 5, width, height });
+  assert.equal(five(854, 480).yuan.toFixed(2), '3.36');
+  assert.equal(five(1280, 720).yuan.toFixed(2), '7.56');
+  assert.equal(five(1920, 1080).yuan.toFixed(2), '18.71');
+  assert.equal(five(1280, 720).tokens, 108000, 'token = 时长 × 宽 × 高 × 24 / 1024');
+  // 竖屏短剧：720×1280 按 720p、1080×1920 按 1080p，像素数和横屏一样
+  assert.equal(pricing.tierFor(720, 1280).name, '720p');
+  assert.equal(pricing.tierFor(1080, 1920).name, '1080p');
+  assert.equal(pricing.tierFor(540, 960).name, '480p');
+  assert.equal(pricing.tierFor(1088, 1920).name, '1080p');
+  assert.equal(pricing.PRICE.model, 'doubao-seedance-2.5');
+  assert.deepEqual(
+    pricing.PRICE.tiers.map((tier) => [tier.name, tier.yuanPerMillion]),
+    [
+      ['1080p', 77],
+      ['720p', 70],
+      ['480p', 70],
+    ],
+  );
+}
+
+// ---- 整部剧：每集按自己的清晰度算，加起来；演员片酬算进总投资 ----
+{
+  const list = [
+    { seconds: 100, width: 1080, height: 1920 },
+    { seconds: 100, width: 1080, height: 1920 },
+    { seconds: 60, width: 720, height: 1280 },
+  ];
+  const cost = pricing.seriesCost(list);
+  const expected = ((200 * 1920 * 1080 * 24) / 1024 / 1e6) * 77 + ((60 * 1280 * 720 * 24) / 1024 / 1e6) * 70;
+  assert.ok(Math.abs(cost.generation - expected) < 1e-6);
+  assert.equal(cost.episodes, 3);
+  assert.equal(cost.seconds, 260);
+  assert.equal(cost.actorFee, 0);
+  assert.equal(cost.actorShare, 0, 'AI 生成没有演员：片酬占比 0');
+  assert.deepEqual(
+    cost.tiers.map((row) => [row.name, row.episodes, row.width, row.height]),
+    [
+      ['1080p', 2, 1920, 1080],
+      ['720p', 1, 1280, 720],
+    ],
+  );
+  const withActors = pricing.seriesCost(list, { actorFee: 1000 });
+  assert.ok(Math.abs(withActors.total - (expected + 1000)) < 1e-6);
+  assert.ok(Math.abs(withActors.actorShare - 1000 / (expected + 1000)) < 1e-9);
+  assert.equal(pricing.seriesCost(list, { actorFee: -5 }).actorFee, 0, '负数当 0');
+  // 写法
+  assert.equal(pricing.formatEpisodes(60, 5874.4), '60集，共97分54秒');
+  assert.equal(pricing.formatEpisodes(1, 42), '1集，共42秒');
+  assert.equal(pricing.formatWan(21981.68), '2.20万元');
+  assert.equal(pricing.formatWan(8165), '0.82万元');
+  assert.equal(pricing.formatWan(50000), '5.00万元');
+  assert.equal(pricing.formatShare(0), '0%');
+  assert.equal(pricing.formatShare(0.153), '15.3%');
+  assert.equal(pricing.formatYuan(21981.682), '21,981.68 元');
+  console.log(
+    'PASS cost: Seedance 2.5 official prices (matches the official 5 s examples), per-episode resolution, actor fee share',
+  );
+}
+
+// ---- Word：照着真实模板的结构造一份（表头 5 列、空格子、「5」「万元」分两段、15 后面有书签、日期一段、两张图片） ----
+const font =
+  '<w:rPr><w:rFonts w:hint="eastAsia" w:ascii="仿宋_GB2312" w:hAnsi="仿宋_GB2312" w:eastAsia="仿宋_GB2312" w:cs="仿宋_GB2312"/><w:color w:val="000000"/><w:sz w:val="28"/><w:szCs w:val="21"/></w:rPr>';
+const pPr = `<w:pPr><w:spacing w:line="579" w:lineRule="exact"/><w:jc w:val="center"/>${font}</w:pPr>`;
+const cell = (runs) =>
+  `<w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/></w:tcPr><w:p w14:paraId="1">${pPr}${runs}</w:p></w:tc>`;
+const run = (text) => `<w:r>${font}<w:t>${text}</w:t></w:r>`;
+const header = ['序号', '微短剧名称', '集数和总时长', '总投资额（需＜100万）', '演员总片酬占比（需＜40%）'];
+const documentXml = [
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+  '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body>',
+  `<w:p>${run('成本配置比例情况报告')}</w:p>`,
+  `<w:p>${run('我公司提审的1部“其他微短剧”，详情见下：')}</w:p>`,
+  '<w:tbl><w:tblPr/>',
+  `<w:tr>${header.map((title) => cell(run(title))).join('')}</w:tr>`,
+  `<w:tr>${cell(run('1'))}${cell('')}${cell('')}${cell(run('5') + run('万元'))}${cell(run('15') + '<w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/>' + run('%'))}</w:tr>`,
+  '</w:tbl>',
+  `<w:p>${run('以上微短剧制作完成的总投资额和演员总片酬占比均符合要求。')}</w:p>`,
+  `<w:p>${run('报审机构：（盖章）')}<w:r><w:drawing>seal rId5</w:drawing></w:r></w:p>`,
+  `<w:p><w:pPr><w:jc w:val="right"/></w:pPr>${run('2026年10')}${run('月3号')}</w:p>`,
+  '</w:body></w:document>',
+].join('');
+const seal = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 37) % 256));
+const signature = Buffer.from(Array.from({ length: 2048 }, (_, i) => (i * 11 + 3) % 256));
+const template = writeZip([
+  { name: '[Content_Types].xml', data: Buffer.from('<Types/>') },
+  { name: 'word/document.xml', data: Buffer.from(documentXml, 'utf8') },
+  { name: 'word/media/image1.png', data: signature },
+  { name: 'word/media/image2.png', data: seal },
+]);
+
+{
+  assert.deepEqual(checkTemplate(template), [], '照真实结构造的模板能用');
+  assert.deepEqual(readCostReport(template), {
+    name: '',
+    episodes: '',
+    total: '5万元',
+    share: '15%',
+    date: '2026年10月3号',
+  });
+  const filled = fillCostReport(template, {
+    name: '金蛋蛋逆袭记 & <新>',
+    episodes: '60集，共97分54秒',
+    total: '2.20万元',
+    share: '0%',
+    date: new Date(2026, 9, 22),
+  });
+  const read = readCostReport(filled);
+  assert.deepEqual(read, {
+    name: '金蛋蛋逆袭记 & <新>',
+    episodes: '60集，共97分54秒',
+    total: '2.20万元',
+    share: '0%',
+    date: '2026年10月22号',
+  });
+  const before = readZip(template);
+  const after = readZip(filled);
+  assert.deepEqual(
+    after.map((entry) => entry.name),
+    before.map((entry) => entry.name),
+    '文件顺序不变（[Content_Types].xml 第一个）',
+  );
+  for (const name of ['[Content_Types].xml', 'word/media/image1.png', 'word/media/image2.png'])
+    assert.ok(
+      after.find((entry) => entry.name === name).data.equals(before.find((entry) => entry.name === name).data),
+      `${name} 一个字节不动`,
+    );
+  const xml = after.find((entry) => entry.name === 'word/document.xml').data.toString('utf8');
+  assert.ok(xml.includes('金蛋蛋逆袭记 &amp; &lt;新&gt;'), '特殊字符转义');
+  // 表格外的文字、表头、序号、公章段落原样
+  for (const piece of [
+    '我公司提审的1部“其他微短剧”',
+    '报审机构：（盖章）',
+    '<w:drawing>seal rId5</w:drawing>',
+    ...header,
+    '<w:t>1</w:t>',
+  ])
+    assert.ok(xml.includes(piece), `原样保留：${piece}`);
+  // 原来空的格子用同一行的字体（仿宋_GB2312、四号），段落格式（居中、行距）保留
+  const nameCell = xml.match(/<w:tc>(?:(?!<\/w:tc>)[\s\S])*金蛋蛋(?:(?!<\/w:tc>)[\s\S])*<\/w:tc>/)[0];
+  assert.match(nameCell, /<w:r><w:rPr><w:rFonts[^>]*仿宋_GB2312[\s\S]*<w:sz w:val="28"\/>/);
+  assert.match(nameCell, /<w:jc w:val="center"\/>/);
+  assert.equal((xml.match(/<w:tbl>/g) || []).length, 1);
+  assert.ok(!xml.includes('_GoBack'), '片酬格子换成一段字（书签一起去掉）');
+  // 打出来的 zip 别的工具也认得
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'cost-report-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'out.docx'), filled);
+    let unzip = '';
+    try {
+      unzip = execFileSync('unzip', ['-t', path.join(dir, 'out.docx')], { encoding: 'utf8' });
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (unzip) assert.match(unzip, /No errors detected/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // 填不了的模板说清楚
+  const blank = writeZip([
+    {
+      name: 'word/document.xml',
+      data: Buffer.from('<w:document><w:body><w:p><w:r><w:t>随便</w:t></w:r></w:p></w:body></w:document>'),
+    },
+  ]);
+  const problems = checkTemplate(blank);
+  assert.equal(problems.length, 2);
+  assert.match(problems[0], /没找到表格/);
+  assert.match(problems[1], /没找到落款日期/);
+  assert.deepEqual(checkTemplate(Buffer.from('not a zip')), ['不是 Word 文件（docx）：读不到文件目录']);
+  console.log(
+    'PASS cost report docx: only the table row and the date change; seal, signature and other text untouched',
+  );
+}
+
+// ---- 模板只在用户电脑上：不进仓库 ----
+{
+  const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' }).split('\n');
+  assert.deepEqual(
+    tracked.filter((file) => /\.docx$/i.test(file)),
+    [],
+    '仓库里不放任何 docx（模板有公章和签名）',
+  );
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  assert.match(
+    main,
+    /path\.join\(app\.getPath\('userData'\), 'cost-report-template\.docx'\)/,
+    '模板存在本机用户数据目录',
+  );
+  assert.match(main, /costDocx\.checkTemplate\(buffer\)/, '选模板时先核对能不能填');
+  assert.match(main, /ipcMain\.handle\('library-cost-report'/);
+  assert.match(main, /ipcMain\.handle\('library-cost-report-make'/);
+  assert.match(main, /ipcMain\.handle\('library-cost-report-open'/);
+  assert.match(main, /ipcMain\.handle\('cost-report-template-pick'/);
+  assert.match(main, /libraryDedupOutputs\(dir\)/, '按「去重」里的成品算');
+  assert.match(main, /报告正在 Word 里打开着/);
+  const layout = require('../src/native/series-layout');
+  assert.equal(layout.COST_REPORT, '成本配置比例情况报告.docx');
+  const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+  for (const name of [
+    'libraryCostReport:',
+    'libraryCostReportMake:',
+    'libraryCostReportOpen:',
+    'costReportTemplatePick:',
+  ])
+    assert.ok(preload.includes(name), name);
+  const detail = fs.readFileSync(path.join(root, 'src/components/SeriesDetail.jsx'), 'utf8');
+  const storyboard = detail.indexOf('<StoryboardResults');
+  const report = detail.indexOf('<CostReport');
+  assert.ok(storyboard > 0 && report > storyboard, '成本配置报告在分镜工程图下面');
+  assert.match(detail, /<b className="proc-title">成本配置报告<\/b>/);
+  assert.match(detail, /不含抽卡/);
+  console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');
+}

@@ -78,3 +78,6 @@ dist-signed/
 
 # 海报标题字体（由 setup:title-fonts 从 @fontsource 拷出）
 build/title-fonts/
+
+# 成本配置报告的模板和生成的报告（有公章和签名）只留在用户电脑上，不进仓库
+*.docx

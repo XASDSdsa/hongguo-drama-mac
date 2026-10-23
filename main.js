@@ -36,6 +36,8 @@ const quchong = require('./src/native/quchong');
 const openai = require('./src/native/openai');
 const seriesInfo = require('./src/native/series-info');
 const seriesLayout = require('./src/native/series-layout');
+const costPricing = require('./src/native/cost-report/pricing');
+const costDocx = require('./src/native/cost-report/docx');
 const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
 const seriesGaps = require('./src/native/series-gaps');
@@ -5582,6 +5584,163 @@ ipcMain.handle('library-durations', async (_event, payload = {}) => {
     };
     await Promise.all(Array.from({ length: Math.min(4, files.length) }, worker));
     return { success: true, durations };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+// ===== 成本配置报告 =====
+// 总投资额按 Seedance 2.5 官方价格和去重成品的时长、清晰度算（src/native/cost-report/pricing.js），填进用户自己的 Word 模板。
+// 模板里有公章和签名：只存在本机的用户数据目录里，不进仓库、不进安装包。
+const costTemplateFile = () => path.join(app.getPath('userData'), 'cost-report-template.docx');
+function costTemplateInfo() {
+  const file = costTemplateFile();
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat) return { ready: false };
+  let name = '';
+  try {
+    name = JSON.parse(fs.readFileSync(`${file}.json`, 'utf8')).name || '';
+  } catch (_) {}
+  return { ready: true, name: name || '成本配置报告模板.docx', importedAt: Math.round(stat.mtimeMs) };
+}
+
+// 每集的时长和画面大小（按文件大小和修改时间缓存，改了就重新读）
+const episodeShapes = new Map();
+async function cachedEpisodeShape(ffprobePath, file) {
+  const stat = await fsp.stat(file).catch(() => null);
+  if (!stat?.isFile()) return null;
+  const key = `${file}|${stat.size}|${Math.round(stat.mtimeMs)}`;
+  if (episodeShapes.has(key)) return episodeShapes.get(key);
+  const media = await quchong.probeMedia(ffprobePath, file).catch(() => null);
+  const seconds = media?.has_video ? (media.video_duration > 0 ? media.video_duration : media.duration) : 0;
+  if (!(seconds > 0) || !media.video_width || !media.video_height) return null;
+  const shape = { seconds, width: media.video_width, height: media.video_height };
+  episodeShapes.set(key, shape);
+  return shape;
+}
+
+/** 这部剧的成本：去重文件夹里每一集按自己的时长和清晰度算。 */
+async function costSummary(dir, actorFee) {
+  const ffprobePath = resolveFfmpeg('ffprobe');
+  if (!ffprobePath) throw new Error('未找到 ffprobe，读不出每集时长');
+  const files = libraryDedupOutputs(dir);
+  const shapes = new Array(files.length).fill(null);
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      const index = next++;
+      shapes[index] = await cachedEpisodeShape(ffprobePath, files[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, files.length) }, worker));
+  const unreadable = files.filter((_, index) => !shapes[index]).map((file) => path.basename(file));
+  const cost = costPricing.seriesCost(shapes.filter(Boolean), { actorFee });
+  return {
+    unreadable,
+    cost,
+    text: {
+      episodes: costPricing.formatEpisodes(cost.episodes, cost.seconds),
+      generation: costPricing.formatYuan(cost.generation),
+      total: costPricing.formatWan(cost.total),
+      totalYuan: costPricing.formatYuan(cost.total),
+      share: costPricing.formatShare(cost.actorShare),
+    },
+    over: {
+      total: cost.total >= costPricing.LIMITS.totalYuan,
+      share: cost.actorShare >= costPricing.LIMITS.actorShare,
+    },
+  };
+}
+
+const costReportFile = (dir) => path.join(dir, seriesLayout.COST_REPORT);
+
+/** 界面上显示的：新剧名、算出来的成本明细、模板在不在、报告生成过没有。 */
+ipcMain.handle('library-cost-report', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const summary = await costSummary(dir, payload.actorFee);
+    const stat = await fsp.stat(costReportFile(dir)).catch(() => null);
+    const { model, mode, checked, source, fps } = costPricing.PRICE;
+    return {
+      success: true,
+      title: seriesLayout.readNewInfo(dir).title || '',
+      template: costTemplateInfo(),
+      report: stat ? { name: seriesLayout.COST_REPORT, updatedAt: Math.round(stat.mtimeMs) } : null,
+      price: { model, mode, checked, source, fps },
+      ...summary,
+    };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 选报告模板（用户自己的 docx，有公章和签名）：核对能填，再复制到本机的用户数据目录。 */
+ipcMain.handle('cost-report-template-pick', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择成本配置报告模板（Word 文件）',
+      properties: ['openFile'],
+      filters: [{ name: 'Word 文件', extensions: ['docx'] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return { success: true, template: costTemplateInfo() };
+    const source = result.filePaths[0];
+    const buffer = await fsp.readFile(source);
+    const problems = costDocx.checkTemplate(buffer);
+    if (problems.length) return { success: false, error: `这个模板填不了：${problems.join('；')}` };
+    const file = costTemplateFile();
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(`${file}.tmp`, buffer);
+    await fsp.rename(`${file}.tmp`, file);
+    await fsp.writeFile(`${file}.json`, JSON.stringify({ name: path.basename(source) }));
+    return { success: true, template: costTemplateInfo() };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+/** 生成报告：放在剧文件夹根目录，已经有就换成新的。 */
+ipcMain.handle('library-cost-report-make', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    if (!costTemplateInfo().ready) return { success: false, error: '还没选报告模板' };
+    const title = String(payload.title || '').trim() || seriesLayout.readNewInfo(dir).title;
+    if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在这里填' };
+    const summary = await costSummary(dir, payload.actorFee);
+    if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
+    if (summary.unreadable.length)
+      return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };
+    const buffer = costDocx.fillCostReport(await fsp.readFile(costTemplateFile()), {
+      name: title,
+      episodes: summary.text.episodes,
+      total: summary.text.total,
+      share: summary.text.share,
+      date: new Date(),
+    });
+    const file = costReportFile(dir);
+    await fsp.writeFile(`${file}.tmp`, buffer);
+    try {
+      await fsp.rename(`${file}.tmp`, file);
+    } catch (error) {
+      await fsp.rm(`${file}.tmp`, { force: true }).catch(() => {});
+      if (/EBUSY|EPERM|EACCES/.test(error?.code || '')) return { success: false, error: '报告正在 Word 里打开着：先关掉再生成' };
+      throw error;
+    }
+    return { success: true, name: seriesLayout.COST_REPORT, ...summary };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-cost-report-open', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const file = costReportFile(dir);
+    if (!fs.existsSync(file)) return { success: false, error: '报告还没生成' };
+    const error = await shell.openPath(file);
+    return error ? { success: false, error } : { success: true };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

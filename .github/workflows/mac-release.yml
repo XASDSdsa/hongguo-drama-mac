@@ -152,6 +152,7 @@ jobs:
           node scripts/check-pagination.cjs
           node scripts/check-library-activity.cjs
           node scripts/check-series-library.cjs
+          node scripts/check-cost-report.cjs
           node scripts/check-draft-lanes.cjs
           node scripts/check-draft-capacity.cjs
           node scripts/check-storyboard-reuse.cjs

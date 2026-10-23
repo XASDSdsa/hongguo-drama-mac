@@ -6,6 +6,7 @@
 // ├─ 原剧集海报.jpg   （以前是「原剧」里的 封面.jpg）
 // ├─ 新剧集信息.txt   新剧名、已处理、新简介（「AI 发布素材」里选定 / 保存的）
 // ├─ 新剧集海报.jpg   （以前是 发布海报.jpg）
+// ├─ 成本配置比例情况报告.docx  按用户的报告模板填好的（「成本配置报告」里生成）
 // ├─ 原剧/            原集视频
 // ├─ 去重/            成品视频
 // └─ 分镜工程图/      每集一张截图（页头 + 前两个分镜）
@@ -23,6 +24,7 @@ const NEW_INFO = '新剧集信息.txt';
 const NEW_POSTER = '新剧集海报.jpg';
 const STORYBOARD_DIR = '分镜工程图';
 const STORYBOARD_PAGES = '网页和提示词';
+const COST_REPORT = '成本配置比例情况报告.docx';
 const POSTER_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 const LEGACY = {
   cover: '封面',
@@ -292,6 +294,7 @@ module.exports = {
   NEW_POSTER,
   STORYBOARD_DIR,
   STORYBOARD_PAGES,
+  COST_REPORT,
   POSTER_EXTENSIONS,
   LEGACY,
   parseInfo,

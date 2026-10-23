@@ -259,6 +259,179 @@ function StoryboardResults({ dir, numbers, enabled, refreshKey, mode, onView, st
   );
 }
 
+// 成本配置报告里每部剧自己填的：演员片酬、改过的剧名（按剧文件夹记住）
+const COST_KEY = 'cost-report-v1';
+
+/**
+ * 成本配置报告：总投资额按 Seedance 2.5 官方价格和去重成品的时长、清晰度算（明细都列出来，能对账），
+ * 填进用户自己的 Word 模板（有公章和签名，只存在这台电脑上），报告放在剧文件夹根目录。
+ */
+function CostReport({ dir, refreshKey }) {
+  const stored = useRef(readJson(COST_KEY)[dir] || {}).current;
+  const [actorFee, setActorFee] = useState(stored.actorFee ?? '0');
+  const [title, setTitle] = useState(stored.title ?? '');
+  const [info, setInfo] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
+  const fee = Math.max(0, Number(actorFee) || 0);
+
+  useEffect(() => {
+    let alive = true;
+    const timer = setTimeout(() => {
+      window.electronAPI
+        .libraryCostReport?.({ dir, actorFee: fee })
+        .then((result) => {
+          if (!alive) return;
+          if (result?.success) {
+            setInfo(result);
+            setError('');
+          } else setError(result?.error || '算不出来');
+        })
+        .catch(() => alive && setError('算不出来'));
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [dir, fee, refreshKey, reload]);
+
+  useEffect(() => {
+    writeJson(COST_KEY, { ...readJson(COST_KEY), [dir]: { actorFee, title } });
+  }, [dir, actorFee, title]);
+
+  const pickTemplate = async () => {
+    setError('');
+    setBusy('template');
+    const result = await window.electronAPI.costReportTemplatePick?.().catch(() => null);
+    setBusy('');
+    if (!result?.success) setError(result?.error || '模板没选上');
+    setReload((value) => value + 1);
+  };
+  const make = async () => {
+    setError('');
+    setMessage('');
+    setBusy('make');
+    const result = await window.electronAPI
+      .libraryCostReportMake?.({ dir, title: title.trim(), actorFee: fee })
+      .catch(() => null);
+    setBusy('');
+    if (result?.success) setMessage(`已生成：剧集文件夹里的「${result.name}」`);
+    else setError(result?.error || '报告没生成出来');
+    setReload((value) => value + 1);
+  };
+  const open = async () => {
+    setError('');
+    const result = await window.electronAPI.libraryCostReportOpen?.({ dir }).catch(() => null);
+    if (!result?.success) setError(result?.error || '打不开报告');
+  };
+
+  const cost = info?.cost;
+  const name = title.trim() || info?.title || '';
+  const ready = info?.template?.ready && cost?.episodes > 0 && !!name && !info?.unreadable?.length;
+  return (
+    <div className="cost-report">
+      {info && (
+        <dl className="cost-grid">
+          <dt>微短剧名称</dt>
+          <dd>
+            <input
+              className="input-field cost-input cost-name"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={info.title || '还没有新剧名：在这里填，或者先在「AI 发布素材」里定'}
+              aria-label="微短剧名称"
+            />
+            {!title.trim() && info.title && <span className="cost-sub">用新剧名；要换就在框里填</span>}
+          </dd>
+          <dt>集数和总时长</dt>
+          <dd>
+            {cost.episodes ? info.text.episodes : '「去重」文件夹里还没有成品'}
+            {info.unreadable?.length > 0 && (
+              <span className="cost-sub cost-over">有 {info.unreadable.length} 集读不出时长，没算进去</span>
+            )}
+          </dd>
+          <dt>AI 生成费用</dt>
+          <dd>
+            {info.text.generation}
+            {cost.tiers.map((row) => (
+              <span key={row.name} className="cost-sub">
+                {row.name}（按 {row.width}×{row.height}、{info.price.fps} 帧）{row.episodes} 集 ·{' '}
+                {Math.round(row.seconds)} 秒 · {Math.round(row.tokens).toLocaleString('zh-CN')} token ×{' '}
+                {row.yuanPerMillion} 元/百万 token
+              </span>
+            ))}
+          </dd>
+          <dt>演员片酬</dt>
+          <dd className="cost-inline">
+            <input
+              className="input-field cost-input cost-fee"
+              type="number"
+              min="0"
+              step="100"
+              value={actorFee}
+              onChange={(e) => setActorFee(e.target.value)}
+              aria-label="演员片酬（元）"
+            />
+            元<span className="cost-sub">AI 生成没有演员就填 0；请了配音演员就填付的钱，算进总投资</span>
+          </dd>
+          <dt>总投资额</dt>
+          <dd className={info.over.total ? 'cost-over' : ''}>
+            <span>
+              <b>{info.text.total}</b>（{info.text.totalYuan}）{info.over.total && ' 超过了报审要求的 100 万'}
+            </span>
+          </dd>
+          <dt>演员总片酬占比</dt>
+          <dd className={info.over.share ? 'cost-over' : ''}>
+            <span>
+              <b>{info.text.share}</b>
+              {info.over.share && ' 超过了报审要求的 40%'}
+            </span>
+          </dd>
+        </dl>
+      )}
+      {info && (
+        <p className="cost-note">
+          价格：火山方舟官方「模型价格」{info.price.model}，{info.price.mode}（{info.price.checked} 查）；token = 时长 ×
+          宽 × 高 × 帧率 ÷ 1024。每秒按生成一次算，不含抽卡。{' '}
+          <button
+            type="button"
+            className="cost-link"
+            onClick={() => window.electronAPI.openExternalUrl?.(info.price.source)}
+          >
+            看官方价格页
+          </button>
+        </p>
+      )}
+      <div className="cost-foot">
+        {info?.template?.ready ? (
+          <span className="cost-sub">模板：{info.template.name}</span>
+        ) : (
+          info && (
+            <span className="cost-sub">还没选报告模板：选你那份 Word 模板（有公章和签名的），只存在这台电脑上</span>
+          )
+        )}
+        <span className="cost-btns">
+          <button type="button" className="btn btn-sm" onClick={pickTemplate} disabled={!!busy}>
+            {info?.template?.ready ? '换模板' : '选择模板'}
+          </button>
+          {info?.report && (
+            <button type="button" className="btn btn-sm" onClick={open} title="用 Word 打开剧集文件夹里的报告">
+              打开报告
+            </button>
+          )}
+          <button type="button" className="btn btn-sm btn-primary" onClick={make} disabled={!ready || !!busy}>
+            {busy === 'make' ? '正在生成…' : info?.report ? '重新生成报告' : '生成报告'}
+          </button>
+        </span>
+      </div>
+      {message && <p className="cost-msg">{message}</p>}
+      {error && <p className="sb-card-error">{error}</p>}
+    </div>
+  );
+}
+
 /** 剧的子页面：剧名在页头，下面是这部剧的集（分页）、AI 发布素材、要做的处理（去重、剪映草稿）和进度日志。 */
 export default function SeriesDetail({ folder, active = true }) {
   const [detail, setDetail] = useState(null);
@@ -1135,6 +1308,19 @@ export default function SeriesDetail({ folder, active = true }) {
                 onView={setViewing}
                 storyboardRunning={activity?.draft?.storyboard?.status === 'running'}
                 refreshKey={`${activity?.draft?.status || ''}-${activity?.draft?.storyboard?.done || 0}-${activity?.draft?.storyboard?.failed || 0}-${activity?.draft?.storyboard?.status || ''}`}
+              />
+            </div>
+
+            <div className="proc-item">
+              <div className="proc-line">
+                <b className="proc-title">成本配置报告</b>
+                <span className="proc-summary">
+                  按 Seedance 2.5 官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里
+                </span>
+              </div>
+              <CostReport
+                dir={detail.dir}
+                refreshKey={`${outputs.map((output) => `${output.name}:${output.size}`).join('|')}-${publish?.title || ''}-${runningDone}`}
               />
             </div>
 
