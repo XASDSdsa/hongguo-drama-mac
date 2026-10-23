@@ -2,6 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
 import AI_PROVIDERS from '../native/ai-providers.json';
+
+const SETTINGS_TABS = [
+  ['basic', '下载与保存'],
+  ['process', '去重与剪映'],
+  ['ai', 'AI'],
+];
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 const FORMAT_PRESETS = [
@@ -59,6 +65,21 @@ function SettingsPage({ active = true }) {
   const [imageTest, setImageTest] = useState(null);
   const [imageTesting, setImageTesting] = useState(false);
   const [seedreamCustom, setSeedreamCustom] = useState(false); // Seedream 选了「其他（自己填模型名）」
+  // 设置分三页：下载与保存 / 处理 / AI（记住上次看的是哪页）
+  const [tab, setTab] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('settings-tab');
+      return SETTINGS_TABS.some(([id]) => id === saved) ? saved : 'basic';
+    } catch (_) {
+      return 'basic';
+    }
+  });
+  const openTab = (id) => {
+    setTab(id);
+    try {
+      window.localStorage.setItem('settings-tab', id);
+    } catch (_) {}
+  };
   const [arkTest, setArkTest] = useState(null);
   const [arkTesting, setArkTesting] = useState(false);
   const [encoderCheck, setEncoderCheck] = useState(null); // { busy } | { result } | { error }
@@ -389,9 +410,7 @@ function SettingsPage({ active = true }) {
         <Settings size={22} />
         <div>
           <h2>设置</h2>
-          <p className="page-description">
-            保存位置、下载、去重与剪映草稿、AI 素材。改完点最下面的「保存设置」才会生效。
-          </p>
+          <p className="page-description">改完点最下面的「保存设置」才会生效。</p>
         </div>
         <button
           type="button"
@@ -403,8 +422,23 @@ function SettingsPage({ active = true }) {
         </button>
       </div>
 
+      <div className="settings-tabs" role="tablist" aria-label="设置分类">
+        {SETTINGS_TABS.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={`settings-tab ${tab === id ? 'is-active' : ''}`}
+            onClick={() => openTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <fieldset className="settings-form" disabled={saving}>
-        <section className="settings-section" aria-label="保存位置">
+        <section className="settings-section" aria-label="保存位置" hidden={tab !== 'basic'}>
           <header className="settings-section-head">
             <h3>保存位置</h3>
             <p>视频和成品放在哪里、怎么命名。</p>
@@ -425,9 +459,7 @@ function SettingsPage({ active = true }) {
                 选择文件夹
               </button>
             </div>
-            <p className="settings-hint">
-              每部剧会在这里建一个以剧名命名的文件夹：根目录放原剧集信息.txt、原剧集海报、新剧集信息.txt、新剧集海报；原集视频在「原剧」，成品在「去重」，分镜工程图在「分镜工程图」。
-            </p>
+            <p className="settings-hint">每部剧一个文件夹：原集在「原剧」，成品在「去重」，分镜工程图在「分镜工程图」。</p>
           </div>
           <div className="settings-group">
             <label className="settings-label">文件命名规则</label>
@@ -456,7 +488,7 @@ function SettingsPage({ active = true }) {
           </div>
         </section>
 
-        <section className="settings-section" aria-label="下载与网络">
+        <section className="settings-section" aria-label="下载与网络" hidden={tab !== 'basic'}>
           <header className="settings-section-head">
             <h3>下载与网络</h3>
             <p>下载速度和代理。</p>
@@ -495,20 +527,14 @@ function SettingsPage({ active = true }) {
                 配置代理
               </button>
             </div>
-            <p className="settings-hint">
-              本机有代理（Clash / V2rayN
-              等）时在这里填上，解析剧集与下载视频都会走该代理。代理在弹窗里单独保存，立即生效，无需重启。
-            </p>
+            <p className="settings-hint">本机开了 Clash / V2rayN 等代理时在这里填，立即生效。</p>
           </div>
         </section>
 
-        <section className="settings-section" aria-label="去重与剪映草稿">
+        <section className="settings-section" aria-label="去重与剪映草稿" hidden={tab !== 'process'}>
           <header className="settings-section-head">
             <h3>去重与剪映草稿</h3>
-            <p>
-              这部分在「管理剧集」里这部剧的页面使用：视频去重、本地结构化拆解（TransNet V2
-              分镜、人声分离、台词识别）、生成剪映草稿。
-            </p>
+            <p>「管理剧集」里做视频去重、生成剪映草稿时用。</p>
           </header>
           <div className="settings-grid">
             <label className="settings-field">
@@ -525,7 +551,7 @@ function SettingsPage({ active = true }) {
                   </option>
                 ))}
               </select>
-              <em>越多越快但更占电脑，一般 2~4；保存后立即生效，正在跑的批次也会跟着调整。</em>
+              <em>越多越快但更占电脑，一般 2~4。</em>
             </label>
             <label className="settings-field">
               <span>去重编码方式</span>
@@ -538,10 +564,7 @@ function SettingsPage({ active = true }) {
                 <option value="auto">自动（有显卡就用显卡加速）</option>
                 <option value="cpu">只用 CPU（显卡编码出错时选这个）</option>
               </select>
-              <em>
-                NVIDIA 显卡需要 471.41（2021 年）或更新的驱动才能加速；驱动太旧或显卡编码报错时会自动改用
-                CPU（速度慢一些，成品一样）。不确定能不能用，点下面「检测显卡编码」。
-              </em>
+              <em>显卡编码出错会自动改用 CPU（慢一些，成品一样）。</em>
             </label>
             {isWindows && (
               <div className="settings-field">
@@ -575,6 +598,10 @@ function SettingsPage({ active = true }) {
                 )}
               </div>
             )}
+          </div>
+          <details className="settings-advanced">
+            <summary>高级：线程、中间文件、剪映路径、拆解设备</summary>
+            <div className="settings-grid">
             <label className="settings-field">
               <span>草稿处理线程数</span>
               <input
@@ -630,15 +657,8 @@ function SettingsPage({ active = true }) {
                   选择
                 </button>
               </div>
-              <em>
-                Windows 上一律按剪映自己「全局设置 → 草稿位置」里的文件夹放（比如 D:\JianyingPro Drafts，草稿直接放在它下面），
-                剪映只在那里找草稿；读不到剪映的设置时才用这里填的文件夹。草稿挪过位置也没关系：打开软件或进「管理剧集」时会自动把素材路径改到新位置。
-              </em>
+              <em>Windows 上按剪映「全局设置 → 草稿位置」放；读不到剪映的设置时才用这里填的。</em>
             </label>
-          </div>
-          <details className="settings-advanced">
-            <summary>高级：拆解设备与模型</summary>
-            <div className="settings-grid">
               <label className="settings-field">
                 <span>TransNet V2 设备</span>
                 <select
@@ -700,64 +720,97 @@ function SettingsPage({ active = true }) {
           </details>
         </section>
 
-        <section className="settings-section" aria-label="AI 发布素材">
+        <section className="settings-section" aria-label="火山方舟" hidden={tab !== 'ai'}>
           <header className="settings-section-head">
-            <h3>AI 发布素材</h3>
-            <p>
-              改写剧名、简介、构思海报画面，和画海报、重绘封面用。文案和作图都能选用哪家服务；下面的文本模型还要负责看图检查海报（OpenAI
-              兼容接口，中转地址通常以 <code>/v1</code> 结尾）。
-            </p>
+            <h3>火山方舟</h3>
+            <p>一把 Key 管三件事：分镜工程图的视频反推、Seedream 作图、豆包文案。</p>
           </header>
           <div className="ai-settings-grid">
             <label className="ai-field ai-field-wide">
-              <span>文本中转地址</span>
-              <input
-                className="input-field"
-                aria-label="AI 文本中转地址"
-                value={settings.ai_base_url || ''}
-                onChange={(e) => update('ai_base_url', e.target.value)}
-                placeholder="https://api.openai.com/v1"
-                spellCheck={false}
-              />
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>文本 API Key</span>
+              <span>方舟 API Key</span>
               <input
                 className="input-field"
                 type="password"
                 autoComplete="off"
-                aria-label="AI 文本 API Key"
-                value={settings.ai_api_key || ''}
-                onChange={(e) => update('ai_api_key', e.target.value)}
-                placeholder="sk-…"
+                aria-label="方舟 API Key"
+                value={settings.ark_api_key || ''}
+                onChange={(e) => update('ark_api_key', e.target.value)}
                 spellCheck={false}
               />
             </label>
             <label className="ai-field">
-              <span>文本模型（检查海报画面）</span>
+              <span>视频理解模型（分镜工程图）</span>
               <input
                 className="input-field"
-                aria-label="AI 文本模型"
-                value={settings.ai_text_model || ''}
-                onChange={(e) => update('ai_text_model', e.target.value)}
-                placeholder="gpt-6.1-sol"
+                aria-label="视频理解模型"
+                value={settings.ark_video_model || ''}
+                onChange={(e) => update('ark_video_model', e.target.value)}
+                placeholder="方舟控制台里的模型名或接入点 ID"
                 spellCheck={false}
               />
-              <em>要能看图（检查海报底图有没有文字、人脸在哪）；不支持看图时会跳过检查。文案改写选「和上面共用」时也用它。</em>
             </label>
           </div>
+          <details className="settings-advanced">
+            <summary>更多：接口地址、每段长度、分析几个分镜</summary>
+            <div className="ai-settings-grid">
+              <label className="ai-field ai-field-wide">
+                <span>方舟接口地址</span>
+                <input
+                  className="input-field"
+                  aria-label="方舟接口地址"
+                  value={settings.ark_base_url || ''}
+                  onChange={(e) => update('ark_base_url', e.target.value)}
+                  placeholder="https://ark.cn-beijing.volces.com/api/v3"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="ai-field">
+                <span>每段最长（秒）</span>
+                <input
+                  className="input-field"
+                  type="number"
+                  min="5"
+                  max="30"
+                  aria-label="每段最长秒数"
+                  value={settings.video_prompt_max_seconds || 15}
+                  onChange={(e) => update('video_prompt_max_seconds', Number(e.target.value) || 15)}
+                />
+                <em>相邻分镜合并成一段（Seedance 2.5 单次最长 30 秒）。</em>
+              </label>
+              <label className="ai-field">
+                <span>每集只分析前几个分镜</span>
+                <input
+                  className="input-field"
+                  type="number"
+                  min="0"
+                  max="999"
+                  aria-label="每集只分析前几个分镜"
+                  value={settings.video_prompt_shot_limit ?? 2}
+                  onChange={(e) => update('video_prompt_shot_limit', Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                />
+                <em>后面的只占位、不问方舟，省额度；0 = 整集都分析。</em>
+              </label>
+            </div>
+          </details>
           <div className="preset-row">
-            <button className="btn btn-outline btn-sm" onClick={testAi} disabled={aiTesting}>
-              {aiTesting ? '正在测试…' : '测试文本连接'}
+            <button className="btn btn-outline btn-sm" onClick={testArk} disabled={arkTesting}>
+              {arkTesting ? '正在测试…（最长等 10 分钟）' : '测试视频理解'}
             </button>
-            {aiTest && (
-              <span className={`settings-hint ${aiTest.success ? '' : 'alert-error'}`} role="status">
-                {aiTest.success ? `连通正常（${aiTest.model}，${aiTest.elapsed} ms）` : aiTest.error}
+            {arkTest && (
+              <span className={`settings-hint ${arkTest.success ? '' : 'alert-error'}`} role="status">
+                {arkTest.success
+                  ? `连通正常（${arkTest.model}）：${arkTest.summary}。模型回答：${arkTest.answer}`
+                  : arkTest.error}
               </span>
             )}
           </div>
+        </section>
 
-          <h4 className="settings-subhead">文案改写（剧名、简介、海报画面描述）</h4>
+        <section className="settings-section" aria-label="文案" hidden={tab !== 'ai'}>
+          <header className="settings-section-head">
+            <h3>文案</h3>
+            <p>改写剧名、简介，构思海报画面。</p>
+          </header>
           <div className="ai-settings-grid">
             <label className="ai-field">
               <span>用哪家</span>
@@ -773,10 +826,31 @@ function SettingsPage({ active = true }) {
                   </option>
                 ))}
               </select>
-              <em>{copyProvider.hint}</em>
             </label>
             {copyProvider.id !== 'shared' && (
-              <>
+              <label className="ai-field">
+                <span>API Key</span>
+                <input
+                  className="input-field"
+                  type="password"
+                  autoComplete="off"
+                  aria-label="文案改写 API Key"
+                  value={settings.ai_copy_api_key || ''}
+                  onChange={(e) => update('ai_copy_api_key', e.target.value)}
+                  placeholder={copyProvider.useArkKey ? '留空 = 用上面的方舟 Key' : '这家服务的 Key'}
+                  spellCheck={false}
+                />
+              </label>
+            )}
+          </div>
+          {copyProvider.id === 'shared' ? (
+            <p className="settings-hint">用下面「看图检查」里的接口、Key 和模型写文案。</p>
+          ) : (
+            <details className="settings-advanced">
+              <summary>
+                改模型或接口地址（现在：{settings.ai_copy_model || copyProvider.model || '没填'}）
+              </summary>
+              <div className="ai-settings-grid">
                 <label className="ai-field">
                   <span>模型</span>
                   <input
@@ -787,6 +861,7 @@ function SettingsPage({ active = true }) {
                     placeholder={copyProvider.model || '模型名'}
                     spellCheck={false}
                   />
+                  <em>{copyProvider.hint}</em>
                 </label>
                 <label className="ai-field ai-field-wide">
                   <span>接口地址</span>
@@ -799,36 +874,28 @@ function SettingsPage({ active = true }) {
                     spellCheck={false}
                   />
                 </label>
-                <label className="ai-field ai-field-wide">
-                  <span>API Key</span>
-                  <input
-                    className="input-field"
-                    type="password"
-                    autoComplete="off"
-                    aria-label="文案改写 API Key"
-                    value={settings.ai_copy_api_key || ''}
-                    onChange={(e) => update('ai_copy_api_key', e.target.value)}
-                    placeholder={copyProvider.useArkKey ? '留空 = 用方舟 API Key' : '填这家服务的 Key；留空 = 用上面的文本模型'}
-                    spellCheck={false}
-                  />
-                </label>
-              </>
-            )}
-          </div>
+              </div>
+            </details>
+          )}
           <div className="preset-row">
             <button className="btn btn-outline btn-sm" onClick={testCopy} disabled={copyTesting}>
-              {copyTesting ? '正在测试…' : '测试文案连接'}
+              {copyTesting ? '正在测试…' : '测试文案'}
             </button>
             {copyTest && (
               <span className={`settings-hint ${copyTest.success ? '' : 'alert-error'}`} role="status">
                 {copyTest.success
-                  ? `连通正常（${copyTest.model}${copyTest.shared ? '，用的是上面的文本模型' : ''}，${copyTest.elapsed} ms）`
+                  ? `连通正常（${copyTest.model}${copyTest.shared ? '，用的是看图检查那组' : ''}，${copyTest.elapsed} ms）`
                   : copyTest.error}
               </span>
             )}
           </div>
+        </section>
 
-          <h4 className="settings-subhead">作图（海报底图、重绘封面）</h4>
+        <section className="settings-section" aria-label="作图" hidden={tab !== 'ai'}>
+          <header className="settings-section-head">
+            <h3>作图</h3>
+            <p>画海报底图、重绘封面。</p>
+          </header>
           <div className="ai-settings-grid">
             <label className="ai-field">
               <span>用哪家</span>
@@ -844,11 +911,10 @@ function SettingsPage({ active = true }) {
                   </option>
                 ))}
               </select>
-              <em>{imageProvider.hint}</em>
             </label>
             {imageProvider.id === 'seedream' ? (
               <label className="ai-field">
-                <span>Seedream 模型</span>
+                <span>模型</span>
                 <select
                   className="input-field"
                   aria-label="Seedream 模型"
@@ -877,31 +943,38 @@ function SettingsPage({ active = true }) {
                 )}
               </label>
             ) : (
-              <>
-                <label className="ai-field">
-                  <span>图片模型</span>
-                  <input
-                    className="input-field"
-                    aria-label="AI 图片模型"
-                    value={settings.ai_image_model || ''}
-                    onChange={(e) => update('ai_image_model', e.target.value)}
-                    placeholder={imageProvider.model}
-                    spellCheck={false}
-                  />
-                </label>
+              <label className="ai-field">
+                <span>图片模型</span>
+                <input
+                  className="input-field"
+                  aria-label="AI 图片模型"
+                  value={settings.ai_image_model || ''}
+                  onChange={(e) => update('ai_image_model', e.target.value)}
+                  placeholder={imageProvider.model}
+                  spellCheck={false}
+                />
+              </label>
+            )}
+          </div>
+          {imageProvider.id === 'seedream' ? (
+            <p className="settings-hint">用上面的方舟 Key；要先在方舟控制台开通这个模型。</p>
+          ) : (
+            <details className="settings-advanced">
+              <summary>作图接口地址和 Key（留空 = 用「看图检查」那组）</summary>
+              <div className="ai-settings-grid">
                 <label className="ai-field ai-field-wide">
-                  <span>作图中转地址（可选）</span>
+                  <span>作图接口地址</span>
                   <input
                     className="input-field"
                     aria-label="AI 作图中转地址"
                     value={settings.ai_image_base_url || ''}
                     onChange={(e) => update('ai_image_base_url', e.target.value)}
-                    placeholder="留空 = 和上面的文本共用"
+                    placeholder="留空 = 用「看图检查」的接口地址"
                     spellCheck={false}
                   />
                 </label>
                 <label className="ai-field ai-field-wide">
-                  <span>作图 API Key（可选）</span>
+                  <span>作图 API Key</span>
                   <input
                     className="input-field"
                     type="password"
@@ -909,16 +982,16 @@ function SettingsPage({ active = true }) {
                     aria-label="AI 作图 API Key"
                     value={settings.ai_image_api_key || ''}
                     onChange={(e) => update('ai_image_api_key', e.target.value)}
-                    placeholder="留空 = 和上面的文本共用"
+                    placeholder="留空 = 用「看图检查」的 Key"
                     spellCheck={false}
                   />
                 </label>
-              </>
-            )}
-          </div>
+              </div>
+            </details>
+          )}
           <div className="preset-row">
             <button className="btn btn-outline btn-sm" onClick={testImage} disabled={imageTesting}>
-              {imageTesting ? '正在画一张测试图…' : '测试作图'}
+              {imageTesting ? '正在画一张测试图…' : '测试作图（会花一次作图的钱）'}
             </button>
             {imageTest && (
               <span className={`settings-hint ${imageTest.success ? '' : 'alert-error'}`} role="status">
@@ -928,96 +1001,61 @@ function SettingsPage({ active = true }) {
               </span>
             )}
           </div>
-          <p className="settings-hint">「测试作图」会真画一张小图，花一次作图的钱。</p>
         </section>
 
-        <section className="settings-section" aria-label="视频反推提示词">
-          <header className="settings-section-head">
-            <h3>视频反推提示词</h3>
-            <p>
-              在「管理剧集」里勾选「生成剪映草稿」和「生产 AI 分镜工程图」后使用。用火山方舟的视频理解模型看成品视频，
-              每集在这部剧的「分镜工程图」文件夹里生成一张截图和一份分镜工程图页面（按 Seedance 2.5 分段写好提示词），
-              也会直接显示在「管理剧集」里。
-            </p>
-          </header>
-          <div className="ai-settings-grid">
-            <label className="ai-field ai-field-wide">
-              <span>方舟接口地址</span>
-              <input
-                className="input-field"
-                aria-label="方舟接口地址"
-                value={settings.ark_base_url || ''}
-                onChange={(e) => update('ark_base_url', e.target.value)}
-                placeholder="https://ark.cn-beijing.volces.com/api/v3"
-                spellCheck={false}
-              />
-            </label>
-            <label className="ai-field ai-field-wide">
-              <span>方舟 API Key</span>
-              <input
-                className="input-field"
-                type="password"
-                autoComplete="off"
-                aria-label="方舟 API Key"
-                value={settings.ark_api_key || ''}
-                onChange={(e) => update('ark_api_key', e.target.value)}
-                spellCheck={false}
-              />
-            </label>
-            <label className="ai-field">
-              <span>视频理解模型</span>
-              <input
-                className="input-field"
-                aria-label="视频理解模型"
-                value={settings.ark_video_model || ''}
-                onChange={(e) => update('ark_video_model', e.target.value)}
-                placeholder="填方舟控制台里的模型名或接入点 ID"
-                spellCheck={false}
-              />
-              <em>要能看视频的模型。没有默认值，必须自己填。</em>
-            </label>
-            <label className="ai-field">
-              <span>每段最长（秒）</span>
-              <input
-                className="input-field"
-                type="number"
-                min="5"
-                max="30"
-                aria-label="每段最长秒数"
-                value={settings.video_prompt_max_seconds || 15}
-                onChange={(e) => update('video_prompt_max_seconds', Number(e.target.value) || 15)}
-              />
-              <em>相邻分镜合并成一段，不会把单个分镜切开；Seedance 2.5 单次最长 30 秒。</em>
-            </label>
-            <label className="ai-field">
-              <span>每集只分析前几个分镜</span>
-              <input
-                className="input-field"
-                type="number"
-                min="0"
-                max="999"
-                aria-label="每集只分析前几个分镜"
-                value={settings.video_prompt_shot_limit ?? 2}
-                onChange={(e) => update('video_prompt_shot_limit', Math.max(0, Math.floor(Number(e.target.value) || 0)))}
-              />
-              <em>后面的分镜在分镜工程图里只占位、不问方舟，省额度；填 0 = 整集都分析。</em>
-            </label>
-          </div>
-          <div className="preset-row">
-            <button className="btn btn-outline btn-sm" onClick={testArk} disabled={arkTesting}>
-              {arkTesting ? '正在测试…（最长等 10 分钟）' : '测试方舟视频理解'}
-            </button>
-            {arkTest && (
-              <span className={`settings-hint ${arkTest.success ? '' : 'alert-error'}`} role="status">
-                {arkTest.success
-                  ? `连通正常（${arkTest.model}）：${arkTest.summary}。模型回答：${arkTest.answer}`
-                  : arkTest.error}
-              </span>
-            )}
-          </div>
-          <p className="settings-hint">
-            用这台电脑和网络发一段 3 秒的测试视频，走和分镜工程图一样的流程，看上传、方舟处理、回答各要多久。
-          </p>
+        <section className="settings-section" aria-label="看图检查" hidden={tab !== 'ai'}>
+          <details className="settings-advanced settings-advanced-top">
+            <summary>
+              看图检查（可选）：海报底图画好后检查有没有残留文字、人脸在哪。不填就用文案那家（要能看图，不能看图就跳过检查）
+            </summary>
+            <div className="ai-settings-grid">
+              <label className="ai-field ai-field-wide">
+                <span>接口地址（OpenAI 兼容）</span>
+                <input
+                  className="input-field"
+                  aria-label="AI 文本中转地址"
+                  value={settings.ai_base_url || ''}
+                  onChange={(e) => update('ai_base_url', e.target.value)}
+                  placeholder="https://api.openai.com/v1"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="ai-field ai-field-wide">
+                <span>API Key</span>
+                <input
+                  className="input-field"
+                  type="password"
+                  autoComplete="off"
+                  aria-label="AI 文本 API Key"
+                  value={settings.ai_api_key || ''}
+                  onChange={(e) => update('ai_api_key', e.target.value)}
+                  placeholder="留空 = 用文案那家"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="ai-field">
+                <span>能看图的模型</span>
+                <input
+                  className="input-field"
+                  aria-label="AI 文本模型"
+                  value={settings.ai_text_model || ''}
+                  onChange={(e) => update('ai_text_model', e.target.value)}
+                  placeholder="gpt-6.1-sol"
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+            <div className="preset-row">
+              <button className="btn btn-outline btn-sm" onClick={testAi} disabled={aiTesting}>
+                {aiTesting ? '正在测试…' : '测试连接'}
+              </button>
+              {aiTest && (
+                <span className={`settings-hint ${aiTest.success ? '' : 'alert-error'}`} role="status">
+                  {aiTest.success ? `连通正常（${aiTest.model}，${aiTest.elapsed} ms）` : aiTest.error}
+                </span>
+              )}
+            </div>
+          </details>
         </section>
 
         <div className="settings-footer" role="group" aria-label="保存设置">

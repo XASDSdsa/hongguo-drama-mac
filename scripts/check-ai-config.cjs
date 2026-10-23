@@ -78,6 +78,16 @@ async function main() {
   assert.match(settings, /window\.electronAPI\.testAiCopy\(/);
   assert.match(settings, /window\.electronAPI\.testAiImage\(/);
   assert.match(settings, /ai_copy_base_url: preset\.baseUrl, ai_copy_model: preset\.model/, '换一家就填这家的地址和模型');
+  // 设置页分三页；AI 页只露「选哪家 + Key」，模型和地址折叠；方舟 Key 只填一次
+  assert.match(settings, /const SETTINGS_TABS = \[\s*\['basic', '下载与保存'\],\s*\['process', '去重与剪映'\],\s*\['ai', 'AI'\],?\s*\];/);
+  for (const [label, tab] of [['保存位置', 'basic'], ['下载与网络', 'basic'], ['去重与剪映草稿', 'process'], ['火山方舟', 'ai'], ['文案', 'ai'], ['作图', 'ai'], ['看图检查', 'ai']])
+    assert.match(settings, new RegExp(`aria-label="${label}" hidden=\\{tab !== '${tab}'\\}`), `${label} 在「${tab}」页`);
+  assert.equal((settings.match(/aria-label="方舟 API Key"/g) || []).length, 1, '方舟 Key 只有一个框');
+  assert.match(settings, /<summary>\s*改模型或接口地址/);
+  // 看图检查没单独配就用文案那家
+  assert.match(main, /visionConfig: String\(settings\.ai_api_key \|\| ''\)\.trim\(\) \? settings : copyWritingConfig\(settings\) \|\| settings,/);
+  const publish = fs.readFileSync(path.join(root, 'src/native/publish-materials.js'), 'utf8');
+  assert.match(publish, /visionConfig \|\| config,/);
 
   // ---- 最后处理时间 ----
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'processed-'));

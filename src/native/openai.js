@@ -164,7 +164,7 @@ function requireApiConfig(config, kind = 'text') {
     if (!normalized.imageModel) throw new Error('请先在设置中填写图片模型');
     return normalized;
   }
-  if (!normalized.apiKey) throw new Error('请先在设置中填写 AI API Key');
+  if (!normalized.apiKey) throw new Error('请先在「设置 → AI → 文案」里选一家并填 API Key');
   if (!normalized.imageModel) throw new Error('请先在设置中填写图片模型');
   if (!normalized.textModel) throw new Error('请先在设置中填写文案模型');
   if (!normalized.transcriptionModel) throw new Error('请先在设置中填写转写模型');

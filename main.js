@@ -4288,6 +4288,8 @@ ipcMain.handle('publish-generate', (_event, payload = {}) => {
             workDir: context.workDir,
             config: settings,
             copyConfig: copyWritingConfig(settings),
+            // 看图检查：设置里「看图检查」填了 Key 就用它，没填就用文案那家
+            visionConfig: String(settings.ai_api_key || '').trim() ? settings : copyWritingConfig(settings) || settings,
             openai: imageAi,
             renderer,
             signal: controller.signal,

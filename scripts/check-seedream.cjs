@@ -103,7 +103,7 @@ async function main() {
   assert.match(adapter, /useOpenAiImages\(settings\)\s*\?\s*openai\.generateImage\(options, settings \|\| getCurrentSettings\(\)\)\s*:\s*seedream\.generateImage\(options, arkImageConfig\(settings\)\)/);
   assert.match(adapter, /useOpenAiImages\(settings\)\s*\?\s*openai\.editImage\(options, settings \|\| getCurrentSettings\(\)\)\s*:\s*seedream\.editImage\(options, arkImageConfig\(settings\)\)/);
   assert.equal((mainSource.match(/openai\.(editImage|generateImage)\(/g) || []).length, 2, '作图只从 imageAi 这一个入口走');
-  assert.match(mainSource, /copyConfig: copyWritingConfig\(settings\),\s*openai: imageAi,/, 'AI 发布素材的海报');
+  assert.match(mainSource, /copyConfig: copyWritingConfig\(settings\),[\s\S]{0,300}openai: imageAi,/, 'AI 发布素材的海报');
   assert.match(mainSource, /createOneclick\(\{\s*quchong,\s*openai: imageAi,/, '一键处理的海报');
   assert.match(mainSource, /\? await imageAi\.editImage\(/, '封面重绘');
   assert.match(mainSource, /seedream\._setFetch\(chromiumFetch\)/, '走 Chromium 网络栈（跟随代理）');

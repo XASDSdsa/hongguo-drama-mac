@@ -513,7 +513,7 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       const d = dirs('nokey');
       await assert.rejects(
         publish.generate({ task: 'titles', title: 'x', ...d, config: { ...config, ai_api_key: '' }, openai, renderer }),
-        /文本 API Key|AI API Key/,
+        /文本 API Key|AI API Key|文案」里选一家并填 API Key/,
       );
       await assert.rejects(
         openai.generateImage(

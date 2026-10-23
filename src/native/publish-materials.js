@@ -286,7 +286,7 @@ function extensionFor(contentType) {
 }
 
 /** 画无字底图；用视觉模型检查有没有字，有就重画（最多 attempts 次）。视觉检查失败不影响出图。 */
-async function makeArt({ copy, coverPath, config, openai, signal, attempts, vision, onProgress }) {
+async function makeArt({ copy, coverPath, config, visionConfig, openai, signal, attempts, vision, onProgress }) {
   const prompt = buildArtPrompt({ scene: copy.scene, hasCover: !!coverPath });
   let last = null;
   const warnings = [];
@@ -314,7 +314,8 @@ async function makeArt({ copy, coverPath, config, openai, signal, attempts, visi
             },
           ],
           { signal },
-          config,
+          // 看图检查：设置里单独配了就用它，没配就用文案那家（不能看图会报错，下面跳过检查）
+          visionConfig || config,
         );
         inspection = { ...normalizeInspection(raw), inspected: true };
       } catch (error) {
@@ -492,6 +493,7 @@ async function makePoster({
   workDir,
   config,
   copyConfig,
+  visionConfig = null,
   openai,
   renderer,
   signal,
@@ -521,6 +523,7 @@ async function makePoster({
     copy: state.copy,
     coverPath,
     config,
+    visionConfig,
     openai,
     signal,
     attempts: artAttempts,

@@ -541,7 +541,7 @@ async function main() {
     const mainSource = fsx.readFileSync(pathx.join(__dirname, '..', 'main.js'), 'utf8');
     assert.match(mainSource, /ipcMain\.handle\('ark-test'/, '设置页可以测试方舟视频理解');
     assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'preload.js'), 'utf8'), /arkTest: \(draft\) => ipcRenderer\.invoke\('ark-test', draft\)/);
-    assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'src/components/Settings.jsx'), 'utf8'), /测试方舟视频理解/);
+    assert.match(fsx.readFileSync(pathx.join(__dirname, '..', 'src/components/Settings.jsx'), 'utf8'), /测试视频理解/);
     const deriveSource = fsx.readFileSync(pathx.join(__dirname, '..', 'src/native/video-prompt/derive.js'), 'utf8');
     assert.equal((deriveSource.match(/onTimings:/g) || []).length, 3, '素材库、每一段、核对都写用时');
   }
