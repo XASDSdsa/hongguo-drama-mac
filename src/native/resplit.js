@@ -54,6 +54,12 @@ function capture(ffmpegPath, args, signal, stream) {
       if (out.length > 4_000_000) out = out.slice(-2_000_000);
     };
     child[stream].on('data', keep);
+    // 另一路输出也要读走：不读的话管道写满，FFmpeg 会卡住不动（长视频的进度信息很多）。
+    // 只留最后一段，出错时报给调用方（比如「找不到英伟达显卡」就在 stderr 里）。
+    let tail = '';
+    child[stream === 'stdout' ? 'stderr' : 'stdout'].on('data', (chunk) => {
+      tail = (tail + chunk.toString('utf8')).slice(-4000);
+    });
     const onAbort = () => child.kill('SIGTERM');
     if (signal) {
       if (signal.aborted) onAbort();
@@ -63,7 +69,9 @@ function capture(ffmpegPath, args, signal, stream) {
     child.once('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
       if (signal?.aborted) return reject(new Error('已取消'));
-      code === 0 ? resolve(out) : reject(new Error(`ffmpeg 退出码 ${code}\n${out.slice(-1500)}`));
+      code === 0
+        ? resolve(out)
+        : reject(new Error(`ffmpeg 退出码 ${code}\n${(stream === 'stderr' ? out : tail).slice(-1500)}`));
     });
   });
 }
@@ -91,33 +99,58 @@ async function detectPauses(ffmpegPath, file, signal) {
 }
 
 const SCENE_FILTER = "select='gt(scene,0.35)',metadata=print:file=-";
+const D3D11_SCALE = `scale_d3d11=width=160:height=-2:format=nv12,hwdownload,format=nv12,${SCENE_FILTER}`;
+// 英伟达的 PCI 厂商号。D3D11 不点名时用的是「接着显示器的那块显卡」：显示器插在主板上就是核显，
+// 独立显卡反而闲着（实测 RTX 4070 SUPER 0%、AMD 核显解码 100%）。所以先点名用英伟达。
+const NVIDIA_VENDOR_ID = '0x10de';
 
 /**
  * 找镜头切换的几种做法，按顺序试，前一种失败就换下一种（切点一个不少）：
- * - d3d11（Windows）：显卡解码 + 显卡缩小，只把 160 宽的小图拷回内存，CPU 几乎不动；
+ * - d3d11-nvidia（Windows）：点名用英伟达显卡解码 + 缩小；没有英伟达显卡时 FFmpeg 直接报错，换下一种；
+ * - d3d11（Windows）：默认显卡（接显示器的那块）解码 + 缩小，只把 160 宽的小图拷回内存，CPU 几乎不动；
  * - hwaccel：显卡解码、CPU 缩小（-hwaccel auto；Mac 是苹果芯片的硬件解码）；
  * - cpu：全用 CPU 解码，跳过去块滤波（快两三成，找镜头切换不受影响）。
  * 以前只有后两种：Windows 上 -hwaccel auto 显卡用不上时会悄悄改回 CPU 解码，不报错，分析切点时 CPU 占满。
  */
 function sceneMethods(platform = process.platform, hwaccel = true) {
   const methods = [];
-  if (hwaccel && platform === 'win32')
+  if (hwaccel && platform === 'win32') {
     methods.push({
-      name: 'd3d11',
-      input: ['-hwaccel', 'd3d11va', '-hwaccel_output_format', 'd3d11'],
-      vf: `scale_d3d11=width=160:height=-2:format=nv12,hwdownload,format=nv12,${SCENE_FILTER}`,
+      name: 'd3d11-nvidia',
+      input: [
+        '-init_hw_device',
+        `d3d11va=scene:,vendor_id=${NVIDIA_VENDOR_ID}`,
+        '-hwaccel',
+        'd3d11va',
+        '-hwaccel_device',
+        'scene',
+        '-hwaccel_output_format',
+        'd3d11',
+      ],
+      vf: D3D11_SCALE,
     });
+    methods.push({ name: 'd3d11', input: ['-hwaccel', 'd3d11va', '-hwaccel_output_format', 'd3d11'], vf: D3D11_SCALE });
+  }
   if (hwaccel) methods.push({ name: 'hwaccel', input: ['-hwaccel', 'auto'], vf: `scale=160:-2,${SCENE_FILTER}` });
   methods.push({ name: 'cpu', input: ['-skip_loop_filter', 'all'], vf: `scale=160:-2,${SCENE_FILTER}` });
   return methods;
 }
 
 // hwaccel（-hwaccel auto）显卡用不上时 FFmpeg 会自己改用 CPU、不报错，所以只能写「自动」
-const SCENE_METHOD_TEXT = { d3d11: '显卡（D3D11 解码 + 缩小）', hwaccel: '自动解码（显卡用不上时是 CPU）', cpu: 'CPU' };
+const SCENE_METHOD_TEXT = {
+  'd3d11-nvidia': '英伟达显卡（D3D11 解码 + 缩小）',
+  d3d11: '默认显卡（D3D11 解码 + 缩小，接显示器的那块）',
+  hwaccel: '自动解码（显卡用不上时是 CPU）',
+  cpu: 'CPU',
+};
+
+// 这台电脑根本没有英伟达显卡：记下来，后面的视频不再每集先试一次。
+const unavailableMethods = new Set();
+const NO_ADAPTER = /Failed to find d3d11va adapter by vendor id/i;
 
 /** 缩小画面后找镜头切换，速度比整帧检测快得多。返回切换时间（秒）的数组，数组上带 method（用的哪种做法）。 */
 async function detectScenes(ffmpegPath, file, signal, { hwaccel = true, platform = process.platform } = {}) {
-  const methods = sceneMethods(platform, hwaccel);
+  const methods = sceneMethods(platform, hwaccel).filter((method) => !unavailableMethods.has(method.name));
   let lastError = null;
   for (const method of methods) {
     try {
@@ -133,6 +166,7 @@ async function detectScenes(ffmpegPath, file, signal, { hwaccel = true, platform
       return scenes;
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (method.name === 'd3d11-nvidia' && NO_ADAPTER.test(String(error?.message || ''))) unavailableMethods.add(method.name);
       lastError = error;
     }
   }
