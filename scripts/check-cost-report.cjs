@@ -7,13 +7,22 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const pricing = require('../src/native/cost-report/pricing');
 const { readZip, writeZip } = require('../src/native/cost-report/zip');
-const { fillCostReport, checkTemplate, readCostReport } = require('../src/native/cost-report/docx');
+const { fillCostReport, checkTemplate, readCostReport, costReportPngRequirements } = require('../src/native/cost-report/docx');
 
 assert.equal(pricing.reportTotalWan(69), 5);
 assert.equal(pricing.reportTotalWan(70), 5);
 assert.equal(pricing.reportTotalWan(71), 6);
 assert.equal(pricing.reportTotalWan(0), null);
 
+const { checkReportFonts } = require('../src/native/cost-report/font-check');
+assert.doesNotThrow(() => checkReportFonts(
+  { fonts: ['仿宋_GB2312', '仿宋'], eastAsianFonts: ['仿宋_GB2312', '仿宋'] },
+  [{ name: 'ABCDEF+FangSong-GB2312', embedded: true, han: true }, { name: 'FangSong', embedded: true, han: true }],
+));
+assert.throws(() => checkReportFonts(
+  { fonts: ['仿宋_GB2312'], eastAsianFonts: ['仿宋_GB2312'] },
+  [{ name: 'FandolFang-Regular', embedded: true, han: true }],
+), /仿宋_GB2312/);
 const root = path.join(__dirname, '..');
 
 // ---- 价格：官方示例（doubao-seedance-2.5，输入不含视频，5 秒 16:9）480p 3.36、720p 7.56、1080p 18.71 元 ----
@@ -168,6 +177,7 @@ const template = writeZip([
 
 {
   assert.deepEqual(checkTemplate(template), [], '照真实结构造的模板能用');
+  assert.deepEqual(costReportPngRequirements(template).fonts, ['仿宋_GB2312']);
   assert.deepEqual(readCostReport(template), {
     name: '',
     episodes: '',

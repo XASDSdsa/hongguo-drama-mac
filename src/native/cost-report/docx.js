@@ -137,46 +137,41 @@ function readCostReport(buffer) {
   };
 }
 
-/** 只调整 PNG 的临时副本，避免转换器把两个表头提示折行、把落款挤到下一页。 */
-function prepareCostReportForPng(buffer, fallbacks = {}) {
-  const entries = readZip(buffer);
-  const doc = entries.find((entry) => entry.name === DOCUMENT);
-  const xml = doc?.data.toString('utf8') || '';
+/** Read the report's explicit fonts and fixed header notes without rewriting the Word file. */
+function costReportPngRequirements(buffer) {
+  const xml = readZip(buffer).find((entry) => entry.name === DOCUMENT)?.data.toString('utf8') || '';
   const found = findTable(xml);
-  if (!found) return { docx: buffer, singlePage: false };
-  const notes = [...found.header.matchAll(PARAGRAPH)]
-    .map(([p]) => p)
-    .filter((p) => /^[（(]需[＜<](?:100万|40%)[）)]$/.test(textOf(p).replace(/\s/g, '')));
-  if (notes.length !== 2) return { docx: buffer, singlePage: false };
+  const notes = [...(found?.header || '').matchAll(PARAGRAPH)]
+    .map(([p]) => textOf(p).normalize('NFKC').replace(/\s/g, ''))
+    .filter((note) => /^\(需<(?:100万|40%)\)$/.test(note));
 
-  let header = found.header;
-  for (const note of notes) {
-    const resized = note.replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, (style) => {
-      const width = '<w:w w:val="88"/>';
-      if (/<w:w\s[^>]*\/>/.test(style)) return style.replace(/<w:w\s[^>]*\/>/, width);
-      return style.replace(/<w:(?:kern|position|sz|szCs|highlight)\b|<\/w:rPr>/, (next) => width + next);
-    });
-    header = header.replace(note, () => resized);
+  const fonts = new Set();
+  const eastAsianFonts = new Set();
+  let hasImplicitEastAsianFont = false;
+  for (const [run] of xml.matchAll(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g)) {
+    const value = textOf(run).trim();
+    if (!value) continue;
+    const declaration = run.match(/<w:rFonts\b[^>]*>/)?.[0] || '';
+    const face = (key) => unescapeXml(declaration.match(new RegExp(`w:${key}="([^"]+)"`))?.[1] || '');
+    if (/\p{Script=Han}/u.test(value)) {
+      const name = face('eastAsia');
+      if (name) {
+        eastAsianFonts.add(name);
+        fonts.add(name);
+      } else {
+        hasImplicitEastAsianFont = true;
+      }
+    } else if (/[\p{L}\p{N}]/u.test(value)) {
+      const name = face('ascii') || face('hAnsi') || face('eastAsia');
+      if (name) fonts.add(name);
+    }
   }
-  const updated = xml
-    .replace(found.header, () => header)
-    .replace(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g, (section) => section.replace(/<w:docGrid\b[^>]*\/>/, ''));
-  doc.data = Buffer.from(updated, 'utf8');
-
-  // 已经嵌入的字体交给转换器，其他已知模板字体可用随软件提供的近似字体。
-  const fontTable = entries.find((entry) => entry.name === 'word/fontTable.xml')?.data.toString('utf8') || '';
-  const embedded = new Set([...fontTable.matchAll(/<w:font\s[^>]*w:name="([^"]+)"[^>]*>([\s\S]*?)<\/w:font>/g)]
-    .filter(([, , font]) => /<w:embed/.test(font))
-    .map(([, name]) => name));
-  for (const entry of entries.filter(({ name }) => name === DOCUMENT || name === 'word/styles.xml')) {
-    const mapped = entry.data.toString('utf8').replace(/<w:rFonts\b[^>]*>/g, (fonts) =>
-      fonts.replace(/(w:(?:ascii|hAnsi|eastAsia|cs)=")([^"]+)(")/g, (attribute, prefix, name, suffix) =>
-        !embedded.has(name) && Object.hasOwn(fallbacks, name) ? prefix + fallbacks[name] + suffix : attribute,
-      ),
-    );
-    entry.data = Buffer.from(mapped, 'utf8');
-  }
-  return { docx: writeZip(entries), singlePage: true };
+  return {
+    notes,
+    singlePage: notes.length === 2,
+    fonts: [...fonts],
+    eastAsianFonts: hasImplicitEastAsianFont ? [] : [...eastAsianFonts],
+  };
 }
 
-module.exports = { fillCostReport, checkTemplate, readCostReport, prepareCostReportForPng };
+module.exports = { fillCostReport, checkTemplate, readCostReport, costReportPngRequirements };

@@ -2,12 +2,8 @@
 $ErrorActionPreference = 'Stop'
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $exeName = 'changeFileName.exe'
-$targets = [ordered]@{}
-foreach ($name in @('FandolFang-Regular.otf', 'FandolSong-Bold.otf', 'Fandol-COPYING.txt', 'Fandol-README.txt')) {
-  $targets["fonts/$name"] = "resources\LibreOffice\share\fonts\truetype\$name"
-}
-$targets['app.asar'] = 'resources\app.asar'
-$targets[$exeName] = $exeName
+$targets = [ordered]@{ 'app.asar' = 'resources\app.asar'; 'changeFileName.exe' = 'changeFileName.exe' }
+$required = $manifest.requires -join ' 或 '
 
 function Test-Install([string]$dir) {
   return $dir -and (Test-Path -LiteralPath (Join-Path $dir $exeName) -PathType Leaf) -and
@@ -41,8 +37,8 @@ function Test-Hash([string]$file, [string]$name) {
 
 function Confirm-Base([string]$exe) {
   $version = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
-  if ($version -notin @($manifest.requires, "$($manifest.requires).0")) {
-    throw "需要 Windows $($manifest.requires) 完整版。选中的安装版本为 $version。"
+  if (($version -replace '^(\d+\.\d+\.\d+)\.0$', '$1') -notin $manifest.requires) {
+    throw "需要 Windows $required。选中的安装版本为 $version。"
   }
 }
 
@@ -64,7 +60,7 @@ try {
   $office = Join-Path $InstallDir 'resources\LibreOffice\program'
   foreach ($name in @('soffice.com', 'msvcp140.dll', 'vcruntime140_1.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $office $name) -PathType Leaf)) {
-      throw "安装缺少报告转换组件，请先安装 $($manifest.requires) Windows 完整版。"
+      throw "安装缺少报告转换组件，请先安装 Windows 1.2.39 完整版。"
     }
   }
   while (@(Get-Process -Name changeFileName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count) {

@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { promisify } = require('node:util');
-const { prepareCostReportForPng } = require('./docx');
+const { costReportPngRequirements } = require('./docx');
+const { checkReportFonts } = require('./font-check');
 const { finishReportPage } = require('./page-look');
 
 const run = promisify(execFile);
@@ -75,7 +76,7 @@ async function renderWord(docx, dir, office) {
   });
 }
 
-async function renderPages(data, library, worker, finishPage, singlePage) {
+async function renderPages(data, library, worker, finishPage, checkFonts, requirements) {
   const pageSize = 2573;
   const maxPixels = 32_000_000;
   const moduleUrl = (source) =>
@@ -84,11 +85,15 @@ async function renderPages(data, library, worker, finishPage, singlePage) {
   const workerUrl = moduleUrl(worker);
   const { getDocument, GlobalWorkerOptions, Util } = await import(libraryUrl);
   GlobalWorkerOptions.workerSrc = workerUrl;
-  const task = getDocument({ data: Uint8Array.fromBase64(data), useSystemFonts: true, stopAtErrors: true });
+  const task = getDocument({
+    data: Uint8Array.fromBase64(data),
+    useSystemFonts: true,
+    stopAtErrors: true,
+    fontExtraProperties: requirements.fonts.length > 0,
+  });
   const createCanvas = (width, height) => Object.assign(document.createElement('canvas'), { width, height });
   try {
     const pdf = await task.promise;
-    if (singlePage && pdf.numPages !== 1) throw new Error('报告转换后超出一页，请检查模板字体和分页。');
     const pages = [];
     let height = 0;
     let width = 0;
@@ -107,6 +112,8 @@ async function renderPages(data, library, worker, finishPage, singlePage) {
     const context = output.getContext('2d', { alpha: false });
     context.fillStyle = '#fff';
     context.fillRect(0, 0, width, height);
+    const usedFonts = new Map();
+    const lines = new Map();
     let top = 0;
     for (const { page, viewport, w, h } of pages) {
       const canvas = createCanvas(w, h);
@@ -114,6 +121,17 @@ async function renderPages(data, library, worker, finishPage, singlePage) {
       await page.render({ canvas, canvasContext, viewport, background: '#fff' }).promise;
       const { items } = await page.getTextContent();
       const textBoxes = items.filter((item) => item.str?.trim()).map((item) => {
+        if (requirements.fonts.length && /[\p{L}\p{N}]/u.test(item.str)) {
+          const font = page.commonObjs.get(item.fontName);
+          const identity = usedFonts.get(item.fontName) || { name: font?.name, embedded: Boolean(font?.data) && !font.missingFile };
+          identity.han ||= /\p{Script=Han}/u.test(item.str);
+          usedFonts.set(item.fontName, identity);
+        }
+        if (requirements.singlePage) {
+          const row = Math.round((item.transform[5] - top) * 2);
+          if (!lines.has(row)) lines.set(row, []);
+          lines.get(row).push({ x: item.transform[4], text: item.str });
+        }
         const [, , skew, size, x, baseline] = Util.transform(viewport.transform, item.transform);
         const height = Math.hypot(skew, size);
         return { x, y: baseline - height, w: item.width * viewport.scale, h: height * 1.22 };
@@ -122,6 +140,16 @@ async function renderPages(data, library, worker, finishPage, singlePage) {
       context.drawImage(canvas, Math.floor((width - w) / 2), top);
       top += h;
       page.cleanup();
+    }
+    checkFonts(requirements, [...usedFonts.values()]);
+    if (requirements.singlePage) {
+      if (pdf.numPages !== 1) throw new Error('转换结果超出一页，无法按原模板导出 PNG。');
+      const renderedLines = [...lines.values()].map((line) =>
+        line.sort((a, b) => a.x - b.x).map(({ text }) => text).join('').normalize('NFKC').replace(/\s/g, ''),
+      );
+      if (requirements.notes.some((note) => !renderedLines.some((line) => line.includes(note)))) {
+        throw new Error('转换时表头换行与原模板不一致，无法按原模板导出 PNG。');
+      }
     }
     return output.toDataURL('image/png');
   } finally {
@@ -132,7 +160,7 @@ async function renderPages(data, library, worker, finishPage, singlePage) {
 }
 
 // 用沙盒窗口自带的画布，快速更新包也能在 Windows 和 Mac 上渲染。
-async function renderPdf(pdf, singlePage) {
+async function renderPdf(pdf, requirements) {
   const { BrowserWindow } = require('electron');
   const { PNG } = require('pngjs');
   const [library, worker] = await Promise.all([
@@ -146,7 +174,7 @@ async function renderPdf(pdf, singlePage) {
   try {
     await window.loadURL('about:blank');
     const args = [pdf.toString('base64'), library, worker].map((part) => JSON.stringify(part));
-    const script = `(${renderPages})(${args.join(',')}, ${finishReportPage}, ${singlePage}).then(png => ({ png }), error => ({ error: error.message }))`;
+    const script = `(${renderPages})(${args.join(',')}, ${finishReportPage}, ${checkReportFonts}, ${JSON.stringify(requirements)}).then(png => ({ png }), error => ({ error: error.message }))`;
     const { png, error } = await window.webContents.executeJavaScript(script);
     const prefix = 'data:image/png;base64,';
     if (!png?.startsWith(prefix)) throw new Error(error || '报告 PNG 渲染失败');
@@ -163,18 +191,9 @@ async function renderCostReportPng(docx, { office } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cost-report-png-'));
   try {
     const executable = office || await findLibreOffice();
-    const fontDir = path.join(path.dirname(executable), '..', 'share', 'fonts', 'truetype');
-    const fallbackReady = await Promise.all(
-      ['FandolFang-Regular.otf', 'FandolSong-Bold.otf'].map((file) =>
-        fs.access(path.join(fontDir, file)).then(() => true, () => false),
-      ),
-    );
-    const fallbacks = fallbackReady.every(Boolean)
-      ? { 仿宋_GB2312: 'FandolFang', 仿宋: 'FandolFang', 方正小标宋简体: 'FandolSong' }
-      : {};
-    const prepared = prepareCostReportForPng(docx, fallbacks);
-    const pdf = await renderWord(prepared.docx, dir, executable);
-    return await renderPdf(pdf, prepared.singlePage);
+    const requirements = costReportPngRequirements(docx);
+    const pdf = await renderWord(docx, dir, executable);
+    return await renderPdf(pdf, requirements);
   } finally {
     await fs.rm(dir, { force: true, recursive: true });
   }

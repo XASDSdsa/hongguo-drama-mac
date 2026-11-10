@@ -9,10 +9,9 @@ const { build, Platform, Arch } = require('electron-builder');
 const { extractFile } = require('@electron/asar');
 const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
 const pkg = require('../package.json');
-const { setupReportFonts } = require('./setup-report-fonts.cjs');
 
 const root = path.join(__dirname, '..');
-const baseVersion = '1.2.39';
+const baseVersions = ['1.2.39', '1.2.40'];
 const exeName = `${pkg.build.productName}.exe`;
 const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
@@ -35,7 +34,7 @@ async function main() {
     const exe = path.join(unpacked, exeName);
     const asar = path.join(unpacked, 'resources', 'app.asar');
     assert.equal(JSON.parse(extractFile(asar, 'package.json').toString()).version, pkg.version);
-    for (const file of ['dist-react/index.html', 'src/native/cost-report/page-look.js']) {
+    for (const file of ['dist-react/index.html', 'src/native/cost-report/page-look.js', 'src/native/cost-report/font-check.js']) {
       assert.ok(extractFile(asar, path.normalize(file)).length > 0);
     }
     const wire = await getCurrentFuseWire(exe);
@@ -58,17 +57,15 @@ async function main() {
 
     const stage = path.join(work, 'stage');
     fs.mkdirSync(stage);
-    const fontDir = path.join(stage, 'fonts');
-    await setupReportFonts(fontDir);
     fs.copyFileSync(exe, path.join(stage, exeName));
     fs.copyFileSync(asar, path.join(stage, 'app.asar'));
     for (const name of ['update.cmd', 'update.ps1', 'README.txt']) {
       fs.copyFileSync(path.join(__dirname, 'quick-update', name), path.join(stage, name));
     }
-    const files = [exeName, 'app.asar', ...fs.readdirSync(fontDir).map((name) => `fonts/${name}`)];
+    const files = [exeName, 'app.asar'];
     fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify({
       version: pkg.version,
-      requires: baseVersion,
+      requires: baseVersions,
       sha256: Object.fromEntries(files.map((name) => [name, sha256(path.join(stage, name))])),
     }, null, 2));
     const zip = path.join(out, `ai-drama-assistant-${pkg.version}-update.zip`);

@@ -7,13 +7,9 @@ $repo = Split-Path -Parent $PSScriptRoot
 $destination = Join-Path $repo 'build/libreoffice/win32-x64'
 $stamp = Join-Path $destination 'runtime-version.txt'
 $crtStamp = Join-Path $destination 'msvc-runtime-version.txt'
-function Add-ReportFonts {
-  node (Join-Path $PSScriptRoot 'setup-report-fonts.cjs') (Join-Path $destination 'share/fonts/truetype')
-  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the report fonts' }
-}
 if ((Test-Path -LiteralPath $stamp) -and ((Get-Content -LiteralPath $stamp -Raw).Trim() -eq $version) -and
     (Test-Path -LiteralPath $crtStamp) -and
-    (Test-Path -LiteralPath (Join-Path $destination 'program/soffice.com'))) { Add-ReportFonts; return }
+    (Test-Path -LiteralPath (Join-Path $destination 'program/soffice.com'))) { return }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install the Microsoft Visual C++ x64 build tools to build this installer.' }
@@ -71,7 +67,6 @@ try {
   Set-Content -LiteralPath (Join-Path $staged 'runtime-version.txt') -Value $version -Encoding ascii
   if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
   Move-Item -LiteralPath $staged -Destination $destination
-  Add-ReportFonts
   Write-Host "LibreOffice $version is ready at $destination"
 } finally {
   if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Recurse -Force }

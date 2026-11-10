@@ -54,16 +54,19 @@ app.whenReady().then(async () => {
   }
   assert(marks > 500, 'embedded image must be preserved in the export');
   console.log(`PASS offline Word-to-PNG with bundled office: ${width} × ${height}, ${marks} image pixels`);
-  const paragraph = (text) => '<w:p><w:r><w:rPr><w:rFonts w:ascii="仿宋_GB2312" w:eastAsia="仿宋_GB2312"/>' +
+  const paragraph = (text, font = '') => '<w:p><w:r><w:rPr>' +
+    (font ? `<w:rFonts w:ascii="${font}" w:hAnsi="${font}"/>` : '') +
     '<w:sz w:val="28"/></w:rPr><w:t>' + text + '</w:t></w:r></w:p>';
-  const cell = (content) => '<w:tc><w:tcPr><w:tcW w:w="1800" w:type="dxa"/></w:tcPr>' + content + '</w:tc>';
+  const widths = [800, 1400, 1600, 2450, 2450];
+  const cell = (content, index) => `<w:tc><w:tcPr><w:tcW w:w="${widths[index]}" w:type="dxa"/></w:tcPr>` + content + '</w:tc>';
   const headers = ['序号', '微短剧名称', '集数和总时长', '总投资额', '演员总片酬占比'];
   const notes = ['', '', '', '（需＜100万）', '（需＜40%）'];
-  const table = '<w:tbl><w:tblPr/><w:tblGrid>' + '<w:gridCol w:w="1800"/>'.repeat(5) + '</w:tblGrid>' +
-    '<w:tr>' + headers.map((text, index) => cell(paragraph(text) + (notes[index] ? paragraph(notes[index]) : ''))).join('') + '</w:tr>' +
-    '<w:tr>' + ['1', '合成测试', '71集', '6万元', '15%'].map((text) => cell(paragraph(text))).join('') + '</w:tr></w:tbl>';
-  const body = paragraph('成本配置比例情况报告') + table + `<w:p><w:r>${picture}</w:r></w:p>` +
-    paragraph('2026年11月10号') + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
+  const table = '<w:tbl><w:tblPr/><w:tblGrid>' + widths.map((width) => `<w:gridCol w:w="${width}"/>`).join('') + '</w:tblGrid>' +
+    '<w:tr>' + headers.map((text, index) => cell(paragraph(text) + (notes[index] ? paragraph(notes[index]) : ''), index)).join('') + '</w:tr>' +
+    '<w:tr>' + ['1', '合成测试', '71集', '6万元', '15%'].map((text, index) => cell(paragraph(text), index)).join('') + '</w:tr></w:tbl>';
+  const body = paragraph('成本配置比例情况报告') + table + paragraph('Exact Font Test', 'Arial') +
+    `<w:p><w:r>${picture}</w:r></w:p>` + paragraph('2026年11月10号') +
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
   const onePage = { ...entries, 'word/document.xml': entries['word/document.xml'].replace(/<w:body>[\s\S]*<\/w:body>/, '<w:body>' + body + '</w:body>') };
   const report = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
   const rendered = PNG.sync.read(await renderCostReportPng(report, { office }));
@@ -87,6 +90,12 @@ app.whenReady().then(async () => {
   const lower = paperDeviation(rendered.height - 90);
   assert.ok(upper > 2 && lower < 6 && lower > upper + 0.3, `paper grain varies by region: ${upper}, ${lower}`);
   console.log(`PASS A4 report layout and paper grain: ${rendered.width} × ${rendered.height}`);
+  const missingFont = 'ReportTestFontDefinitelyMissing';
+  onePage['word/document.xml'] = onePage['word/document.xml'].replaceAll('Arial', missingFont);
+  const missingReport = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
+  await assert.rejects(renderCostReportPng(missingReport, { office }), new RegExp(missingFont));
+  console.log('PASS exact font check rejects a missing template font');
+
 
   app.exit(0);
 }).catch((error) => { console.error(error); app.exit(1); });
