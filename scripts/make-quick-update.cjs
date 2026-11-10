@@ -36,7 +36,7 @@ async function main() {
     const asar = path.join(unpacked, 'resources', 'app.asar');
     assert.equal(JSON.parse(extractFile(asar, 'package.json').toString()).version, pkg.version);
     for (const file of ['dist-react/index.html', 'src/native/cost-report/page-look.js']) {
-      assert.ok(extractFile(asar, file).length > 0);
+      assert.ok(extractFile(asar, path.normalize(file)).length > 0);
     }
     const wire = await getCurrentFuseWire(exe);
     for (const option of ['EnableEmbeddedAsarIntegrityValidation', 'OnlyLoadAppFromAsar']) {

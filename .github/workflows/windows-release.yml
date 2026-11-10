@@ -187,6 +187,7 @@ jobs:
       - name: Check cost reports and build the Windows package
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           node scripts/check-undefined-names.cjs
           node scripts/check-cost-report.cjs
           node scripts/check-series-library.cjs
@@ -204,6 +205,14 @@ jobs:
           & ./node_modules/.bin/electron.cmd scripts/check-office-png.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-quick-update
+          path: dist/quick/*-update.zip
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+
       - name: Upload to the draft release
         shell: pwsh
         env:
@@ -211,7 +220,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           $version = node -p "require('./package.json').version"
-          gh release upload $env:RELEASE_TAG "dist/quick/ai-drama-assistant-$version-update.zip"
+          $archive = (Resolve-Path "dist/quick/ai-drama-assistant-$version-update.zip").Path
+          gh release upload $env:RELEASE_TAG $archive
 
   publish-existing:
     if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
