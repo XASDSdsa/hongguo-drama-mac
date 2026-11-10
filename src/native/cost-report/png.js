@@ -33,12 +33,20 @@ async function renderWord(docx, dir, office) {
     const { stdout, stderr } = await run(office, [
       `-env:UserInstallation=${profile}`,
       '--headless',
+      '--nologo',
+      '--norestore',
+      '--nodefault',
       '--convert-to',
       'pdf:writer_pdf_Export:{"UseLosslessCompression":{"type":"boolean","value":"true"}}',
       '--outdir',
       dir,
       input,
-    ], { timeout: 60_000, windowsHide: true });
+    ], {
+      cwd: path.isAbsolute(office) ? path.dirname(office) : dir,
+      env: process.platform === 'win32' ? { ...process.env, SAL_DISABLESKIA: '1' } : process.env,
+      timeout: 60_000,
+      windowsHide: true,
+    });
     diagnostics = stderr.trim() || stdout.trim();
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -47,7 +55,10 @@ async function renderWord(docx, dir, office) {
       }
       throw new Error('导出 PNG 需要安装 LibreOffice。安装后再试。');
     }
-    if (error.killed) throw new Error('LibreOffice 渲染报告超时，请重试。');
+    if (error.killed) {
+      const output = (error.stderr?.trim() || error.stdout?.trim() || '').slice(0, 500);
+      throw new Error(`LibreOffice 渲染报告超时${output ? `（${output}）` : ''}，请重试。`);
+    }
     throw error;
   }
   return fs.readFile(path.join(dir, 'report.pdf')).catch(() => {

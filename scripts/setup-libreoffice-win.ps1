@@ -18,7 +18,7 @@ try {
   $relative = "win/x86_64/$name"
   $urls = @(
     "https://download.documentfoundation.org/libreoffice/stable/$version/$relative",
-    "https://downloadarchive.documentfoundation.org/libreoffice/old/$version.2/$relative"
+    "https://downloadarchive.documentfoundation.org/libreoffice/old/$version.2/win/x86_64/LibreOffice_${version}.2_Win_x86-64.msi"
   )
   foreach ($url in $urls) {
     & curl.exe --fail --location --retry 3 --silent --show-error $url --output $msi
@@ -39,15 +39,8 @@ try {
   $root = $office.Directory.Parent.FullName
   if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Recurse -Force }
   New-Item -ItemType Directory -Path $staged -Force | Out-Null
-  foreach ($folder in @('program', 'share')) {
-    Copy-Item -LiteralPath (Join-Path $root $folder) -Destination $staged -Recurse
-  }
-  Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -match '^(LICENSE|NOTICE|COPYING|readme)' } |
-    Copy-Item -Destination $staged
-  foreach ($folder in @('autocorr', 'autotext', 'extensions', 'gallery', 'template', 'wizards')) {
-    $path = Join-Path $staged "share/$folder"
-    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
-  }
+  Get-ChildItem -LiteralPath $root -Force | Where-Object { $_.Extension -ne '.msi' } |
+    Copy-Item -Destination $staged -Recurse -Force
   Set-Content -LiteralPath (Join-Path $staged 'runtime-version.txt') -Value $version -Encoding ascii
   if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
   Move-Item -LiteralPath $staged -Destination $destination

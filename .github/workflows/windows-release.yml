@@ -310,6 +310,12 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/setup-libreoffice-win.ps1
+          $office = Resolve-Path build/libreoffice/win32-x64/program/soffice.com
+          $env:SAL_DISABLESKIA = '1'
+          $version = Start-Process -FilePath $office -ArgumentList '--version' -WorkingDirectory (Split-Path $office) -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP/office-version.txt" -RedirectStandardError "$env:RUNNER_TEMP/office-version-errors.txt"
+          if (!$version.WaitForExit(20000)) { Stop-Process -Id $version.Id -Force; throw 'Bundled LibreOffice did not start' }
+          Get-Content "$env:RUNNER_TEMP/office-version.txt"
+          if ($version.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP/office-version-errors.txt"; throw 'Bundled LibreOffice version probe failed' }
           & ./node_modules/.bin/electron.cmd scripts/check-office-png.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
