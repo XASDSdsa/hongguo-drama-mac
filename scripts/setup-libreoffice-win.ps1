@@ -6,8 +6,29 @@ $sha256 = 'ff4b911403b67ee9e6249f820f9782c44bb32c94fdaa45b0da53a8e419e5307a'
 $repo = Split-Path -Parent $PSScriptRoot
 $destination = Join-Path $repo 'build/libreoffice/win32-x64'
 $stamp = Join-Path $destination 'runtime-version.txt'
+$crtStamp = Join-Path $destination 'msvc-runtime-version.txt'
 if ((Test-Path -LiteralPath $stamp) -and ((Get-Content -LiteralPath $stamp -Raw).Trim() -eq $version) -and
+    (Test-Path -LiteralPath $crtStamp) -and
     (Test-Path -LiteralPath (Join-Path $destination 'program/soffice.com'))) { return }
+
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install the Microsoft Visual C++ x64 build tools to build this installer.' }
+$vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (!$vs) { throw 'Microsoft Visual C++ x64 build tools were not found.' }
+$redist = Join-Path $vs 'VC/Redist/MSVC'
+$crt = Get-ChildItem -Path "$redist/*/x64/Microsoft.VC*.CRT" -Directory |
+  Sort-Object { [version]$_.Parent.Parent.Name } -Descending | Select-Object -First 1
+if (!$crt) { throw 'Microsoft Visual C++ x64 redistributable files were not found.' }
+$crtFiles = Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll' -File
+foreach ($required in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+  if ($crtFiles.Name -notcontains $required) { throw "Missing redistributable DLL: $required" }
+}
+foreach ($file in $crtFiles) {
+  $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+  if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+    throw "Microsoft signature verification failed for $($file.Name)."
+  }
+}
 
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("report-office-" + [guid]::NewGuid())
 $extract = Join-Path $temp 'extract'
@@ -41,6 +62,8 @@ try {
   New-Item -ItemType Directory -Path $staged -Force | Out-Null
   Get-ChildItem -LiteralPath $root -Force | Where-Object { $_.Extension -ne '.msi' } |
     Copy-Item -Destination $staged -Recurse -Force
+  $crtFiles | Copy-Item -Destination (Join-Path $staged 'program') -Force
+  Set-Content -LiteralPath (Join-Path $staged 'msvc-runtime-version.txt') -Value $crt.Parent.Parent.Name -Encoding ascii
   Set-Content -LiteralPath (Join-Path $staged 'runtime-version.txt') -Value $version -Encoding ascii
   if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
   Move-Item -LiteralPath $staged -Destination $destination

@@ -32,6 +32,9 @@ Windows 和 Apple Silicon Mac 安装包内置 The Document Foundation 的 LibreO
 或从官方 Apple Silicon DMG 拷贝应用。主应用独立调用该程序。随包保留原许可证，完整对应源码见
 https://download.documentfoundation.org/libreoffice/src/26.8.2/ 。
 
+Windows 包在转换组件目录内附带 Microsoft Visual C++ x64 可再分发运行库，供该组件本地加载。
+分发说明见 https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files 。
+
 ### Windows FFmpeg（GPLv3-or-later）
 
 | 项 | 说明 |

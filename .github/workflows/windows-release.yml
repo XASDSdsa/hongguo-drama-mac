@@ -23,6 +23,10 @@ on:
         description: "true = 只出快速更新包（软件代码，几 MB，装在已有完整版上用），不打完整安装包。"
         required: false
         default: ''
+      installer_only:
+        description: "true = 构建并检查完整安装程序，跳过额外的绿色版 ZIP。"
+        required: false
+        default: ''
 
 permissions:
   actions: read
@@ -246,7 +250,10 @@ jobs:
           # 安装包必须有；zip 超过 GitHub 2 GiB 上限时在打包阶段已被跳过，这里有就带上；
           # 内置 FFmpeg 和它的完整源码包跟安装包一起发（许可要求）。
           for pattern in 'ai-drama-assistant-*-Setup.exe' 'ai-drama-assistant-*-win-x64.zip' 'ffmpeg-*-win-x64.zip' 'ffmpeg-*-win-x64-source.tar.xz'; do
-            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "$pattern" | head -n 1)
+            f=$(find "$RUNNER_TEMP/win" -path '*/release/*' -iname "$pattern" -print -quit)
+            if [ -z "$f" ]; then
+              f=$(find "$RUNNER_TEMP/win" -maxdepth 1 -iname "$pattern" -print -quit)
+            fi
             if [ -z "$f" ]; then
               if [ "$pattern" = '*-Setup.exe' ]; then echo "missing $pattern" >&2; exit 1; fi
               echo "skip $pattern (not built or over 2 GiB)"
@@ -549,6 +556,7 @@ jobs:
 
       # 不再出便携版：它每次打开都要先把几个 GB 解压到临时文件夹（再被杀毒软件逐个扫描），要等好几分钟。
       - name: Build unpacked directory and zip
+        if: inputs.installer_only != 'true'
         shell: bash
         run: |
           npx electron-builder --win --dir --x64 --publish never
@@ -613,8 +621,6 @@ jobs:
         with:
           name: hongguo-windows
           path: |
-            dist/*.exe
-            dist/*.zip
             dist/release/*
           if-no-files-found: error
 

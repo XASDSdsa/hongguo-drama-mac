@@ -57,11 +57,16 @@ async function renderWord(docx, dir, office) {
       }
       throw new Error('导出 PNG 需要安装 LibreOffice。安装后再试。');
     }
-    if (error.killed) {
-      const output = (error.stderr?.trim() || error.stdout?.trim() || '').slice(0, 500);
-      throw new Error(`LibreOffice 渲染报告超时${output ? `（${output}）` : ''}，请重试。`);
+    const output = (error.stderr?.trim() || error.stdout?.trim() || '').slice(0, 500);
+    const code = Number.isInteger(error.code) && process.platform === 'win32'
+      ? `0x${(error.code >>> 0).toString(16).padStart(8, '0').toUpperCase()}`
+      : error.code || error.signal || '未知';
+    console.warn('[cost-report] PDF conversion failed', { code, timedOut: Boolean(error.killed), output });
+    if (error.killed) throw new Error('报告转换超时，请关闭软件后重试。');
+    if (code === '0xC0000135' || code === '0xC0000139' || code === '0xC000007B') {
+      throw new Error(`报告转换组件无法加载运行库（${code}），请重新安装 Windows 完整版。`);
     }
-    throw error;
+    throw new Error(`Word 报告转换失败（${code}）。请先确认报告能正常打开。`);
   }
   return fs.readFile(path.join(dir, 'report.pdf')).catch(() => {
     throw new Error(`LibreOffice 没有生成可用的报告 PDF${diagnostics ? `（${diagnostics}）` : ''}`);
