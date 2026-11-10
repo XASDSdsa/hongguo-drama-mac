@@ -352,8 +352,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
           </button>
         </div>
         <p className="cost-lead">
-          这里只是设置。报告在勾上「成本配置报告」、点「开始处理」后自动生成：处理完按 Seedance 2.5
-          官方价格和成品总时长算总投资额，填进你的报告模板，放在剧集文件夹里。下面的数按「去重」里现有的成品估算，供参考。
+          勾选「成本配置报告」并点击「开始处理」后，报告会保存到剧集文件夹。报告总投资额按原剧集数填写，AI 生成费用按去重成品估算。
         </p>
         {!info && !error && <p className="cost-sub">正在算…</p>}
         {info && (
@@ -449,11 +448,12 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
               </span>
             </dd>
             <dt>总投资额</dt>
-            <dd className={info.over.total ? 'cost-over' : ''}>
-              <span>
-                <b>{info.text.total}</b>（{info.text.totalYuan}）{info.over.total && ' 超过了报审要求的 100 万'}
+            <dd>
+              <b>{info.text.total || '未找到原剧集数'}</b>
+              <span className="cost-sub">
+                {info.originalEpisodes > 0 && `原剧 ${info.originalEpisodes} 集。 `}
+                超过 70 集填 6 万元，70 集及以下填 5 万元。
               </span>
-              <span className="cost-sub">= AI 生成费用 ÷（1 − 演员片酬占比）</span>
             </dd>
             <dt>演员总片酬占比</dt>
             <dd className={info.over.share ? 'cost-over' : ''}>
@@ -1447,7 +1447,7 @@ export default function SeriesDetail({ folder, active = true }) {
               <div className="proc-line">
                 <label
                   className="proc-check"
-                  title="勾上后点「开始处理」：处理完按 Seedance 2.5 官方价格和成品时长算总投资额，填进你的报告模板，放在剧集文件夹里"
+                  title="勾上后点「开始处理」：按原剧集数填写报告总投资额，报告保存在剧集文件夹里"
                 >
                   <input
                     type="checkbox"

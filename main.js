@@ -5719,7 +5719,7 @@ ipcMain.handle('library-durations', async (_event, payload = {}) => {
 });
 
 // ===== 成本配置报告 =====
-// 总投资额按 Seedance 2.5 官方价格和去重成品的时长、清晰度算（src/native/cost-report/pricing.js），填进用户自己的 Word 模板。
+// Word 总投资额按原剧集数填报；Seedance 2.5 明细用于估算。
 // 模板里有公章和签名：只存在本机的用户数据目录里，不进仓库、不进安装包。
 const costTemplateFile = () => path.join(app.getPath('userData'), 'cost-report-template.docx');
 function costTemplateInfo() {
@@ -5750,6 +5750,9 @@ async function cachedEpisodeShape(ffprobePath, file) {
 
 /** 这部剧的成本：去重文件夹里每一集按自己的时长和清晰度算。 */
 async function costSummary(dir, actorPercent, draws) {
+  const facts = seriesFacts(dir);
+  const originalEpisodes = facts.total || facts.downloaded;
+  const reportWan = costPricing.reportTotalWan(originalEpisodes);
   const ffprobePath = resolveFfmpeg('ffprobe');
   if (!ffprobePath) throw new Error('未找到 ffprobe，读不出每集时长');
   const files = libraryDedupOutputs(dir);
@@ -5772,16 +5775,15 @@ async function costSummary(dir, actorPercent, draws) {
   return {
     unreadable,
     cost,
+    originalEpisodes,
     text: {
       episodes: costPricing.formatEpisodes(cost.episodes, cost.seconds),
       generation: costPricing.formatYuan(cost.generation),
       actorFee: costPricing.formatYuan(cost.actorFee),
-      total: costPricing.formatWan(cost.total),
-      totalYuan: costPricing.formatYuan(cost.total),
+      total: reportWan === null ? '' : `${reportWan}万元`,
       share: costPricing.formatShare(cost.actorShare),
     },
     over: {
-      total: cost.total >= costPricing.LIMITS.totalYuan,
       share: cost.actorShare >= costPricing.LIMITS.actorShare,
     },
   };
@@ -5905,6 +5907,7 @@ async function makeCostReport(dir, request = {}) {
   const title = payload.title || seriesLayout.readNewInfo(dir).title;
   if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在「报告设置」里填' };
   const summary = await costSummary(dir, payload.actorPercent, payload.draws);
+  if (!summary.text.total) return { success: false, error: '未找到原剧集数，无法填写总投资额' };
   if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
   if (summary.unreadable.length)
     return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };

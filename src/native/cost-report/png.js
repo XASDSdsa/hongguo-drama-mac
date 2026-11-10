@@ -6,6 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { promisify } = require('node:util');
+const { prepareCostReportForPng } = require('./docx');
+const { finishReportPage } = require('./page-look');
 
 const run = promisify(execFile);
 
@@ -73,62 +75,20 @@ async function renderWord(docx, dir, office) {
   });
 }
 
-// 灰度纹理只应用到接近白色的纸面。章签和其他有色内容直接使用文档渲染结果。
-function texturePaper(context, width, height) {
-  const paper = context.getImageData(0, 0, width, height);
-  const pixels = paper.data;
-  function grainAt(x, y, seed) {
-    let hash = Math.imul(x ^ seed, 0x45d9f3b) ^ Math.imul(y, 0x119de1f3);
-    hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
-    return ((hash ^ (hash >>> 16)) >>> 0) / 0xffffffff;
-  }
-  function mottling(x, y, scale, seed) {
-    const col = Math.floor(x / scale);
-    const row = Math.floor(y / scale);
-    const dx = x / scale - col;
-    const dy = y / scale - row;
-    const sx = dx * dx * (3 - 2 * dx);
-    const sy = dy * dy * (3 - 2 * dy);
-    const top = grainAt(col, row, seed) * (1 - sx) + grainAt(col + 1, row, seed) * sx;
-    const bottom = grainAt(col, row + 1, seed) * (1 - sx) + grainAt(col + 1, row + 1, seed) * sx;
-    return top * (1 - sy) + bottom * sy;
-  }
-  for (let y = 0; y < height; y++) {
-    const row = y / height;
-    for (let x = 0; x < width; x++) {
-      const offset = (y * width + x) * 4;
-      const low = Math.min(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
-      const high = Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
-      if (low < 243 || high - low > 2) continue;
-      const col = x / width;
-      const texture = mottling(x, y, 173, 47);
-      const tone = 5 * mottling(x, y, 137, 19) + 3 * mottling(x, y, 19, 59);
-      const coarse = mottling(x, y, 3, 83) - 0.5;
-      const fine = grainAt(x, y, 101) - 0.5;
-      const grain = (4 + 9 * texture) * coarse + (8 + 6 * (1 - texture)) * fine;
-      const shade = (9 + 1.5 * col + 1.5 * row + tone + grain) * (low - 243) / 12;
-      pixels[offset] -= shade;
-      pixels[offset + 1] -= shade;
-      pixels[offset + 2] -= shade;
-    }
-  }
-  context.putImageData(paper, 0, 0);
-}
-
-async function renderPages(data, library, worker, applyTexture) {
-  const pageSize = 1600;
-  const tilt = -0.35 * Math.PI / 180;
+async function renderPages(data, library, worker, finishPage, singlePage) {
+  const pageSize = 2573;
   const maxPixels = 32_000_000;
   const moduleUrl = (source) =>
     URL.createObjectURL(new Blob([Uint8Array.fromBase64(source)], { type: 'text/javascript' }));
   const libraryUrl = moduleUrl(library);
   const workerUrl = moduleUrl(worker);
-  const { getDocument, GlobalWorkerOptions } = await import(libraryUrl);
+  const { getDocument, GlobalWorkerOptions, Util } = await import(libraryUrl);
   GlobalWorkerOptions.workerSrc = workerUrl;
   const task = getDocument({ data: Uint8Array.fromBase64(data), useSystemFonts: true, stopAtErrors: true });
   const createCanvas = (width, height) => Object.assign(document.createElement('canvas'), { width, height });
   try {
     const pdf = await task.promise;
+    if (singlePage && pdf.numPages !== 1) throw new Error('报告转换后超出一页，请检查模板字体和分页。');
     const pages = [];
     let height = 0;
     let width = 0;
@@ -145,26 +105,21 @@ async function renderPages(data, library, worker, applyTexture) {
     }
     const output = createCanvas(width, height);
     const context = output.getContext('2d', { alpha: false });
-    context.fillStyle = '#f3f3f3';
+    context.fillStyle = '#fff';
     context.fillRect(0, 0, width, height);
     let top = 0;
     for (const { page, viewport, w, h } of pages) {
       const canvas = createCanvas(w, h);
       const canvasContext = canvas.getContext('2d');
       await page.render({ canvas, canvasContext, viewport, background: '#fff' }).promise;
-      applyTexture(canvasContext, w, h);
-      const left = Math.floor((width - w) / 2);
-      // 略微放大旋转后的纸面，让四角都被覆盖。每页保留原宽高，避免影响相邻页。
-      const scale = Math.cos(tilt) + Math.abs(Math.sin(tilt)) * Math.max(w / h, h / w) + 2 / Math.min(w, h);
-      context.save();
-      context.beginPath();
-      context.rect(left, top, w, h);
-      context.clip();
-      context.translate(left + w / 2, top + h / 2);
-      context.rotate(tilt);
-      context.scale(scale, scale);
-      context.drawImage(canvas, -w / 2, -h / 2);
-      context.restore();
+      const { items } = await page.getTextContent();
+      const textBoxes = items.filter((item) => item.str?.trim()).map((item) => {
+        const [, , skew, size, x, baseline] = Util.transform(viewport.transform, item.transform);
+        const height = Math.hypot(skew, size);
+        return { x, y: baseline - height, w: item.width * viewport.scale, h: height * 1.22 };
+      });
+      finishPage(canvasContext, w, h, textBoxes);
+      context.drawImage(canvas, Math.floor((width - w) / 2), top);
       top += h;
       page.cleanup();
     }
@@ -177,7 +132,7 @@ async function renderPages(data, library, worker, applyTexture) {
 }
 
 // 用沙盒窗口自带的画布，快速更新包也能在 Windows 和 Mac 上渲染。
-async function renderPdf(pdf) {
+async function renderPdf(pdf, singlePage) {
   const { BrowserWindow } = require('electron');
   const { PNG } = require('pngjs');
   const [library, worker] = await Promise.all([
@@ -191,7 +146,7 @@ async function renderPdf(pdf) {
   try {
     await window.loadURL('about:blank');
     const args = [pdf.toString('base64'), library, worker].map((part) => JSON.stringify(part));
-    const script = `(${renderPages})(${args.join(',')}, ${texturePaper}).then(png => ({ png }), error => ({ error: error.message }))`;
+    const script = `(${renderPages})(${args.join(',')}, ${finishReportPage}, ${singlePage}).then(png => ({ png }), error => ({ error: error.message }))`;
     const { png, error } = await window.webContents.executeJavaScript(script);
     const prefix = 'data:image/png;base64,';
     if (!png?.startsWith(prefix)) throw new Error(error || '报告 PNG 渲染失败');
@@ -207,8 +162,19 @@ async function renderPdf(pdf) {
 async function renderCostReportPng(docx, { office } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cost-report-png-'));
   try {
-    const pdf = await renderWord(docx, dir, office || await findLibreOffice());
-    return await renderPdf(pdf);
+    const executable = office || await findLibreOffice();
+    const fontDir = path.join(path.dirname(executable), '..', 'share', 'fonts', 'truetype');
+    const fallbackReady = await Promise.all(
+      ['FandolFang-Regular.otf', 'FandolSong-Bold.otf'].map((file) =>
+        fs.access(path.join(fontDir, file)).then(() => true, () => false),
+      ),
+    );
+    const fallbacks = fallbackReady.every(Boolean)
+      ? { 仿宋_GB2312: 'FandolFang', 仿宋: 'FandolFang', 方正小标宋简体: 'FandolSong' }
+      : {};
+    const prepared = prepareCostReportForPng(docx, fallbacks);
+    const pdf = await renderWord(prepared.docx, dir, executable);
+    return await renderPdf(pdf, prepared.singlePage);
   } finally {
     await fs.rm(dir, { force: true, recursive: true });
   }

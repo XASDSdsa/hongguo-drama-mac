@@ -54,5 +54,39 @@ app.whenReady().then(async () => {
   }
   assert(marks > 500, 'embedded image must be preserved in the export');
   console.log(`PASS offline Word-to-PNG with bundled office: ${width} × ${height}, ${marks} image pixels`);
+  const paragraph = (text) => '<w:p><w:r><w:rPr><w:rFonts w:ascii="仿宋_GB2312" w:eastAsia="仿宋_GB2312"/>' +
+    '<w:sz w:val="28"/></w:rPr><w:t>' + text + '</w:t></w:r></w:p>';
+  const cell = (content) => '<w:tc><w:tcPr><w:tcW w:w="1800" w:type="dxa"/></w:tcPr>' + content + '</w:tc>';
+  const headers = ['序号', '微短剧名称', '集数和总时长', '总投资额', '演员总片酬占比'];
+  const notes = ['', '', '', '（需＜100万）', '（需＜40%）'];
+  const table = '<w:tbl><w:tblPr/><w:tblGrid>' + '<w:gridCol w:w="1800"/>'.repeat(5) + '</w:tblGrid>' +
+    '<w:tr>' + headers.map((text, index) => cell(paragraph(text) + (notes[index] ? paragraph(notes[index]) : ''))).join('') + '</w:tr>' +
+    '<w:tr>' + ['1', '合成测试', '71集', '6万元', '15%'].map((text) => cell(paragraph(text))).join('') + '</w:tr></w:tbl>';
+  const body = paragraph('成本配置比例情况报告') + table + `<w:p><w:r>${picture}</w:r></w:p>` +
+    paragraph('2026年11月10号') + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
+  const onePage = { ...entries, 'word/document.xml': entries['word/document.xml'].replace(/<w:body>[\s\S]*<\/w:body>/, '<w:body>' + body + '</w:body>') };
+  const report = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
+  const rendered = PNG.sync.read(await renderCostReportPng(report, { office }));
+  assert.equal(rendered.height, 2573, 'report fits on one page');
+  assert.ok(Math.abs(rendered.width / rendered.height - 210 / 297) < 0.002, 'A4 aspect ratio');
+  function paperDeviation(yStart) {
+    let sum = 0;
+    let squares = 0;
+    let count = 0;
+    for (let y = yStart; y < yStart + 80; y++) {
+      for (let x = 20; x < rendered.width - 20; x++) {
+        const value = rendered.data[(y * rendered.width + x) * 4];
+        sum += value;
+        squares += value * value;
+        count++;
+      }
+    }
+    return Math.sqrt(squares / count - (sum / count) ** 2);
+  }
+  const upper = paperDeviation(10);
+  const lower = paperDeviation(rendered.height - 90);
+  assert.ok(upper > 2 && lower < 6 && lower > upper + 0.3, `paper grain varies by region: ${upper}, ${lower}`);
+  console.log(`PASS A4 report layout and paper grain: ${rendered.width} × ${rendered.height}`);
+
   app.exit(0);
 }).catch((error) => { console.error(error); app.exit(1); });

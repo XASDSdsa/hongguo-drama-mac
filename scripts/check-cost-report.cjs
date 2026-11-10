@@ -1,5 +1,5 @@
 'use strict';
-// 成本配置报告：总投资额按 Seedance 2.5 官方价格算（和官方价格页的示例对得上）；按模板填 Word 只改表格那一行和日期，
+// 成本配置报告：校验整数填报规则、Seedance 2.5 估算和 Word 填写。Word 只改表格那一行和日期，
 // 其余（公章、签名图片、其他文字）一个字节不动；模板只存在用户电脑上，不进仓库；界面和主进程接好了。
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,6 +8,11 @@ const { execFileSync } = require('node:child_process');
 const pricing = require('../src/native/cost-report/pricing');
 const { readZip, writeZip } = require('../src/native/cost-report/zip');
 const { fillCostReport, checkTemplate, readCostReport } = require('../src/native/cost-report/docx');
+
+assert.equal(pricing.reportTotalWan(69), 5);
+assert.equal(pricing.reportTotalWan(70), 5);
+assert.equal(pricing.reportTotalWan(71), 6);
+assert.equal(pricing.reportTotalWan(0), null);
 
 const root = path.join(__dirname, '..');
 

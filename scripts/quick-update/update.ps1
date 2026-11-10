@@ -1,121 +1,132 @@
-﻿# AI短剧助手 快速更新：只换软件代码（app.asar 和剪映草稿脚本），运行库（FFmpeg、剪映运行时、模型）不动。
-# 用法：双击同一文件夹里的 update.cmd。
+﻿param([string]$InstallDir)
 $ErrorActionPreference = 'Stop'
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$manifest = Get-Content -LiteralPath (Join-Path $here 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-$exeName = 'AI短剧助手.exe'
-
-function Say($text, $color = 'Gray') { Write-Host $text -ForegroundColor $color }
-function Fail($text) {
-  Say ''
-  Say "更新没有完成：$text" 'Red'
-  Say '软件没有被改动，可以继续用原来的版本。' 'Yellow'
-  Read-Host '按回车关闭' | Out-Null
-  exit 1
+$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$exeName = 'changeFileName.exe'
+$targets = [ordered]@{}
+foreach ($name in @('FandolFang-Regular.otf', 'FandolSong-Bold.otf', 'Fandol-COPYING.txt', 'Fandol-README.txt')) {
+  $targets["fonts/$name"] = "resources\LibreOffice\share\fonts\truetype\$name"
 }
+$targets['app.asar'] = 'resources\app.asar'
+$targets[$exeName] = $exeName
 
-function Test-Install($dir) {
-  if (-not $dir) { return $false }
-  $dir = $dir.Trim('"').TrimEnd('\')
-  return (Test-Path -LiteralPath (Join-Path $dir 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $dir $exeName))
+function Test-Install([string]$dir) {
+  return $dir -and (Test-Path -LiteralPath (Join-Path $dir $exeName) -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $dir 'resources\app.asar') -PathType Leaf)
 }
 
 function Find-Install {
-  # 1. 软件正开着：就是它
-  foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.EndsWith($exeName) })) {
-    $dir = Split-Path -Parent $p.Path
-    if (Test-Install $dir) { return $dir }
+  foreach ($p in @(Get-Process -Name changeFileName -ErrorAction SilentlyContinue)) {
+    if ($p.Path -and (Test-Install (Split-Path -Parent $p.Path))) { return (Split-Path -Parent $p.Path) }
   }
-  # 2. 安装时登记的位置
   $keys = @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
     'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
     'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
   )
-  foreach ($key in $keys) {
-    foreach ($item in @(Get-ItemProperty $key -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'AI短剧助手*' })) {
-      foreach ($dir in @($item.InstallLocation, ($(if ($item.DisplayIcon) { Split-Path -Parent ($item.DisplayIcon -replace '"', '' -replace ',\d+$', '') })), ($(if ($item.UninstallString) { Split-Path -Parent ($item.UninstallString -replace '^"([^"]+)".*$', '$1') })))) {
-        if (Test-Install $dir) { return $dir.Trim('"').TrimEnd('\') }
-      }
+  foreach ($item in @(Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'changeFileName*' })) {
+    $icon = ($item.DisplayIcon -replace '"' -replace ',\d+$')
+    $uninstaller = ($item.UninstallString -replace '^"([^"]+)".*$', '$1')
+    foreach ($dir in @($item.InstallLocation, $(if ($icon) { Split-Path -Parent $icon }), $(if ($uninstaller) { Split-Path -Parent $uninstaller }))) {
+      if (Test-Install $dir) { return $dir }
     }
   }
-  # 3. 默认安装位置
-  foreach ($dir in @("$env:LOCALAPPDATA\Programs\ai-drama-assistant", "$env:LOCALAPPDATA\Programs\AI短剧助手", "$env:ProgramFiles\AI短剧助手", "${env:ProgramFiles(x86)}\AI短剧助手")) {
+  foreach ($dir in @("$env:LOCALAPPDATA\Programs\changeFileName", "$env:LOCALAPPDATA\Programs\ai-drama-assistant", "$env:ProgramFiles\changeFileName")) {
     if (Test-Install $dir) { return $dir }
   }
-  return $null
 }
 
-Say "AI短剧助手 快速更新 → $($manifest.version)" 'Cyan'
-Say "（只换软件代码，运行库不动；需要先装过 $($manifest.requires) 或更新的完整版）"
-Say ''
-
-$install = Find-Install
-while (-not $install) {
-  Say '没找到软件的安装位置。' 'Yellow'
-  $typed = Read-Host '请把软件安装文件夹（里面有 AI短剧助手.exe）拖到这个窗口里，再按回车；直接回车退出'
-  if (-not $typed) { Fail '没有找到安装位置' }
-  if (Test-Install $typed) { $install = $typed.Trim('"').TrimEnd('\') } else { Say '这个文件夹里没有 AI短剧助手.exe 和 resources\app.asar，请重新选择。' 'Yellow' }
-}
-$resources = Join-Path $install 'resources'
-Say "安装位置：$install"
-if (-not (Test-Path -LiteralPath (Join-Path $resources 'jianying'))) {
-  Fail '这个安装缺少运行库（不是完整版），请先下载安装完整版安装包，再用快速更新'
+function Test-Hash([string]$file, [string]$name) {
+  return (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $manifest.sha256.$name
 }
 
-# 软件开着时 app.asar 被占用，换不了：等用户关掉。
-while (@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($install) }).Count -gt 0) {
-  Say ''
-  Say '软件还开着（正在处理的任务请先等它做完或停止）。' 'Yellow'
-  $answer = Read-Host '请关掉软件后按回车继续；输入 Q 退出'
-  if ($answer -match '^[qQ]') { Fail '软件还开着' }
-}
-
-# 装在 Program Files 里时要管理员权限：自动以管理员身份重新运行。
-$probe = Join-Path $resources ".quick-update-$PID.tmp"
-try {
-  [IO.File]::WriteAllText($probe, 'ok')
-  Remove-Item -LiteralPath $probe -Force
-} catch {
-  $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  if ($isAdmin) { Fail "没有权限写入 $resources" }
-  Say '需要管理员权限，正在请求……' 'Yellow'
-  Start-Process powershell -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$($MyInvocation.MyCommand.Path)`"")
-  exit 0
-}
-
-$newAsar = Join-Path $here 'app.asar'
-if ((Get-FileHash -LiteralPath $newAsar -Algorithm SHA256).Hash.ToLower() -ne $manifest.sha256.ToLower()) {
-  Fail '更新包不完整（校验不通过），请重新下载'
-}
-
-# 先备份一份旧的，新的有问题可以手动换回来。
-$backup = Join-Path $resources 'quick-update-backup'
-New-Item -ItemType Directory -Force -Path $backup | Out-Null
-Copy-Item -LiteralPath (Join-Path $resources 'app.asar') -Destination (Join-Path $backup 'app.asar') -Force
-if (Test-Path -LiteralPath (Join-Path $resources 'workflow')) {
-  New-Item -ItemType Directory -Force -Path (Join-Path $backup 'workflow') | Out-Null
-  Copy-Item -Path (Join-Path $resources 'workflow\*') -Destination (Join-Path $backup 'workflow') -Force
+function Confirm-Base([string]$exe) {
+  $version = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+  if ($version -notin @($manifest.requires, "$($manifest.requires).0")) {
+    throw "需要 Windows $($manifest.requires) 完整版。选中的安装版本为 $version。"
+  }
 }
 
 try {
-  Copy-Item -LiteralPath $newAsar -Destination (Join-Path $resources 'app.asar') -Force
-  New-Item -ItemType Directory -Force -Path (Join-Path $resources 'workflow') | Out-Null
-  Copy-Item -Path (Join-Path $here 'workflow\*') -Destination (Join-Path $resources 'workflow') -Force
-  if ((Get-FileHash -LiteralPath (Join-Path $resources 'app.asar') -Algorithm SHA256).Hash.ToLower() -ne $manifest.sha256.ToLower()) {
-    throw '写入后校验不通过'
+  Write-Host "changeFileName 快速更新 $($manifest.version)" -ForegroundColor Cyan
+  foreach ($name in $targets.Keys) {
+    if (!(Test-Hash (Join-Path $PSScriptRoot $name) $name)) { throw '更新文件校验失败，请重新下载完整 ZIP。' }
+  }
+  if (!$InstallDir) { $InstallDir = Find-Install }
+  while (!(Test-Install $InstallDir)) {
+    $typed = Read-Host '请把包含 changeFileName.exe 的文件夹拖进来，按回车确认。直接回车退出'
+    if (!$typed) { return }
+    $InstallDir = $typed.Trim().Trim('"')
+  }
+  $InstallDir = (Resolve-Path -LiteralPath $InstallDir).Path
+  Write-Host "安装位置 $InstallDir"
+  $exe = Join-Path $InstallDir $exeName
+  Confirm-Base $exe
+  $office = Join-Path $InstallDir 'resources\LibreOffice\program'
+  foreach ($name in @('soffice.com', 'msvcp140.dll', 'vcruntime140_1.dll')) {
+    if (!(Test-Path -LiteralPath (Join-Path $office $name) -PathType Leaf)) {
+      throw "安装缺少报告转换组件，请先安装 $($manifest.requires) Windows 完整版。"
+    }
+  }
+  while (@(Get-Process -Name changeFileName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count) {
+    if ((Read-Host '请退出 changeFileName 后按回车。输入 Q 取消') -eq 'Q') { return }
+  }
+
+  $lockPath = Join-Path $InstallDir '.quick-update.lock'
+  try {
+    $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+  } catch [UnauthorizedAccessException] {
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw }
+    $elevatedArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -InstallDir `"$InstallDir`""
+    $raised = Start-Process powershell.exe -Verb RunAs -ArgumentList $elevatedArguments -Wait -PassThru
+    exit $raised.ExitCode
+  }
+  try {
+    Confirm-Base $exe
+    $backup = Join-Path $InstallDir ("resources\quick-update-backup-" + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $backup | Out-Null
+    $replaced = @()
+    try {
+      foreach ($name in $targets.Keys) {
+        $leaf = Split-Path -Leaf $name
+        $file = Join-Path $backup "$leaf.new"
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $file
+        if (!(Test-Hash $file $name)) { throw "复制后校验失败：$name" }
+      }
+      foreach ($name in $targets.Keys) {
+        $leaf = Split-Path -Leaf $name
+        $staged = Join-Path $backup "$leaf.new"
+        $destination = Join-Path $InstallDir $targets[$name]
+        if (Test-Path -LiteralPath $destination) {
+          [IO.File]::Replace($staged, $destination, (Join-Path $backup $leaf), $true)
+        } else {
+          [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+          [IO.File]::Move($staged, $destination)
+        }
+        $replaced += $name
+      }
+      foreach ($name in $targets.Keys) {
+        if (!(Test-Hash (Join-Path $InstallDir $targets[$name]) $name)) { throw "写入后校验失败：$name" }
+      }
+    } catch {
+      $failure = $_
+      foreach ($name in $replaced) {
+        $saved = Join-Path $backup (Split-Path -Leaf $name)
+        $destination = Join-Path $InstallDir $targets[$name]
+        if (Test-Path -LiteralPath $saved) {
+          Copy-Item -LiteralPath $saved -Destination $destination -Force
+        } else {
+          Remove-Item -LiteralPath $destination -Force
+        }
+      }
+      throw $failure
+    }
+    Write-Host "已更新至 $($manifest.version)。现在可以正常打开软件。" -ForegroundColor Green
+    Write-Host "旧版备份位于 $backup"
+  } finally {
+    $lock.Dispose()
   }
 } catch {
-  # 换到一半出错：放回旧的。
-  Copy-Item -LiteralPath (Join-Path $backup 'app.asar') -Destination (Join-Path $resources 'app.asar') -Force
-  if (Test-Path -LiteralPath (Join-Path $backup 'workflow')) {
-    Copy-Item -Path (Join-Path $backup 'workflow\*') -Destination (Join-Path $resources 'workflow') -Force
-  }
-  Fail "$($_.Exception.Message)（已换回原来的版本）"
+  Write-Host "更新失败：$($_.Exception.Message)" -ForegroundColor Red
+  exit 1
 }
-
-Say ''
-Say "已更新到 $($manifest.version)。" 'Green'
-Say "旧版本备份在：$backup"
-$open = Read-Host '按回车打开软件；输入 N 不打开'
-if ($open -notmatch '^[nN]') { Start-Process -FilePath (Join-Path $install $exeName) }

@@ -136,6 +136,10 @@ function formatDuration(seconds) {
   return `${minutes ? `${minutes}分` : ''}${rest}秒`;
 }
 const formatEpisodes = (episodes, seconds) => `${episodes}集，共${formatDuration(seconds)}`;
+function reportTotalWan(originalEpisodes) {
+  if (!Number.isSafeInteger(originalEpisodes) || originalEpisodes <= 0) return null;
+  return originalEpisodes > 70 ? 6 : 5;
+}
 /** 总投资额：和模板一样写「万元」，保留两位小数（不到 1 万也写万元，比如 0.82万元）。 */
 const formatWan = (yuan) => `${(Math.round((Number(yuan) || 0) / 100) / 100).toFixed(2)}万元`;
 const formatShare = (share) => `${Math.round((Number(share) || 0) * 1000) / 10}%`;
@@ -160,6 +164,7 @@ module.exports = {
   seriesCost,
   formatDuration,
   formatEpisodes,
+  reportTotalWan,
   formatWan,
   formatShare,
   formatYuan,

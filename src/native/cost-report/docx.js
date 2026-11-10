@@ -33,7 +33,7 @@ function findTable(xml) {
     const column = (word) => titles.findIndex((title) => title.includes(word));
     const columns = { name: column('名称'), episodes: column('集数'), total: column('投资'), share: column('片酬') };
     if (Object.values(columns).some((index) => index < 0 || index >= cells.length)) continue;
-    return { table: match[0], row, cells, columns };
+    return { table: match[0], header, row, cells, columns };
   }
   return null;
 }
@@ -137,4 +137,46 @@ function readCostReport(buffer) {
   };
 }
 
-module.exports = { fillCostReport, checkTemplate, readCostReport };
+/** 只调整 PNG 的临时副本，避免转换器把两个表头提示折行、把落款挤到下一页。 */
+function prepareCostReportForPng(buffer, fallbacks = {}) {
+  const entries = readZip(buffer);
+  const doc = entries.find((entry) => entry.name === DOCUMENT);
+  const xml = doc?.data.toString('utf8') || '';
+  const found = findTable(xml);
+  if (!found) return { docx: buffer, singlePage: false };
+  const notes = [...found.header.matchAll(PARAGRAPH)]
+    .map(([p]) => p)
+    .filter((p) => /^[（(]需[＜<](?:100万|40%)[）)]$/.test(textOf(p).replace(/\s/g, '')));
+  if (notes.length !== 2) return { docx: buffer, singlePage: false };
+
+  let header = found.header;
+  for (const note of notes) {
+    const resized = note.replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, (style) => {
+      const width = '<w:w w:val="88"/>';
+      if (/<w:w\s[^>]*\/>/.test(style)) return style.replace(/<w:w\s[^>]*\/>/, width);
+      return style.replace(/<w:(?:kern|position|sz|szCs|highlight)\b|<\/w:rPr>/, (next) => width + next);
+    });
+    header = header.replace(note, () => resized);
+  }
+  const updated = xml
+    .replace(found.header, () => header)
+    .replace(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g, (section) => section.replace(/<w:docGrid\b[^>]*\/>/, ''));
+  doc.data = Buffer.from(updated, 'utf8');
+
+  // 已经嵌入的字体交给转换器，其他已知模板字体可用随软件提供的近似字体。
+  const fontTable = entries.find((entry) => entry.name === 'word/fontTable.xml')?.data.toString('utf8') || '';
+  const embedded = new Set([...fontTable.matchAll(/<w:font\s[^>]*w:name="([^"]+)"[^>]*>([\s\S]*?)<\/w:font>/g)]
+    .filter(([, , font]) => /<w:embed/.test(font))
+    .map(([, name]) => name));
+  for (const entry of entries.filter(({ name }) => name === DOCUMENT || name === 'word/styles.xml')) {
+    const mapped = entry.data.toString('utf8').replace(/<w:rFonts\b[^>]*>/g, (fonts) =>
+      fonts.replace(/(w:(?:ascii|hAnsi|eastAsia|cs)=")([^"]+)(")/g, (attribute, prefix, name, suffix) =>
+        !embedded.has(name) && Object.hasOwn(fallbacks, name) ? prefix + fallbacks[name] + suffix : attribute,
+      ),
+    );
+    entry.data = Buffer.from(mapped, 'utf8');
+  }
+  return { docx: writeZip(entries), singlePage: true };
+}
+
+module.exports = { fillCostReport, checkTemplate, readCostReport, prepareCostReportForPng };
