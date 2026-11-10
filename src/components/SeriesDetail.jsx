@@ -544,6 +544,7 @@ export default function SeriesDetail({ folder, active = true }) {
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
   // 成本配置报告：勾上后「开始处理」做完自动生成（去重了就等成品都出来再算）；设置在弹窗里
   const [costOn, setCostOn] = useState(saved.costOn === true);
+  const [costPngBusy, setCostPngBusy] = useState(false);
   const [costOpen, setCostOpen] = useState(false);
   const [costFile, setCostFile] = useState(null); // 剧文件夹里的报告：{ exists, updatedAt }
   const [draftMode, setDraftMode] = useState(saved.draftMode === 'multi' ? 'multi' : 'simple');
@@ -812,6 +813,18 @@ export default function SeriesDetail({ folder, active = true }) {
   const openCostReport = async () => {
     const result = await window.electronAPI.libraryCostReportOpen?.({ dir: detail.dir }).catch(() => null);
     if (!result?.success) setNotice(result?.error || '打不开报告');
+  };
+  const exportCostReportPng = async () => {
+    setCostPngBusy(true);
+    setNotice('');
+    try {
+      const result = await window.electronAPI.libraryCostReportExportPng({ dir: detail.dir });
+      setNotice(result?.success ? `已导出「${result.name}」到剧集文件夹` : result?.error || 'PNG 导出失败');
+    } catch (error) {
+      setNotice(error?.message || 'PNG 导出失败');
+    } finally {
+      setCostPngBusy(false);
+    }
   };
 
   // 点「开始处理」：要去重时先重新读一次「去重」里已有多少成品，已经去重过就在确认窗里强提醒。
@@ -1457,6 +1470,15 @@ export default function SeriesDetail({ folder, active = true }) {
                     }
                   >
                     查看报告
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={exportCostReportPng}
+                    disabled={!costFile?.exists || costPngBusy}
+                    title="将现有 Word 报告导出到剧集文件夹，需要安装 LibreOffice"
+                  >
+                    {costPngBusy ? '正在导出…' : '导出 PNG'}
                   </button>
                   <button type="button" className="btn btn-sm" onClick={() => setCostOpen(true)}>
                     报告设置

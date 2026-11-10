@@ -6,9 +6,13 @@
 // ├─ 原剧集海报.jpg   （以前是「原剧」里的 封面.jpg）
 // ├─ 新剧集信息.txt   新剧名、已处理、新简介（「AI 发布素材」里选定 / 保存的）
 // ├─ 新剧集海报.jpg   （以前是 发布海报.jpg）
-// ├─ 成本配置比例情况报告.docx  按用户的报告模板填好的（「成本配置报告」里生成）
+// ├─ 成本配置比例情况报告.docx  按本机导入的模板填好（「成本配置报告」里生成）
 // ├─ 原剧/            原集视频
 // ├─ 去重/            成品视频
+// │  ├─ AI分镜工程图_第1集.jpg  最多四集分镜截图副本，不带剧名，集号补零跟视频一致
+// │  ├─ 海报.jpg       新海报副本
+// │  ├─ 集数.txt       实际成品集数
+// │  └─ 简介.txt       已保存的新简介
 // └─ 分镜工程图/      每集一张截图（页头 + 前两个分镜）
 //    └─ 网页和提示词/  每集的网页、提示词 txt、参考图
 //
@@ -25,6 +29,7 @@ const NEW_POSTER = '新剧集海报.jpg';
 const STORYBOARD_DIR = '分镜工程图';
 const STORYBOARD_PAGES = '网页和提示词';
 const COST_REPORT = '成本配置比例情况报告.docx';
+const COST_REPORT_PNG = '成本配置比例情况报告.png';
 const POSTER_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 const LEGACY = {
   cover: '封面',
@@ -137,6 +142,10 @@ function readOriginalSynopsis(dir) {
   return '';
 }
 
+function readOriginalTitle(dir) {
+  return parseInfo(readText(originalInfoFile(dir))).title;
+}
+
 /** 新剧名、新简介：新剧集信息.txt 里的；没有就看以前的 发布剧名.txt / 发布简介.txt。 */
 function readNewInfo(dir) {
   const info = parseInfo(readText(newInfoFile(dir)));
@@ -235,6 +244,77 @@ function storyboardImageFor(htmlFile) {
   return path.basename(parent) === STORYBOARD_PAGES ? path.join(path.dirname(parent), base) : path.join(parent, base);
 }
 
+/** 补齐「去重」里的交付资料：只复制文件，不移动来源，不复制网页和中间文件夹。 */
+function syncDeliveryFiles(dir) {
+  const output = path.join(dir, '去重');
+  if (!isDir(output)) return [];
+  const entries = fs.readdirSync(output, { withFileTypes: true });
+  const videos = entries.filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.mp4$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
+  if (!videos.length) return [];
+  const written = [];
+  const copy = (source, target) => {
+    const stat = fs.statSync(source);
+    const previous = fs.statSync(target, { throwIfNoEntry: false });
+    if (previous?.isFile() && previous.size === stat.size && Math.abs(previous.mtimeMs - stat.mtimeMs) < 1) return;
+    const temp = path.join(output, `.${path.basename(target)}.${process.pid}.tmp`);
+    try {
+      fs.copyFileSync(source, temp);
+      fs.utimesSync(temp, stat.atime, stat.mtime);
+      fs.renameSync(temp, target);
+      written.push(path.basename(target));
+    } finally {
+      fs.rmSync(temp, { force: true });
+    }
+  };
+  const snapshots = [];
+  for (const folder of [path.join(dir, STORYBOARD_DIR), path.join(dir, LEGACY.prompts)]) {
+    if (!isDir(folder)) continue;
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      if (!entry.isFile() || !/\.(jpe?g|png)$/i.test(entry.name)) continue;
+      const stem = path.basename(entry.name, path.extname(entry.name));
+      const number = /第0*(\d+)集(?:_\d+)?$/.exec(stem)?.[1];
+      if (!number) continue;
+      const file = path.join(folder, entry.name);
+      snapshots.push({ file, stem, number: Number(number), time: fs.statSync(file).mtimeMs });
+    }
+  }
+  const selected = [];
+  for (const video of videos) {
+    const stem = path.basename(video, path.extname(video));
+    const number = /第0*(\d+)集(?:_\d+)?$/.exec(stem)?.[1];
+    const matches = snapshots.filter((shot) => shot.stem === stem || (number && shot.number === Number(number)))
+      .sort((a, b) => Number(b.stem === stem) - Number(a.stem === stem) || b.time - a.time);
+    const shot = matches[0];
+    if (shot && shot.time + 1 >= fs.statSync(path.join(output, video)).mtimeMs) selected.push({ ...shot, stem });
+  }
+  // 取最近生成的四集；固定名称「AI分镜工程图_第N集」，仅沿用视频的集号和补零。
+  selected.sort((a, b) => b.time - a.time || a.stem.localeCompare(b.stem, 'zh-CN', { numeric: true }));
+  for (const shot of selected.slice(0, 4)) {
+    const episode = /第\d+集(?:_\d+)?$/.exec(shot.stem)?.[0];
+    if (!episode) continue;
+    const extension = path.extname(shot.file);
+    const target = path.join(output, 'AI分镜工程图_' + episode + extension);
+    const previous = path.join(output, shot.stem + extension);
+    // 上一版复制出的同名图，核对内容一致后改成正确名称；来源图和不同内容的文件保留。
+    if (!fs.existsSync(target) && isFile(previous) && fs.readFileSync(previous).equals(fs.readFileSync(shot.file))) {
+      fs.renameSync(previous, target);
+      written.push(path.basename(target));
+    }
+    copy(shot.file, target);
+  }
+  const poster = findNewPoster(dir);
+  if (poster) copy(poster, path.join(output, '海报.jpg'));
+  for (const [name, text] of [
+    ['集数.txt', `${videos.length}集\r\n`],
+    ['简介.txt', (readNewInfo(dir).synopsis || readOriginalSynopsis(dir)).replace(/\r?\n/g, '\r\n') + '\r\n'],
+  ]) {
+    if (writeIfChanged(path.join(output, name), text)) written.push(name);
+  }
+  return written;
+}
+
 // ---------- 以前的结构自动挪过来 ----------
 
 /** 挪一个文件 / 文件夹：目标已经有了就不动（不覆盖）。返回是否挪了。 */
@@ -322,6 +402,7 @@ module.exports = {
   STORYBOARD_DIR,
   STORYBOARD_PAGES,
   COST_REPORT,
+  COST_REPORT_PNG,
   POSTER_EXTENSIONS,
   LEGACY,
   parseInfo,
@@ -331,6 +412,7 @@ module.exports = {
   originalInfoFile,
   newInfoFile,
   readOriginalSynopsis,
+  readOriginalTitle,
   readNewInfo,
   updateOriginalInfo,
   updateNewInfo,
@@ -340,6 +422,7 @@ module.exports = {
   storyboardPagesDir,
   storyboardHtml,
   storyboardImageFor,
+  syncDeliveryFiles,
   lastProcessedAt,
   migrateLayout,
 };

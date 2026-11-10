@@ -81,3 +81,5 @@ build/title-fonts/
 
 # 成本配置报告的模板和生成的报告（有公章和签名）只留在用户电脑上，不进仓库
 *.docx
+
+!src/native/license/public-key.pem

@@ -441,7 +441,8 @@ async function fetchPlayUrlSingle(vid, sid, options = {}) {
       fetchPlayUrlFresh(vid, sid, { appFirst: best }),
     );
   } catch (error) {
-    return { url: null, spadeA: null, codec: null, error: error.message };
+    return { url: null, spadeA: null, codec: null, error: error.message,
+      code: error.code, status: error.status, source: error.source };
   }
 }
 
@@ -471,9 +472,11 @@ async function fetchDownloadUrl(vid) {
   } catch (_) {
     // 旧接口经常空返回，失败不影响报错原因。
   }
-  throw new Error(
-    `红果 App 接口暂时取不到这一集的 1080p 片源（${appError?.message || '未知原因'}）。官网只有 360p，不下载 360p；请稍后重试`,
-  );
+  throw Object.assign(new Error(`红果 App 未取得本集片源（${appError.message}），旧接口也没有可用的高清源`), {
+    source: 'app',
+    code: appError.code,
+    status: appError.status,
+  });
 }
 
 /**

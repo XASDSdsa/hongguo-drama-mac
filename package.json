@@ -1,7 +1,7 @@
 {
   "name": "ai-drama-assistant",
-  "version": "1.2.35",
-  "description": "AI短剧助手：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
+  "version": "1.2.36",
+  "description": "changeFileName：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
   "scripts": {
@@ -51,7 +51,9 @@
     "check:publish": "node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs && node scripts/check-poster-title.cjs && node scripts/check-title-fonts.cjs"
   },
   "dependencies": {
-    "axios": "^1.13.2"
+    "axios": "^1.13.2",
+    "pdfjs-dist": "6.4.299",
+    "pngjs": "7.0.0"
   },
   "devDependencies": {
     "@fontsource/ma-shan-zheng": "5.3.1",
@@ -72,7 +74,7 @@
   },
   "build": {
     "appId": "io.github.jackotom.hongguo-drama-mac",
-    "productName": "AI短剧助手",
+    "productName": "changeFileName",
     "directories": {
       "output": "dist"
     },
@@ -81,7 +83,8 @@
       "preload.js",
       "dist-react/**/*",
       "src/native/**/*",
-      "src/store.js"
+      "src/store.js",
+      "!node_modules/@napi-rs/canvas*/**"
     ],
     "asar": true,
     "beforePack": "scripts/check-app-runtimes.cjs",
@@ -171,7 +174,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AI短剧助手",
+      "shortcutName": "changeFileName",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "mac": {
@@ -281,7 +284,14 @@
         "from": "scripts/check-jianying-draft.py",
         "to": "workflow/check-jianying-draft.py"
       }
-    ]
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    }
   },
   "engines": {
     "node": ">=22.12"

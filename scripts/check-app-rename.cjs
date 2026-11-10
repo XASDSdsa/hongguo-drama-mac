@@ -1,4 +1,4 @@
-// 软件改名为「AI短剧助手」：界面、窗口、安装包、用户能看到的文件名里不再出现「红果短剧」；
+// 软件改名为「changeFileName」：界面、窗口、安装包使用新名称；
 // 旧名字的数据目录（设置、下载记录）第一次启动时挪到新目录，已经有新数据时不覆盖。来源标签「红果」保留。
 const assert = require('node:assert/strict'),
   fs = require('node:fs'),
@@ -13,16 +13,16 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 // 1. 名字
 const pkg = JSON.parse(read('package.json'));
-assert.equal(pkg.build.productName, 'AI短剧助手');
-assert.equal(pkg.build.nsis.shortcutName, 'AI短剧助手');
+assert.equal(pkg.build.productName, 'changeFileName');
+assert.equal(pkg.build.nsis.shortcutName, 'changeFileName');
 assert.equal(pkg.name, 'ai-drama-assistant', 'release files are named ai-drama-assistant-<version>-…');
-assert.match(read('index.html'), /<title>AI短剧助手<\/title>/);
-assert.match(read('main.js'), /const APP_TITLE = 'AI短剧助手';/);
+assert.match(read('index.html'), /<title>changeFileName<\/title>/);
+assert.match(read('main.js'), /const APP_TITLE = 'changeFileName';/);
 const app = read('src/App.jsx');
 assert.ok(!app.includes('红果短剧'), 'the sidebar and toolbar show the new name');
-assert.ok((app.match(/AI短剧助手/g) || []).length >= 3, 'sidebar, footer and toolbar show the new name');
-assert.match(app, /document\.title = `AI短剧助手 v\$\{info\.version\}`/, 'the window title shows the version');
-for (const file of ['NOTICE', 'THIRD-PARTY-NOTICES.md']) assert.match(read(file), /本软件（AI短剧助手）/);
+assert.ok((app.match(/changeFileName/g) || []).length >= 3, 'sidebar, footer and toolbar show the new name');
+assert.match(app, /document\.title = `changeFileName v\$\{info\.version\}`/, 'the window title shows the version');
+for (const file of ['NOTICE', 'THIRD-PARTY-NOTICES.md']) assert.match(read(file), /本软件（changeFileName）/);
 // 用户能看到的文件 / 进程名：草稿说明文件、处理中的临时文件、剪映运行时进程。
 for (const file of [
   'main.js',
@@ -103,12 +103,13 @@ function boot(appData, userData) {
     console: { log() {}, warn() {}, error() {} },
   });
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
+  vm.runInContext('migrateRenamedUserData()', context);
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'app-rename-'));
 const appData = path.join(tmp, 'AppData');
-const oldDir = path.join(appData, '红果短剧');
-const newDir = path.join(appData, 'AI短剧助手');
+const oldDir = path.join(appData, 'AI短剧助手');
+const newDir = path.join(appData, 'changeFileName');
 fs.mkdirSync(path.join(oldDir, 'logs'), { recursive: true });
 fs.writeFileSync(path.join(oldDir, 'data.json'), '{"settings":{"ai_api_key":"k"}}');
 fs.writeFileSync(path.join(oldDir, 'library-folders.json'), '[]');

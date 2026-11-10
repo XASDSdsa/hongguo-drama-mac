@@ -102,7 +102,6 @@ main{padding:0 14px 40px}
 .match.mid{color:var(--amber)}
 .match.lo{color:#9aa6b8}
 .novtext{margin:0;color:#c6d0e0;font-size:12.5px;line-height:1.85}
-.novnote{margin:6px 0 0;color:var(--amber);font-size:11.5px}
 .chip{display:inline-block;padding:1px 9px;border-radius:5px;font-size:12px;border:1px solid transparent;white-space:nowrap}
 .chip.g{background:#0f3a2c;color:var(--green);border-color:#17533f}
 .chip.a{background:#3a2a0e;color:var(--amber);border-color:#58411a}
@@ -477,7 +476,7 @@ function shotCard({
   const ptable = `<div class="ptable">${params.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
 
   const chips = [
-    hasPrompt ? '<span class="chip g">提示词已生成</span>' : '<span class="chip r">本段未生成</span>',
+    hasPrompt ? '' : '<span class="chip r">本段未生成</span>',
     frame.grid?.some(Boolean) ? '<span class="chip b">有关键帧</span>' : '',
     row.dialogue.length ? '<span class="chip v">有台词</span>' : '<span class="chip m">无台词</span>',
   ].join('');
@@ -529,7 +528,7 @@ function shotCard({
 <div class="c3">
 <div class="blk novel"><div class="head"><h3>小说原文</h3>${matchBadge(shot)}</div>${
     shot?.novel ? `<p class="novtext">${esc(shot.novel)}</p>` : `<p class="empty">${hasPrompt ? '方舟没有写出这一镜的小说原文' : '本段未生成'}</p>`
-  }${shot?.novel && shot.dialogue_covered != null && shot.dialogue_covered < 70 ? '<p class="novnote">小说原文里缺了这一镜的台词</p>' : ''}</div>
+  }</div>
 <div class="blk head"><h3>台词原文</h3><small>${row.dialogue.length} 句</small></div>
 <div class="blk" style="margin-top:-12px">${lines}</div>
 <div class="blk"><h3>画面观察</h3><div class="obs">${observe || '<span class="empty">没有可记录的内容</span>'}</div></div>
@@ -658,8 +657,8 @@ function renderEpisodeHtml({
   }${
     badShots
       ? `<span class="stat"><i class="warn"></i>${badShots} 镜没有生成提示词</span>`
-      : '<span class="stat"><i></i>提示词已生成</span>'
-  }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜${placeholders.length ? `（另有 ${placeholders.length} 镜占位）` : ''}</span>${
+      : ''
+  }<span class="stat">整集 ${Math.round(duration)} 秒</span><span class="stat">${segments.length} 段 · ${shotTotal} 镜</span>${
     stamp ? `<span class="stat">${esc(stamp)}</span>` : ''
   }</header>
 <div class="sub"><h1>${esc(headTitle)}</h1><span class="pill">目标模型 Seedance 2.5</span><span class="pill">${seedanceFormat(size).resolution} · ${seedanceFormat(size).ratio}</span><span class="pill">每段 ≤ ${esc(maxSeconds)} 秒</span><span style="flex:1"></span><button type="button" class="btn primary" data-copy="all">复制全部提示词</button></div>
@@ -711,9 +710,12 @@ function jpegSize(buffer) {
   return null;
 }
 
-/** 以前生成的页面里「小说原文」下面那行「核对：……」说明去掉（页面不再显示核对说明）。 */
-function removeVerifyNotes(html) {
-  return String(html).replace(/<p class="novnote">核对：[^<]*<\/p>/g, '');
+/** 去掉旧页面中已取消显示的提示。 */
+function removeLegacyStoryboardLabels(html) {
+  return String(html)
+    .replace(/<p class="novnote">(?:核对：[^<]*|小说原文里缺了这一镜的台词)<\/p>/g, '')
+    .replace(/<span class="stat"><i><\/i>提示词已生成<\/span>|<span class="chip g">提示词已生成<\/span>/g, '')
+    .replace(/(<span class="stat">\d+ 段 · \d+ 镜)（另有 \d+ 镜占位）<\/span>/g, '$1</span>');
 }
 
-module.exports = { removeVerifyNotes, renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS, drawHistory };
+module.exports = { removeLegacyStoryboardLabels, renderEpisodeHtml, keyframeTimes, jpegSize, FRAME_LABELS, drawHistory };

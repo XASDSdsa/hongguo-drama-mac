@@ -1,6 +1,6 @@
 # 第三方组件许可说明
 
-本软件（AI短剧助手）使用了以下第三方组件。各组件的版权归其各自作者所有，
+本软件（changeFileName）使用了以下第三方组件。各组件的版权归其各自作者所有，
 本软件对这些组件的使用均遵循其原始许可证。
 
 ---
@@ -13,6 +13,8 @@
 | React | 18.3.1 | MIT | https://github.com/facebook/react |
 | React DOM | 18.3.1 | MIT | https://github.com/facebook/react |
 | axios | ^1.13.2 | MIT | https://github.com/axios/axios |
+| PDF.js | 6.4.299 | Apache-2.0 | https://github.com/mozilla/pdf.js |
+| pngjs | 7.0.0 | MIT | https://github.com/pngjs/pngjs |
 
 Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 

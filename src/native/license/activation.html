@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'none'">
+  <title>激活 changeFileName</title>
+  <style>
+    :root{color-scheme:light dark;font:15px system-ui;color:#1d2637;background:#f2f5fa}
+    @media(prefers-color-scheme:dark){:root{color:#edf0f6;background:#171d29}}
+    body{margin:0;padding:31px 32px} h1{font-size:23px;margin:0 0 9px}
+    p{line-height:1.55;margin:0 0 21px} label{display:block;font-weight:600;margin-bottom:8px}
+    input,button{box-sizing:border-box;width:100%;font:inherit;border-radius:8px;padding:11px 12px}
+    input{border:1px solid #77849a;background:Field;color:FieldText}
+    input:focus-visible,button:focus-visible{outline:2px solid #4d83ec;outline-offset:2px}
+    button{margin-top:15px;background:#2258b7;color:#fff;border:0;font-weight:650;cursor:pointer}
+    button:disabled{opacity:.6;cursor:wait} #status{color:#bb3e46;min-height:2.8em;margin-top:12px;font-size:13px}
+    @media(prefers-color-scheme:dark){#status{color:#ff9c9c}}
+  </style>
+  <script src="activation.js" defer></script>
+</head>
+<body>
+  <h1>激活 changeFileName</h1>
+  <p>粘贴管理员发给你的激活码，联网绑定这台电脑。</p>
+  <form id="activation-form">
+    <label for="license-key">激活码</label>
+    <input id="license-key" type="password" maxlength="160" placeholder="在此粘贴激活码" autocomplete="off" autofocus>
+    <button type="submit" id="activate">激活</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </form>
+</body>
+</html>

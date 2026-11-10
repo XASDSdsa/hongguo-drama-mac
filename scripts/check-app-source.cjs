@@ -30,8 +30,13 @@ function fixture({
   media = 'https://v3-reading.qznovelvod.com/video.mp4',
   redirect = '',
   malformedKey = false,
+  inline = null,
+  emptyResponses = 0,
+  modelStatus = 200,
+  fallbackModel = null,
 } = {}) {
   const calls = [];
+  const registrations = [];
   const seed = Buffer.alloc(16, 7);
   const constants = Buffer.from(
     '4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58',
@@ -50,12 +55,14 @@ function fixture({
     assert.equal(config.maxRedirects, 0);
     assert.ok(config.timeout > 0 && config.timeout <= 12000);
     assert.ok(config.signal);
-    if (calls.length === 1) {
+    if (config.method === 'POST') {
       assert.ok(config.headers['x-medusa']);
       assert.ok(config.headers['x-gorgon']);
-      const model = { video_model: JSON.stringify({ fallback_api: fallback }) };
+      assert.equal(new URL(config.url).searchParams.get('device_id'), registrations.at(-1));
+      if (calls.length <= emptyResponses) return { status: 200, headers: {}, data: '' };
+      const model = { video_model: JSON.stringify(inline || { fallback_api: fallback }) };
       return {
-        status: 200,
+        status: modelStatus,
         headers: {},
         data: JSON.stringify({ code: 0, data: { 999: model, ...(wrongVid ? {} : { 11: model }) } }),
       };
@@ -66,7 +73,7 @@ function fixture({
       headers: {},
       data: JSON.stringify({
         video_info: {
-          data: {
+          data: fallbackModel || {
             key_seed: seed.toString('base64'),
             video_list: {
               bad: { main_url: media, codec_type: 'bytevc2', quality_desc: '2160P', spade_a: encodedKey() },
@@ -87,10 +94,18 @@ function fixture({
     URL,
     URLSearchParams,
     AbortSignal,
+    setTimeout,
     module: { exports: {} },
     require: (name) => {
       if (name === 'axios') return axios;
       if (name === './sm3') return require(path.join(nativeDir, 'sm3'));
+      if (name === './playback-device') return {
+        registerPlaybackDevice: async () => {
+          const device_id = String(100 + registrations.length);
+          registrations.push(device_id);
+          return { device_id, iid: '1010', cdid: 'fixture' };
+        },
+      };
       if (name === 'node:crypto')
         return {
           ...crypto,
@@ -103,9 +118,13 @@ function fixture({
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(nativeDir, 'app-source.js'), 'utf8'), context);
-  return { fetch: context.module.exports.fetchAppPlayUrl, calls };
+  return { fetch: context.module.exports.fetchAppPlayUrl, calls, registrations };
 }
 
+const inlineRow = {
+  codec_type: 'hevc', vwidth: 1080, vheight: 1920, quality_desc: '1080p', encrypt: false,
+  main_url: 'https://qznovelvod.com/episode.mp4',
+};
 const checks = [
   [
     'pure JS SM3 vectors',
@@ -116,6 +135,63 @@ const checks = [
         assert.equal(sm3(input).toString('hex'), expected);
         if (crypto.getHashes().includes('sm3'))
           assert.equal(sm3(input).toString('hex'), crypto.createHash('sm3').update(input).digest('hex'));
+      }
+    },
+  ],
+  [
+    'empty primary response switches host with a fresh device and accepts inline media',
+    async () => {
+      const { fetch, calls, registrations } = fixture({ emptyResponses: 1, inline: { video_list: [inlineRow] } });
+      assert.equal((await fetch('11')).url, inlineRow.main_url);
+      assert.equal(calls.length, 2);
+      assert.equal(new URL(calls[1].url).hostname, 'api5-normal-hl.fqnovel.com');
+      assert.equal(calls[1].signal, calls[0].signal);
+      assert.equal(registrations.length, 2);
+    },
+  ],
+  [
+    'inline backup URLs survive missing or unsafe primary URLs and are deduplicated',
+    async () => {
+      const backup = 'https://fqnovelvod.com/episode.mp4';
+      for (const main_url of [undefined, 'https://127.0.0.1/unsafe']) {
+        const row = { ...inlineRow, main_url, backup_url: backup, backup_url_list: [backup, inlineRow.main_url] };
+        const { fetch, calls } = fixture({ inline: { video_list: [row] } });
+        const result = await fetch('11');
+        assert.equal(result.url, backup);
+        assert.equal(JSON.stringify(result.backupUrls), JSON.stringify([inlineRow.main_url]));
+        assert.equal(calls.length, 1);
+      }
+    },
+  ],
+  [
+    'explicit App refusal never tries an alternate host',
+    async () => {
+      for (const modelStatus of [403, 429]) {
+        const { fetch, calls } = fixture({ modelStatus });
+        await assert.rejects(fetch('11'), { status: modelStatus });
+        assert.equal(calls.length, 1);
+      }
+    },
+  ],
+  [
+    'inline fallback requires the same episode, duration, and minimum resolution',
+    async () => {
+      const metadata = { video_id: 'same', video_duration: 61.5 };
+      const inline = { ...metadata, fallback_api: 'https://vod.snssdk.com/info',
+        video_list: [{ ...inlineRow, encrypt: undefined }] };
+      const fallbackModel = { ...metadata, video_list: [inlineRow] };
+      const { fetch, calls } = fixture({ inline, fallbackModel });
+      assert.equal((await fetch('11')).url, inlineRow.main_url);
+      assert.equal(calls.length, 2);
+      for (const mismatch of [
+        { video_id: 'wrong' },
+        { video_duration: 10 },
+        { video_list: [{ ...inlineRow, vwidth: 360, vheight: 640 }] },
+        { video_list: [{ ...inlineRow, encrypt: true }] },
+      ]) {
+        const f = fixture({ inline, fallbackModel: { ...fallbackModel, ...mismatch } });
+        await assert.rejects(f.fetch('11'));
+        assert.equal(f.calls.length, 2);
       }
     },
   ],

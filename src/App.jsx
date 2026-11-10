@@ -27,7 +27,7 @@ export default function App() {
     window.electronAPI.getAppInfo().then((info) => {
       setAppInfo(info);
       // 窗口标题（也显示在任务栏）带上版本号，一眼看出装的是哪一版。
-      if (info?.version) document.title = `AI短剧助手 v${info.version}`;
+      if (info?.version) document.title = `changeFileName v${info.version}`;
     });
   }, []);
 
@@ -89,7 +89,7 @@ export default function App() {
             <Play size={21} />
           </div>
           <div>
-            <div className="brand-text">AI短剧助手</div>
+            <div className="brand-text">changeFileName</div>
             <div className="brand-sub">每一集，都值得期待</div>
           </div>
         </div>
@@ -120,7 +120,7 @@ export default function App() {
             <span>设置</span>
           </button>
           <div className="footer-note">
-            <span>AI短剧助手</span>
+            <span>changeFileName</span>
             <span>{appInfo?.version ? `v${appInfo.version}` : ''}</span>
           </div>
         </div>
@@ -134,7 +134,7 @@ export default function App() {
           ) : (
             <span className="toolbar-location">{currentPage?.label}</span>
           )}
-          <span className="toolbar-caption">AI短剧助手</span>
+          <span className="toolbar-caption">changeFileName</span>
         </header>
         {storageError && (
           <div className="app-storage-error" role="alert">

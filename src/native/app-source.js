@@ -2,20 +2,19 @@
 // Signing and Spade algorithms adapted from woshishiq1/drpys
 // commit 22261adfa31435e3b3ef5a730b8a2a75bcaf1715, spider/js/红果果[短].js,
 // via N3urda/hongguoTV eea73e6a45569a2cbbb9440f7cd5290c459b0b70.
-// Changes: ephemeral local IDs; no captured device identity; pure JS SM3;
+// Changes: anonymous in-memory playback registration; pure JS SM3;
 // bounded HTTPS transport; exact episode matching; supported codec selection.
 // Crypto tables and SDK protocol constants below are not user credentials.
 const crypto = require('node:crypto');
 const sm3 = require('./sm3');
-const localId = () => String(1000000000000000n + BigInt('0x' + crypto.randomBytes(6).toString('hex')));
+const { registerPlaybackDevice } = require('./playback-device');
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
 const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
 const VIDEO_UA =
   'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
+const PLAYBACK_UA = 'com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)';
 const DEVICE = {
-  iid: localId(),
-  device_id: localId(),
   ac: 'wifi',
   channel: 'update_64',
   aid: '8662',
@@ -71,10 +70,6 @@ function pythonUrlEncode(values) {
     })
     .join('&');
 }
-function md5(value) {
-  return crypto.createHash('md5').update(value).digest('hex').toUpperCase();
-}
-
 function u32(value) {
   return Number(value) >>> 0;
 }
@@ -353,7 +348,7 @@ function xGorgon(query, body, timestamp, random) {
     out,
   ]).toString('hex');
 }
-function deviceProto(deviceId, version) {
+function deviceProto(deviceId) {
   return proto([
     [1, 1, 'sint'],
     [2, 2, 'sint'],
@@ -585,7 +580,7 @@ function keyHash(signKey, random) {
   d2 = ~d2 >>> 0;
   return [hash, le32(d2)];
 }
-function buildMedusa(url, body, khronos) {
+function buildMedusa(url, body, khronos, device) {
   const bodyMd5 = body ? crypto.createHash('md5').update(body).digest() : Buffer.alloc(16);
   const querySm3 = sm3(url.split('?')[1]);
   const ts = le32(khronos);
@@ -606,7 +601,7 @@ function buildMedusa(url, body, khronos) {
     [5, 7, 'sint'],
     [6, 'v04.06.04.03-bugfix'],
     [7, envPid, 'sint'],
-    [12, deviceProto(DEVICE.device_id, DEVICE.version_name), 'message'],
+    [12, deviceProto(device.device_id), 'message'],
     [
       13,
       proto([
@@ -616,7 +611,7 @@ function buildMedusa(url, body, khronos) {
       ]),
       'message',
     ],
-    [14, DEVICE.version_name],
+    [14, device.version_name],
   ]);
   const queryHash = sm3(Buffer.concat([Buffer.from(url.split('?')[1]), bodyMd5, Buffer.from('none')]));
   const message = proto([
@@ -624,9 +619,9 @@ function buildMedusa(url, body, khronos) {
     [2, 3, 'sint'],
     [3, messageRand, 'sint'],
     [4, '8662'],
-    [5, DEVICE.device_id],
+    [5, device.device_id],
     [6, '1588093228'],
-    [7, DEVICE.version_name],
+    [7, device.version_name],
     [8, 'v04.06.04-ml-android'],
     [9, 67503104, 'sint'],
     [10, Buffer.from('4001000000000000', 'hex'), 'bytes'],
@@ -717,40 +712,40 @@ function branchOf(url, body, khronos) {
   const low = iv & 15;
   return low - ((low * 171) >> 9) * 3;
 }
-function signedVideoRequest(payload) {
+function signedVideoRequest(payload, identity, endpoint) {
   const khronos = Math.floor(Date.now() / 1000);
   const body = Buffer.from(payload);
+  const device = { ...DEVICE, ...identity };
   const ticketBase = Date.now();
   let requestTicket = ticketBase;
   let query = '';
   let url = '';
-  // branch 1 的签名变体服务端不认：抖动 _rticket 找一个可用的 branch（最多试 32 秒偏移）
-  for (let offset = 0; offset < 32; offset += 1) {
+  // Match the signing branch and playback profile used by the newer client.
+  for (let offset = 0; offset < 128; offset += 1) {
     requestTicket = ticketBase + offset;
-    const values = { ...DEVICE, ts: String(khronos), _rticket: String(requestTicket) };
+    const values = { ...device, ts: String(khronos), _rticket: String(requestTicket) };
     query = pythonUrlEncode(values);
-    url = `${VIDEO_API}?${query}`;
-    if (branchOf(url, body, khronos) !== 1) break;
+    url = `${endpoint}?${query}`;
+    if (branchOf(url, body, khronos) === 0) break;
+    if (offset === 127) throw new Error('无法生成播放请求签名');
   }
   const random = Math.floor(Math.random() * 65536);
   const headers = {
-    'User-Agent': VIDEO_UA,
+    'User-Agent': PLAYBACK_UA,
     Accept: 'application/json; charset=utf-8,application/x-protobuf',
     'Content-Type': 'application/json; charset=UTF-8',
     'x-xs-from-web': '0',
     'x-ss-req-ticket': String(requestTicket),
-    'x-tt-request-tag': 't=0;n=0',
     'sdk-version': '2',
-    'passport-sdk-version': '50561',
-    'x-vc-bdturing-sdk-version': '3.7.2.cn',
-    'x-ss-stub': md5(body),
     'x-gorgon': xGorgon(query, body, khronos, random),
     'x-khronos': String(khronos),
     'x-ladon': be32(khronos).toString('base64'),
     'x-argus': le32(khronos).toString('base64'),
     'x-helios': helios(khronos),
-    'x-medusa': buildMedusa(url, body, khronos),
+    'x-medusa': buildMedusa(url, body, khronos, device),
     'x-tt-dt': '',
+    'x-tt-store-region': 'cn',
+    'x-tt-store-region-src': 'did',
   };
   return { url, headers, body };
 }
@@ -838,7 +833,7 @@ async function requestJson(url, options, deadline, signal) {
   for (let redirects = 0; redirects < 4; redirects++) {
     url = checkedUrl(url, ['fqnovel.com', 'snssdk.com']);
     const timeout = deadline - Date.now();
-    if (timeout <= 0) throw new Error('App 片源请求超时');
+    if (timeout <= 0) throw Object.assign(new Error('App 片源请求超时'), { code: 'ETIMEDOUT' });
     let response;
     try {
       response = await axios({
@@ -853,8 +848,9 @@ async function requestJson(url, options, deadline, signal) {
         maxBodyLength: 1024 * 1024,
         validateStatus: () => true,
       });
-    } catch (_) {
-      throw new Error(signal.aborted ? 'App 片源请求超时' : 'App 片源请求失败，请稍后重试');
+    } catch (error) {
+      const code = signal.aborted ? 'ETIMEDOUT' : error.code || 'ERR_NETWORK';
+      throw Object.assign(new Error(code === 'ETIMEDOUT' ? 'App 片源请求超时' : 'App 片源请求失败，请稍后重试'), { code });
     }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       // Do not resend a signed body to a redirect destination.
@@ -862,9 +858,16 @@ async function requestJson(url, options, deadline, signal) {
       url = checkedUrl(new URL(response.headers.location, url).href, ['fqnovel.com', 'snssdk.com']);
       continue;
     }
-    if (response.status !== 200) throw new Error(`App 片源请求失败（HTTP ${response.status}）`);
+    if (response.status !== 200) {
+      throw Object.assign(new Error(`App 片源请求失败（HTTP ${response.status}）`), { status: response.status });
+    }
+    if (typeof response.data === 'string' && !response.data.trim()) {
+      throw Object.assign(new Error('App 接口返回空响应'), { code: 'EMPTY_RESPONSE', status: 200 });
+    }
     const parsed = typeof response.data === 'string' ? jsonBody(response.data) : response.data;
-    if (!parsed || typeof parsed !== 'object') throw new Error('App 接口未返回有效数据');
+    if (!parsed || typeof parsed !== 'object') {
+      throw Object.assign(new Error('App 接口未返回有效数据'), { code: 'INVALID_RESPONSE' });
+    }
     return parsed;
   }
   throw new Error('App 片源跳转次数过多');
@@ -873,8 +876,6 @@ async function requestJson(url, options, deadline, signal) {
 async function fetchAppPlayUrl(vid) {
   vid = String(vid || '');
   if (!/^\d{1,30}$/.test(vid)) throw new Error('分集编号无效');
-  const deadline = Date.now() + 12000;
-  const signal = AbortSignal.timeout(12000);
   const payload = JSON.stringify({
     biz_param: {
       detail_page_version: 0,
@@ -888,24 +889,69 @@ async function fetchAppPlayUrl(vid) {
     },
     mixed_video_id_map: { 1004: [vid] },
   });
-  const signed = signedVideoRequest(payload);
-  const response = await requestJson(
-    signed.url,
-    { method: 'POST', headers: signed.headers, data: signed.body },
-    deadline,
-    signal,
-  );
+  let identity = await registerPlaybackDevice(requestJson);
+  const deadline = Date.now() + 12000;
+  const signal = AbortSignal.timeout(12000);
+  const requestModel = async (endpoint, alternate = false) => {
+    const { url, headers, body } = signedVideoRequest(payload, identity, endpoint);
+    if (alternate) headers.Connection = 'close';
+    return requestJson(url, { method: 'POST', headers, data: body }, deadline, signal);
+  };
+  let response;
+  try {
+    response = await requestModel(VIDEO_API);
+  } catch (error) {
+    if (error.code !== 'EMPTY_RESPONSE' || deadline - Date.now() < 1000) throw error;
+    if (deadline - Date.now() >= 8000) {
+      try {
+        identity = await registerPlaybackDevice(requestJson);
+      } catch (_) {
+        // The alternate host can still try the previous registration.
+      }
+    }
+    if (deadline - Date.now() < 500) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const alternate = VIDEO_API.replace('api5-normal-sinfonlineb.', 'api5-normal-hl.');
+    response = await requestModel(alternate, true);
+  }
   if (Number(response.Code || response.code || 0) !== 0) throw new Error('App 接口暂未提供本集播放信息');
   const entry = response.data?.[vid];
   const model = typeof entry?.video_model === 'string' ? jsonBody(entry.video_model) : entry?.video_model;
   if (!model) throw new Error('App 接口未返回所选分集，已停止取址');
-  const fallback = parseFallback(model.fallback_api);
-  if (!fallback) throw new Error('App 接口未返回本集片源地址');
-  const outer = await requestJson(fallback, { headers: { 'User-Agent': VIDEO_UA } }, deadline, signal);
-  const info = outer?.video_info?.data;
+  const readFallback = async () => {
+    const fallback = parseFallback(model.fallback_api);
+    if (!fallback) throw new Error('App 接口未返回本集片源地址');
+    const outer = await requestJson(fallback, { headers: { 'User-Agent': VIDEO_UA } }, deadline, signal);
+    if ([outer, outer.video_info].some((value) => Number(value?.Code || value?.code || 0) !== 0)) {
+      throw new Error('App 接口暂未提供本集播放信息');
+    }
+    return outer?.video_info?.data;
+  };
+  if (!Array.isArray(model.video_list) || !model.video_list.length) {
+    return parseAppPlayModel(await readFallback(), VIDEO_UA);
+  }
+  try {
+    return parseAppPlayModel(model, PLAYBACK_UA, true);
+  } catch (error) {
+    const duration = Number(model.video_duration);
+    if (!error.minimumPixels || typeof model.video_id !== 'string' || !model.video_id.trim()
+      || !Number.isFinite(duration) || duration <= 0 || !model.fallback_api) throw error;
+    const info = await readFallback();
+    const fallbackDuration = Number(info?.video_duration);
+    if (info?.video_id !== model.video_id || !Number.isFinite(fallbackDuration) || fallbackDuration <= 0
+      || Math.abs(fallbackDuration - duration) > 0.5) {
+      throw new Error('备用片源编号或完整时长无法确认，已停止取址');
+    }
+    return parseAppPlayModel(info, VIDEO_UA, true, error.minimumPixels);
+  }
+}
+
+function parseAppPlayModel(info, userAgent, requireEncryptionMetadata = false, minimumPixels = 0) {
   const rows = Object.values(info?.video_list || {})
-    .filter((item) => item && item.main_url)
+    .filter(Boolean)
     .map((item) => {
+      const urls = [item.main_url, item.backup_url, ...(Array.isArray(item.backup_url_list) ? item.backup_url_list : [])]
+        .filter((value) => typeof value === 'string' && value.trim());
       const codec = str(item.codec_type || item.video_meta?.codec_type).toLowerCase();
       const codecRank = ['h264', 'avc', 'avc1'].includes(codec)
         ? 0
@@ -915,24 +961,47 @@ async function fetchAppPlayUrl(vid) {
       const quality = str(
         item.quality_desc || item.definition || item.height || item.vheight || item.video_meta?.definition,
       );
-      const pixels = Number(quality.match(/\d+/)?.[0] || 0);
-      return { item, codec, codecRank, quality, pixels };
+      const meta = item.video_meta || {};
+      const dimensions = [[item.vwidth, item.vheight], [item.width, item.height], [meta.vwidth, meta.vheight], [meta.width, meta.height]]
+        .map((pair) => pair.map(Number))
+        .find((pair) => pair.every((value) => Number.isFinite(value) && value > 0));
+      const shortSide = dimensions ? Math.min(...dimensions) : 0;
+      const pixels = shortSide || Number(quality.match(/\d+/)?.[0] || 0);
+      return { item, urls, codec, codecRank, quality, shortSide, pixels };
     })
-    .filter((row) => row.codecRank < 2)
+    .filter((row) => row.codecRank < 2 && row.urls.length && row.shortSide >= minimumPixels)
     .sort((a, b) => b.pixels - a.pixels || a.codecRank - b.codecRank);
   const selected = rows[0];
   if (!selected) throw new Error('本集暂未提供兼容的 H.264/HEVC 片源');
-  const media = info.key_seed
-    ? decryptSpadeUrl(selected.item.main_url, Buffer.from(info.key_seed, 'base64'))
-    : cleanUrl(selected.item.main_url);
-  const url = checkedUrl(media, ['qznovelvod.com', 'fqnovelvod.com', 'douyinvod.com']);
   const spade = selected.item.spade_a || selected.item.encrypt_info?.spade_a;
+  const encrypt = selected.item.encrypt_info?.encrypt ?? selected.item.encrypt;
+  if (!spade && (requireEncryptionMetadata || encrypt != null) && ![false, 0, '0', 'false'].includes(encrypt)) {
+    throw Object.assign(new Error('本集片源缺少有效解密信息'), {
+      minimumPixels: encrypt == null ? selected.shortSide : 0,
+    });
+  }
   const key = spade ? deriveContentKey(spade) : null;
+  const urls = new Set();
+  let invalidUrl;
+  for (const candidate of selected.urls) {
+    try {
+      const media = info.key_seed
+        ? decryptSpadeUrl(candidate, Buffer.from(info.key_seed, 'base64'))
+        : cleanUrl(candidate);
+      urls.add(checkedUrl(media, ['qznovelvod.com', 'fqnovelvod.com', 'douyinvod.com']));
+    } catch (error) {
+      invalidUrl = error;
+    }
+  }
+  if (!urls.size) throw invalidUrl;
+  const [url, ...backupUrls] = urls;
   return {
     url,
+    backupUrls,
     contentKey: key ? key.toString('hex') : null,
     codec: selected.codec === 'bytevc1' ? 'hevc' : selected.codec,
     source: 'app',
+    userAgent,
     quality: selected.quality,
   };
 }

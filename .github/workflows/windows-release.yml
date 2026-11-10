@@ -479,6 +479,8 @@ jobs:
           node scripts/check-quit-confirm.cjs
           node scripts/check-download-index.cjs
           node scripts/check-series-library.cjs
+          node scripts/check-device-license.cjs
+          node scripts/check-series-delivery.cjs
           node scripts/check-cost-report.cjs
           node scripts/check-seedream.cjs
           node scripts/check-ai-config.cjs
@@ -539,12 +541,24 @@ jobs:
           npx electron-builder --win --dir --x64 --publish never
           node scripts/make-zip.js
 
-      - name: Measure how fast the installed app opens
+      - name: Check package integrity settings and measure the activation window
         shell: bash
         run: |
           set -euo pipefail
           exe=$(find dist/win-unpacked -maxdepth 1 -iname '*.exe' ! -iname '*uninstall*' | head -n 1)
           [ -n "$exe" ] || { echo "no app exe in dist/win-unpacked" >&2; exit 1; }
+          node - "$(cygpath -w "$exe")" <<'NODE'
+          const assert = require('node:assert/strict');
+          const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
+          getCurrentFuseWire(process.argv[2]).then((wire) => {
+            for (const option of ['EnableEmbeddedAsarIntegrityValidation', 'OnlyLoadAppFromAsar']) {
+              assert.equal(wire[FuseV1Options[option]], 49, option);
+            }
+            for (const option of ['RunAsNode', 'EnableNodeOptionsEnvironmentVariable', 'EnableNodeCliInspectArguments']) {
+              assert.equal(wire[FuseV1Options[option]], 48, option);
+            }
+          }).catch((error) => { console.error(error); process.exitCode = 1; });
+          NODE
           for run in 1 2; do
             out="$RUNNER_TEMP/startup-$run.json"
             rm -f "$out"
@@ -556,8 +570,8 @@ jobs:
             echo "run $run: $(cat "$out")"
             echo "::notice title=startup run $run (ms since process start)::$(cat "$out")"
           done
-          # 第二次（系统已缓存文件）打开到页面加载完必须在 15 秒内；本机实测不到 1 秒。
-          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!(r.pageLoaded<15000)){console.error('opening took', r.pageLoaded, 'ms'); process.exit(1)}" "$(cygpath -w "$RUNNER_TEMP/startup-2.json")"
+          # 运行器不持有激活码，必须先看到授权窗，且不能进入主界面。
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!(r.activationLoaded<15000)||r.pageLoaded!=null){console.error('unexpected startup result',r);process.exit(1)}" "$(cygpath -w "$RUNNER_TEMP/startup-2.json")"
 
       - name: Prepare release assets
         run: node scripts/prepare-release-assets.js

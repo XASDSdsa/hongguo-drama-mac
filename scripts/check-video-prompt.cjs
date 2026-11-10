@@ -232,7 +232,8 @@ async function main() {
     assert.equal((limitedPage.match(/<article class="shot"/g) || []).length, 2);
     assert.equal((limitedPage.match(/class="phcard"/g) || []).length, 3);
     assert.match(limitedPage, /每集只分析前 2 个分镜，这些先占位、不处理/);
-    assert.match(limitedPage, /1 段 · 2 镜（另有 3 镜占位）/);
+    assert.match(limitedPage, /1 段 · 2 镜<\/span>/);
+    assert.doesNotMatch(limitedPage, /另有 \d+ 镜占位/);
     assert.ok(!limitedPage.includes('本段未生成'), '生成记录只记成功的');
     assert.match(await fsp.readFile(limited.file, 'utf8'), /只分析了前 2 个分镜；镜 3–5 共 3 个分镜占位/);
   }
@@ -249,10 +250,12 @@ async function main() {
     assert.ok(!verifiedPage.includes('核对：'), '核对说明去掉了');
     assert.ok(!verifiedPage.includes('画面里林夏没有站着'));
     // 以前生成的页面：打开时把核对说明去掉，别的不动
-    const { removeVerifyNotes } = require('../src/native/video-prompt/html');
+    const { removeLegacyStoryboardLabels } = require('../src/native/video-prompt/html');
     const oldPage = '<div class="blk novel"><p class="novtext">原文</p><p class="novnote">小说原文里缺了这一镜的台词</p><p class="novnote">核对：动作对不上；画面里林夏没有站着，是在走</p></div>';
-    assert.equal(removeVerifyNotes(oldPage), '<div class="blk novel"><p class="novtext">原文</p><p class="novnote">小说原文里缺了这一镜的台词</p></div>');
-    assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /await dropStoryboardVerifyNotes\(target\);\n\s+const stat = await fsp\.stat\(target\.html\)/, '列表里先去掉旧页面的核对说明（页面变新，截图自动重出）');
+    assert.equal(removeLegacyStoryboardLabels(oldPage), '<div class="blk novel"><p class="novtext">原文</p></div>');
+    const oldLabels = '<span class="stat"><i></i>提示词已生成</span><span class="stat">1 段 · 2 镜（另有 3 镜占位）</span><span class="chip g">提示词已生成</span><span class="chip r">本段未生成</span>';
+    assert.equal(removeLegacyStoryboardLabels(oldLabels), '<span class="stat">1 段 · 2 镜</span><span class="chip r">本段未生成</span>');
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /await cleanLegacyStoryboardLabels\(target\);\n\s+const stat = await fsp\.stat\(target\.html\)/, '列表先清理旧标签，再检查截图是否过期');
     assert.ok(!verifiedPage.includes('（自评）'));
     verifyMode = 'broken';
     const selfOnly = await deriveEpisodePrompts({ ...options, outDir: path.join(dir, 'out-self'), cacheFile: path.join(dir, 'cache', 'self.json'), sourceKey: 'hash-self' });
@@ -269,7 +272,8 @@ async function main() {
   assert.ok(bare.includes('<h1>测试剧 • 第5集</h1>'), '页头是「新剧名 • 第N集」');
   assert.ok(bare.includes('<span class="pill">▣ 测试剧</span>'));
   assert.ok(!bare.replace(/<script type="application\/json"[\s\S]*?<\/script>/, '').includes('测试剧_第005集'), '页面可见内容里不重复显示文件名');
-  assert.ok(bare.includes('整集 19 秒') && bare.includes('2 段 · 5 镜') && bare.includes('提示词已生成'));
+  assert.ok(bare.includes('整集 19 秒') && bare.includes('2 段 · 5 镜'));
+  assert.ok(!bare.includes('提示词已生成'));
   assert.ok(bare.includes('第1段</b><span class="meta">0:00–0:15 · 4个镜头') && bare.includes('第2段</b><span class="meta">0:15–0:19 · 1个镜头'));
   const cards = bare.split('<article class="shot"').slice(1);
   assert.equal(cards.length, 5);
@@ -641,7 +645,7 @@ async function main() {
     const html = renderEpisodeHtml({ title: '新剧', label: '新剧_第001集', duration: 4, maxSeconds: 15, library: lib,
       segments: [{ ...segment, prompt: 'p', shotLines: ['a', 'b'], shots }], frames: {}, thumbs: {}, videoRel: '', size: { width: 720, height: 1280 }, generatedAt: new Date(0), allText: '' });
     assert.match(html, /<h3>小说原文<\/h3><span class="match hi"[^>]*>已匹配 9[789]\.\d%<\/span>/);
-    assert.match(html, /小说原文里缺了这一镜的台词/);
+    assert.doesNotMatch(html, /小说原文里缺了这一镜的台词/);
     assert.match(html, /小说匹配 9[789]\.\d%/, '段落标题显示平均匹配度');
     // 画面校验：六项（无字幕水印按实际检查）；生成记录（抽卡）：v1 起、终稿在最后、时间从早到晚，同一镜每次一样。
     assert.match(html, /<h3>画面校验<\/h3><span class="pass">全部通过<\/span>/);

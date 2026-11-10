@@ -1,5 +1,5 @@
 /**
- * main.js - AI短剧助手 主进程
+ * main.js - changeFileName 主进程
  *
  * 功能：
  *   1. 红果短剧解析（分享链接 / series_id -> 全剧集列表）
@@ -29,6 +29,7 @@ const axios = require('axios');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { randomUUID, createHash } = require('node:crypto');
+const { authorizeStartup } = require('./src/native/license/startup.cjs');
 
 const hongguo = require('./src/native/hongguo');
 const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
@@ -38,6 +39,7 @@ const seriesInfo = require('./src/native/series-info');
 const seriesLayout = require('./src/native/series-layout');
 const costPricing = require('./src/native/cost-report/pricing');
 const costDocx = require('./src/native/cost-report/docx');
+const { renderCostReportPng } = require('./src/native/cost-report/png');
 const seriesLibrary = require('./src/native/series-library');
 const resplit = require('./src/native/resplit');
 const seriesGaps = require('./src/native/series-gaps');
@@ -75,12 +77,17 @@ const { seedanceFormat } = require('./src/native/video-prompt/compose');
 const store = require('./src/store');
 const APP_VERSION = app.getVersion() || '1.0.0';
 
-const APP_TITLE = 'AI短剧助手';
+const APP_TITLE = 'changeFileName';
+if (app.isPackaged) {
+  app.commandLine.removeSwitch('remote-debugging-port');
+  app.commandLine.removeSwitch('remote-debugging-pipe');
+}
 
 let mainWindow = null;
+let launchAuthorized = false;
 // 用户在「还有任务在跑」的提示里确认过退出，之后关窗口不再拦。
 let quitConfirmed = false;
-// 软件改名（红果短剧 → AI短剧助手）后数据目录跟着名字变了：新目录里还没有数据时，把旧目录里的设置、
+// 软件改名后数据目录跟着名字变了：新目录里还没有数据时，把旧目录里的设置、
 // 下载记录、日志等逐项挪过来，用户不用重新填设置。挪不动（旧版还开着）的 JSON 文件改为复制。
 // 启动计时：打包机上用 AI_DRAMA_STARTUP_PROBE=<文件> 启动时，记下几个时间点写进这个文件后退出，
 // 用来检查装好的软件打开要多久（平时不开）。时间都从进程启动算起，单位毫秒。
@@ -89,7 +96,7 @@ const startupMarks = {};
 function markStartup(name) {
   if (!startupProbe || startupMarks[name] != null) return;
   startupMarks[name] = Math.round(process.uptime() * 1000);
-  if (name !== 'pageLoaded') return;
+  if (name !== 'pageLoaded' && name !== 'activationLoaded') return;
   try {
     fs.writeFileSync(startupProbe, JSON.stringify({ ...startupMarks, platform: process.platform }));
   } catch (_) {}
@@ -106,7 +113,7 @@ function migrateRenamedUserData() {
     const target = app.getPath('userData');
     if (fs.existsSync(path.join(target, 'data.json'))) return;
     const appData = app.getPath('appData');
-    for (const oldName of ['红果短剧', 'hongguo-downloader']) {
+    for (const oldName of ['AI短剧助手', 'ai-drama-assistant', '红果短剧', 'hongguo-downloader']) {
       const old = path.join(appData, oldName);
       if (path.resolve(old) === path.resolve(target) || !fs.existsSync(path.join(old, 'data.json'))) continue;
       fs.mkdirSync(target, { recursive: true });
@@ -131,7 +138,6 @@ function migrateRenamedUserData() {
     console.warn('[App] 迁移旧数据目录失败:', error?.message || error);
   }
 }
-migrateRenamedUserData();
 
 // 只允许开一个：两个进程同时读写 data.json、同时往同一个「去重」文件夹写成品会互相覆盖。
 // 再次打开时把已有窗口拉到前面。
@@ -139,6 +145,7 @@ const singleInstance = typeof app.requestSingleInstanceLock === 'function' ? app
 if (!singleInstance) app.quit();
 else
   app.on('second-instance', () => {
+    if (!launchAuthorized) return;
     if (!mainWindow || mainWindow.isDestroyed()) {
       if (app.isReady?.()) createWindow();
       return;
@@ -2072,39 +2079,62 @@ async function executeHongguoDownload(task, attempt = 0) {
     const playInfo =
       checkedPlayInfo || (await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id, { best: true }));
     source.token.throwIfRequested();
-    if (!playInfo?.url) throw new Error(playInfo?.error || '未获取到有效播放地址');
+    if (!playInfo?.url) {
+      throw Object.assign(new Error(playInfo?.error || '未获取到有效播放地址'), {
+        code: playInfo?.code, status: playInfo?.status, source: playInfo?.source,
+      });
+    }
     tmpPath = finalPath + '.enc.tmp';
-    const response = await requestMedia(playInfo, { cancelToken: source.token });
-    source.token.throwIfRequested();
-    const totalLength = Number(response.headers['content-length']) || 0;
-    task.totalBytes = totalLength;
-    writer = fs.createWriteStream(tmpPath);
-    task.writer = writer;
-    let received = 0,
-      lastProgress = 0;
-    response.data.on('data', (chunk) => {
-      received += chunk.length;
-      task.receivedBytes = received;
-      task.progress = totalLength ? Math.min(99, Math.floor((received / totalLength) * 100)) : 0;
-      if (Date.now() - lastProgress >= 150 || received === totalLength) {
-        sendToRenderer('download-progress', {
-          id,
-          progress: task.progress,
-          receivedBytes: received,
-          totalBytes: totalLength,
+    const urls = [playInfo.url, ...(playInfo.backupUrls || []).slice(0, 2)];
+    for (const [index, url] of urls.entries()) {
+      source.token.throwIfRequested();
+      try {
+        const response = await requestMedia({ ...playInfo, url }, { cancelToken: source.token });
+        if (source.token.reason) {
+          response.data.destroy();
+          source.token.throwIfRequested();
+        }
+        const totalLength = Number(response.headers['content-length']) || 0;
+        task.totalBytes = totalLength;
+        writer = fs.createWriteStream(tmpPath);
+        task.writer = writer;
+        let received = 0;
+        let lastProgress = 0;
+        response.data.on('data', (chunk) => {
+          received += chunk.length;
+          task.receivedBytes = received;
+          task.progress = totalLength ? Math.min(99, Math.floor((received / totalLength) * 100)) : 0;
+          if (Date.now() - lastProgress >= 150 || received === totalLength) {
+            sendToRenderer('download-progress', {
+              id,
+              progress: task.progress,
+              receivedBytes: received,
+              totalBytes: totalLength,
+            });
+            lastProgress = Date.now();
+          }
         });
-        lastProgress = Date.now();
+        const stopWatch = watchStall(response.data);
+        try {
+          await pipeline(response.data, writer);
+        } finally {
+          stopWatch();
+        }
+        if (!received || (totalLength && received !== totalLength)) {
+          throw Object.assign(new Error('视频下载不完整，请重试'), { code: 'ERR_STREAM_PREMATURE_CLOSE' });
+        }
+        break;
+      } catch (error) {
+        source.token.throwIfRequested();
+        const status = error.response?.status || 0;
+        const networkFailure = error.code === 'ERR_STREAM_PREMATURE_CLOSE'
+          || downloadErrors.classifyDownloadError({ message: error.message, code: error.code, status }).kind === 'network';
+        if (index === urls.length - 1 || error.path || (!networkFailure && ![403, 404, 410].includes(status))) throw error;
+        task.progress = 0;
+        task.receivedBytes = 0;
       }
-    });
-    // pipeline rejects on either side and destroys both streams (including abrupt CDN close).
-    const stopWatch = watchStall(response.data);
-    try {
-      await pipeline(response.data, writer);
-    } finally {
-      stopWatch();
     }
     source.token.throwIfRequested();
-    if (totalLength && received !== totalLength) throw new Error('视频下载不完整，请重试');
     if (playInfo.contentKey) {
       const decodedPath = tmpPath + '.decoded';
       try {
@@ -2163,10 +2193,11 @@ async function executeHongguoDownload(task, attempt = 0) {
       }
     } else if (
       attempt < downloadRetryDelays.length &&
+      !(error.source === 'app' && (error.code === 'EMPTY_RESPONSE' || [403, 429].includes(error.status))) &&
       downloadErrors.isAutoRetryable({
         message: error.message,
         code: error.code,
-        status: error.response?.status || 0,
+        status: error.status || error.response?.status || 0,
       })
     ) {
       // 旧的下载地址作废，等一会儿重新取新的再下；等的时候用户点了停止就算停止。
@@ -2191,7 +2222,7 @@ async function executeHongguoDownload(task, attempt = 0) {
       task.error = attempt ? `${error.message}（已自动换新链接重试 ${attempt} 次）` : error.message;
       // 保留错误码和 HTTP 状态，管理剧集里据此分辨是资源缺失还是网络失败。
       task.errorCode = error.code || '';
-      task.errorStatus = error.response?.status || 0;
+      task.errorStatus = error.status || error.response?.status || 0;
       task.endTime = Date.now();
       sendToRenderer('download-failed', { id, error: error.message });
     }
@@ -4106,6 +4137,7 @@ function publishSnapshot(dir) {
 }
 
 function publishNotify(dir) {
+  if (publishJobs.get(dir)?.status !== 'running') scheduleSeriesRefresh(dir);
   sendToRenderer('publish-update', publishSnapshot(dir));
 }
 
@@ -4352,6 +4384,7 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
     );
     libLog(context.dir, 'ok', '发布素材：剧名/样式已保存，海报有的话已重新排版', 'side');
     renameLibraryOutputs(context.dir);
+    scheduleSeriesRefresh(context.dir);
     return { success: true, result: publishResultView(context) };
   } catch (error) {
     return { success: false, error: aiRedact(error) };
@@ -4369,6 +4402,7 @@ ipcMain.handle('publish-save-synopsis', (_event, payload = {}) => {
       synopsis: payload.synopsis,
     });
     libLog(context.dir, 'ok', '发布素材：简介已保存', 'side');
+    scheduleSeriesRefresh(context.dir);
     return { success: true, result: publishResultView(context) };
   } catch (error) {
     return { success: false, error: aiRedact(error) };
@@ -5050,6 +5084,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
       libraryDraftEmit(job);
       try {
         await snapshotStoryboard(result.htmlFile);
+        refreshSeriesFiles(key);
         log('ok', '截图已生成（页头 + 前两个分镜）');
       } catch (error) {
         log('warn', `截图没出来（${error?.message || error}），可以在管理剧集里点这一集的「重新出图」`);
@@ -5459,7 +5494,7 @@ function storyboardTarget(dir, number) {
  * 打开时按成品实际尺寸改过来（只改分辨率那几处文字，不重新问方舟）。
  */
 async function refreshStoryboardResolution(target) {
-  await dropStoryboardVerifyNotes(target);
+  await cleanLegacyStoryboardLabels(target);
   try {
     const media = await quchong.probeMedia(resolveFfmpeg('ffprobe'), target.file).catch(() => null);
     if (!media?.video_width || !media?.video_height) return;
@@ -5482,15 +5517,18 @@ async function refreshStoryboardResolution(target) {
   }
 }
 
-/** 以前生成的页面里有「核对：……」说明：去掉（改了页面，截图比页面旧，界面会自动重新出图）。 */
-async function dropStoryboardVerifyNotes(target) {
+/** 去掉旧页面里已取消显示的提示，让界面重新截图。 */
+async function cleanLegacyStoryboardLabels(target) {
   try {
     const html = await fsp.readFile(target.html, 'utf8').catch(() => null);
-    if (html == null || !html.includes('<p class="novnote">核对：')) return;
-    const fixed = storyboardHtmlTools.removeVerifyNotes(html);
-    if (fixed !== html) await fsp.writeFile(target.html, fixed);
+    if (html == null) return false;
+    const fixed = storyboardHtmlTools.removeLegacyStoryboardLabels(html);
+    if (fixed === html) return false;
+    await fsp.writeFile(target.html, fixed);
+    return true;
   } catch (_) {
     // 改不了就按原样显示。
+    return false;
   }
 }
 
@@ -5511,7 +5549,7 @@ ipcMain.handle('library-storyboards', async (_event, payload = {}) => {
         items.push({ number, state: 'no-episode' });
         continue;
       }
-      await dropStoryboardVerifyNotes(target);
+      const labelsRemoved = await cleanLegacyStoryboardLabels(target);
       const stat = await fsp.stat(target.html).catch(() => null);
       const shot = stat ? await fsp.stat(storyboardSnapshot.snapshotFile(target.html)).catch(() => null) : null;
       items.push({
@@ -5520,7 +5558,7 @@ ipcMain.handle('library-storyboards', async (_event, payload = {}) => {
         state: stat ? 'ready' : 'none',
         updatedAt: stat?.mtimeMs || 0,
         // 截图比页面旧（页面重新生成过）就当没有，界面会重新出图
-        image: shot && shot.mtimeMs >= stat.mtimeMs - 1000 ? `${localAssetUrl(storyboardSnapshot.snapshotFile(target.html))}?v=${Math.round(shot.mtimeMs)}` : '',
+        image: !labelsRemoved && shot && shot.mtimeMs >= stat.mtimeMs ? `${localAssetUrl(storyboardSnapshot.snapshotFile(target.html))}?v=${Math.round(shot.mtimeMs)}` : '',
       });
     }
     return { success: true, items };
@@ -5572,6 +5610,7 @@ ipcMain.handle('library-storyboard-shot', async (_event, payload = {}) => {
     if (!target || !fs.existsSync(target.html)) return { success: false, error: '这一集的分镜工程图还没有生成' };
     await refreshStoryboardResolution(target);
     const file = await snapshotStoryboard(target.html);
+    refreshSeriesFiles(dir);
     const stat = await fsp.stat(file);
     return { success: true, image: `${localAssetUrl(file)}?v=${Math.round(stat.mtimeMs)}` };
   } catch (error) {
@@ -5792,6 +5831,33 @@ ipcMain.handle('library-cost-report-open', async (_event, payload = {}) => {
     if (!fs.existsSync(file)) return { success: false, error: '报告还没生成：勾上「成本配置报告」后点「开始处理」' };
     const error = await shell.openPath(file);
     return error ? { success: false, error } : { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('library-cost-report-export-png', async (_event, payload = {}) => {
+  try {
+    const dir = storyboardDir(payload);
+    if (!dir) return { success: false, error: '这不是剧文件夹' };
+    const file = costReportFile(dir);
+    const docx = await fsp.readFile(file).catch((error) => {
+      if (error.code === 'ENOENT') throw new Error('请先生成 Word 报告');
+      throw error;
+    });
+    const png = await renderCostReportPng(docx);
+    const output = file.replace(/\.docx$/i, '.png');
+    const temporary = `${output}.${randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(temporary, png);
+      if (!(await fsp.readFile(file)).equals(docx)) {
+        throw new Error('Word 报告在导出期间已更新，请重新导出 PNG');
+      }
+      await fsp.rename(temporary, output);
+    } finally {
+      await fsp.rm(temporary, { force: true }).catch(() => {});
+    }
+    return { success: true, name: path.basename(output) };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -6373,6 +6439,7 @@ function refreshSeriesFiles(dir) {
     const facts = seriesFacts(folder);
     seriesLayout.updateOriginalInfo(folder, facts);
     seriesLayout.updateNewInfo(folder, { processed: facts.outputs });
+    seriesLayout.syncDeliveryFiles(folder);
     if (moved.length) libLog(folder, 'info', `剧文件夹整理成新结构：挪好了 ${moved.join('、')}`);
     return moved.length > 0;
   } catch (error) {
@@ -7061,7 +7128,7 @@ async function requestMedia(playInfo, options = {}) {
     responseType: 'stream',
     timeout: 60000,
     ...options,
-    headers: { 'User-Agent': hongguo.UA, 'Accept-Encoding': 'identity', ...options.headers },
+    headers: { 'User-Agent': playInfo.userAgent || hongguo.UA, 'Accept-Encoding': 'identity', ...options.headers },
   };
   try {
     return await axios(config);
@@ -9499,6 +9566,7 @@ ipcMain.handle('open-external-url', async (event, url) => {
 
 // ===== 窗口创建 =====
 function createWindow() {
+  if (!launchAuthorized) return;
   rendererClosing = false;
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -9688,6 +9756,17 @@ ipcMain.handle('open-log-folder', async () => {
 
 app.whenReady().then(async () => {
   if (!singleInstance) return;
+  if (!(await authorizeStartup({
+    app,
+    dialog,
+    clipboard: require('electron').clipboard,
+    onActivationReady: () => markStartup('activationLoaded'),
+  }))) {
+    app.exit(0);
+    return;
+  }
+  launchAuthorized = true;
+  migrateRenamedUserData();
   markStartup('appReady');
   installFileLog();
   // AI 文案/海报请求走 Chromium 网络栈：跟随设置里的代理和系统代理，长时间作图不会被 Node 的 5 分钟限制断开。
@@ -9903,6 +9982,7 @@ app.on('child-process-gone', (_event, details) => {
 });
 
 app.on('window-all-closed', () => {
+  if (!launchAuthorized) return;
   if (process.platform !== 'darwin') app.quit();
 });
 

@@ -86,7 +86,8 @@ const checks = [
       const noApp = fixture({ web: true, app: false });
       const refused = await noApp.native.fetchPlayUrlSingle('11', '1', { best: true });
       assert.equal(refused.url, null, '不下载官网 360p');
-      assert.match(refused.error, /1080p.*360p/);
+      assert.equal(refused.source, 'app');
+      assert.match(refused.error, /旧接口也没有可用的高清源/);
       assert.equal(noApp.state.appCalls, 1);
       // 旧接口返回的流说不出清晰度（可能是 360p）：也不用。
       const legacy = fixture({ web: true, app: false, api: true });

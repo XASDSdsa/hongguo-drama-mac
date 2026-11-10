@@ -122,6 +122,8 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
   run('quitConfirmed = false');
   dialogCalls.length = 0;
   run('createWindow()');
+  assert.equal(windowEvents.length, 0, 'unauthorized startup cannot create the main window');
+  run('launchAuthorized = true; createWindow()');
   const handlers = (name) => windowEvents.filter(([event]) => event === name).map(([, fn]) => fn);
   assert.ok(handlers('query-session-end').length, 'window must listen for query-session-end');
   assert.ok(handlers('session-end').length, 'window must listen for session-end');

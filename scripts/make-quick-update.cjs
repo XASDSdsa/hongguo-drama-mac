@@ -40,6 +40,9 @@ function sha256(file) {
 }
 
 async function main() {
+  if (pkg.build.electronFuses?.enableEmbeddedAsarIntegrityValidation) {
+    throw new Error('当前版本校验应用包完整性，请构建完整安装包。');
+  }
   const out = path.resolve(process.argv[2] || path.join(root, 'dist', 'quick'));
   const work = path.join(out, 'work');
   fs.rmSync(work, { recursive: true, force: true });

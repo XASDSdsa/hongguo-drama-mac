@@ -155,7 +155,7 @@ async function check(name, run) {
     assert.equal(detail.data.episodes.length, 1);
     assert.equal(detail.data.episodes[0].vid_index, 1);
   });
-  await check('downloads go into a folder named after the series inside the download directory', async () => {
+  await check('downloads go into the originals folder under the series directory', async () => {
     const h = load();
     h.set('seriesRegistry', series());
     await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
@@ -163,7 +163,7 @@ async function check(name, run) {
     assert.equal(tasks.length, 2);
     for (const item of tasks) {
       assert.equal(item.customDir, path.join(h.dir, 'Short'));
-      assert.equal(path.dirname(item.savePath), item.customDir);
+      assert.equal(path.dirname(item.savePath), path.join(item.customDir, '原剧'));
       file(item.savePath);
       item.status = 'completed';
     }
