@@ -12,7 +12,9 @@ const run = promisify(execFile);
 async function findLibreOffice() {
   const candidates =
     process.platform === 'darwin'
-      ? ['/Applications/LibreOffice.app/Contents/MacOS/soffice']
+      ? [process.resourcesPath, '/Applications']
+          .filter(Boolean)
+          .map((root) => path.join(root, 'LibreOffice.app', 'Contents', 'MacOS', 'soffice'))
       : process.platform === 'win32'
         ? [process.resourcesPath, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
             .filter(Boolean)
@@ -50,8 +52,8 @@ async function renderWord(docx, dir, office) {
     diagnostics = stderr.trim() || stdout.trim();
   } catch (error) {
     if (error.code === 'ENOENT') {
-      if (process.platform === 'win32' && require('electron').app.isPackaged) {
-        throw new Error('报告转换组件缺失，请重新安装 Windows 完整版。');
+      if (require('electron').app.isPackaged) {
+        throw new Error('报告转换组件缺失，请重新安装完整版。');
       }
       throw new Error('导出 PNG 需要安装 LibreOffice。安装后再试。');
     }

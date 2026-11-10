@@ -31,7 +31,7 @@ const entries = {
   'word/document.xml':
     `<w:document xmlns:w="${w}" xmlns:r="${rel}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ` +
     'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
-    '<w:body><w:p><w:r><w:t>成本配置报告 — Windows test</w:t></w:r></w:p>' +
+    '<w:body><w:p><w:r><w:t>成本配置报告 — Offline test</w:t></w:r></w:p>' +
     `<w:p><w:r>${picture}</w:r></w:p><w:p><w:r><w:br w:type="page"/></w:r></w:p>` +
     '<w:p><w:r><w:t>Page two</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>' +
     '</w:body></w:document>',
@@ -40,8 +40,9 @@ const entries = {
 
 app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
-  const runtime = process.argv[2] || 'build/libreoffice/win32-x64';
-  const office = path.resolve(runtime, 'program', 'soffice.com');
+  const mac = process.platform === 'darwin';
+  const runtime = process.argv[2] || (mac ? 'build/libreoffice/darwin-arm64' : 'build/libreoffice/win32-x64');
+  const office = path.resolve(runtime, mac ? 'LibreOffice.app/Contents/MacOS/soffice' : 'program/soffice.com');
   const docx = writeZip(Object.entries(entries).map(([name, data]) => ({ name, data: Buffer.from(data) })));
   const bytes = await renderCostReportPng(docx, { office });
   assert.equal(bytes[25], 2, 'export must be RGB');

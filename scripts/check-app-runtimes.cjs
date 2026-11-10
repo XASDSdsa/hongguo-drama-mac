@@ -8,6 +8,10 @@ module.exports = async (context) => {
     const office = path.join(context.packager.projectDir, 'build/libreoffice/win32-x64/program/soffice.com');
     if (!fs.existsSync(office)) throw new Error('缺少报告转换组件，请先运行 npm run setup:office:win');
   }
+  if (context.electronPlatformName === 'darwin') {
+    const office = path.join(context.packager.projectDir, 'build/libreoffice/darwin-arm64/LibreOffice.app/Contents/MacOS/soffice');
+    if (!fs.existsSync(office)) throw new Error('缺少报告转换组件，请先运行 npm run setup:office:mac');
+  }
   require('./check-title-fonts.cjs').verifyBundle(context.packager.projectDir);
   await require('./check-faster-whisper-bundle.cjs')(context);
   require('./check-video-structure-bundle.cjs').verifyBundle(

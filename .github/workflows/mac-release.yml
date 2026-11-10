@@ -63,6 +63,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare and test the offline report conversion engine
+        run: |
+          npm run setup:office:mac
+          npx --no-install electron scripts/check-office-png.cjs
+
       - name: Set up build-only Python
         uses: actions/setup-python@v6
         with:
@@ -180,6 +185,13 @@ jobs:
         run: |
           product=$(node -p "require('./package.json').build.productName")
           node scripts/check-bundled-transcription.cjs "dist/mac-arm64/${product}.app/Contents/Resources"
+
+      - name: Check packaged Mac signature and offline PNG export
+        run: |
+          product=$(node -p "require('./package.json').build.productName")
+          app="dist/mac-arm64/${product}.app"
+          codesign --verify --deep --strict "$app"
+          npx --no-install electron scripts/check-office-png.cjs "$app/Contents/Resources"
 
       - name: End to end with the bundled components (Chinese names)
         env:
