@@ -25,6 +25,13 @@ Electron 打包产物中已包含 Chromium 与 Node.js 的许可声明：
 
 ## 内置可执行程序
 
+### Windows LibreOffice（MPL-2.0）
+
+Windows 包在 `resources/LibreOffice/` 内置 The Document Foundation 的 LibreOffice 26.8.2，
+用于离线把报告渲染为 PDF，再由应用导出 PNG。构建脚本从官方 Windows MSI 提取运行文件，
+应用独立调用该程序。随包保留原许可证，完整对应源码见
+https://download.documentfoundation.org/libreoffice/src/26.8.2/ 。
+
 ### Windows FFmpeg（GPLv3-or-later）
 
 | 项 | 说明 |

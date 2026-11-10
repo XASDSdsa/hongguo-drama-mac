@@ -1,6 +1,6 @@
 {
   "name": "ai-drama-assistant",
-  "version": "1.2.36",
+  "version": "1.2.37",
   "description": "changeFileName：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -9,11 +9,11 @@
     "dev": "node scripts/dev.js",
     "dev:react": "vite",
     "build:react": "vite build",
-    "build": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win",
-    "build:zip": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
-    "build:dir": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir",
-    "build:portable": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win portable",
-    "build:installer": "npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win nsis",
+    "build": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win",
+    "build:zip": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
+    "build:dir": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir",
+    "build:portable": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win portable",
+    "build:installer": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
     "check:openai": "node scripts/check-openai-adapter.cjs",
     "check:pipeline": "node scripts/check-pipeline-gate.cjs",
@@ -48,7 +48,8 @@
     "format:check": "npx --yes prettier@3 --check \"main.js\" \"preload.js\" \"vite.config.js\" \"index.html\" \"src/**/*.{js,jsx,cjs,css}\" \"scripts/**/*.{js,cjs}\"",
     "setup:title-fonts": "node scripts/setup-title-fonts.cjs",
     "check:poster-title": "node scripts/check-poster-title.cjs",
-    "check:publish": "node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs && node scripts/check-poster-title.cjs && node scripts/check-title-fonts.cjs"
+    "check:publish": "node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs && node scripts/check-poster-title.cjs && node scripts/check-title-fonts.cjs",
+    "setup:office:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-libreoffice-win.ps1"
   },
   "dependencies": {
     "axios": "^1.13.2",
@@ -149,6 +150,10 @@
         {
           "from": "build/title-fonts",
           "to": "title-fonts"
+        },
+        {
+          "from": "build/libreoffice/win32-x64",
+          "to": "LibreOffice"
         }
       ],
       "extraFiles": [
@@ -175,7 +180,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "changeFileName",
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "differentialPackage": false
     },
     "mac": {
       "target": [

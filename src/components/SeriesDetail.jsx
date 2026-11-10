@@ -1476,7 +1476,7 @@ export default function SeriesDetail({ folder, active = true }) {
                     className="btn btn-sm"
                     onClick={exportCostReportPng}
                     disabled={!costFile?.exists || costPngBusy}
-                    title="将现有 Word 报告导出到剧集文件夹，需要安装 LibreOffice"
+                    title="将现有 Word 报告导出到剧集文件夹"
                   >
                     {costPngBusy ? '正在导出…' : '导出 PNG'}
                   </button>

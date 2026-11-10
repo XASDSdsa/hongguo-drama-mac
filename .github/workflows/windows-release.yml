@@ -306,6 +306,13 @@ jobs:
 
       - run: npm ci
 
+      - name: Prepare and test the offline report conversion engine
+        shell: pwsh
+        run: |
+          ./scripts/setup-libreoffice-win.ps1
+          & ./node_modules/.bin/electron.cmd scripts/check-office-png.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -572,6 +579,9 @@ jobs:
           done
           # 运行器不持有激活码，必须先看到授权窗，且不能进入主界面。
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!(r.activationLoaded<15000)||r.pageLoaded!=null){console.error('unexpected startup result',r);process.exit(1)}" "$(cygpath -w "$RUNNER_TEMP/startup-2.json")"
+
+      - name: Check PNG export from the packaged offline report engine
+        run: npx --no-install electron scripts/check-office-png.cjs dist/win-unpacked/resources/LibreOffice
 
       - name: Prepare release assets
         run: node scripts/prepare-release-assets.js

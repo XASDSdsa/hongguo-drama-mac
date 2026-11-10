@@ -17,6 +17,7 @@ build/ffmpeg/*
 build/whisper/
 build/faster-whisper/
 build/video-structure/
+build/libreoffice/
 __pycache__/
 
 # 构建与打包输出

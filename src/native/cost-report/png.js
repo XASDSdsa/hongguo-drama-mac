@@ -14,7 +14,7 @@ async function findLibreOffice() {
     process.platform === 'darwin'
       ? ['/Applications/LibreOffice.app/Contents/MacOS/soffice']
       : process.platform === 'win32'
-        ? [process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
+        ? [process.resourcesPath, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
             .filter(Boolean)
             .map((root) => path.join(root, 'LibreOffice', 'program', 'soffice.com'))
         : [];
@@ -41,7 +41,12 @@ async function renderWord(docx, dir, office) {
     ], { timeout: 60_000, windowsHide: true });
     diagnostics = stderr.trim() || stdout.trim();
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('导出 PNG 需要安装 LibreOffice。安装后再试。');
+    if (error.code === 'ENOENT') {
+      if (process.platform === 'win32' && require('electron').app.isPackaged) {
+        throw new Error('报告转换组件缺失，请重新安装 Windows 完整版。');
+      }
+      throw new Error('导出 PNG 需要安装 LibreOffice。安装后再试。');
+    }
     if (error.killed) throw new Error('LibreOffice 渲染报告超时，请重试。');
     throw error;
   }
