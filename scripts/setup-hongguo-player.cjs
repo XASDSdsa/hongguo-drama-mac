@@ -47,6 +47,21 @@ function unzip(file, destination) {
   const entry = fs.readdirSync(runtime).find(name => fs.existsSync(path.join(runtime, name, 'bin/java.exe')));
   if (!entry) throw new Error('取源运行库缺少 java.exe');
   fs.cpSync(path.join(runtime, entry), path.join(output, 'runtime'), { recursive: true });
+  // JDK 17's Windows launcher uses ANSI paths. Opt this app-local launcher into
+  // Windows 10 1903+ UTF-8 path handling; retain every other manifest setting.
+  const { NtExecutable, NtExecutableResource } = require('resedit');
+  const launcher = path.join(output, 'runtime/bin/java.exe');
+  const executable = NtExecutable.from(fs.readFileSync(launcher), { ignoreCert: true });
+  const resources = NtExecutableResource.from(executable);
+  const manifest = resources.entries.find(item => item.type === 24 && item.id === 1);
+  if (!manifest) throw new Error('取源启动器缺少 Windows 清单');
+  const xml = Buffer.from(manifest.bin).toString('utf8');
+  if (!xml.includes('</asmv3:windowsSettings>')) throw new Error('取源启动器 Windows 清单不兼容');
+  const utf8 = '<activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>';
+  manifest.bin = Uint8Array.from(Buffer.from(xml.replace('</asmv3:windowsSettings>', utf8 + '</asmv3:windowsSettings>'))).buffer;
+  resources.outputResource(executable);
+  fs.writeFileSync(launcher, Buffer.from(executable.generate()));
+  fs.appendFileSync(path.join(output, 'SOURCE.txt'), 'Local modification: java.exe application manifest enables Windows UTF-8 activeCodePage for Unicode install paths. Reproducible in scripts/setup-hongguo-player.cjs. No Java executable code is changed; upstream Authenticode signature is removed by resource regeneration.\n');
   const files = fs.readdirSync(output, { recursive: true, withFileTypes: true }).filter(item => item.isFile()).map(item => {
     const file = path.join(item.parentPath, item.name);
     return { path: path.relative(output, file).split(path.sep).join('/'), sha256: sha(fs.readFileSync(file)) };

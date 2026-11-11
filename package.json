@@ -73,7 +73,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^5.4.11",
-    "wait-on": "^7.2.0"
+    "wait-on": "^7.2.0",
+    "resedit": "1.7.2"
   },
   "build": {
     "appId": "io.github.jackotom.hongguo-drama-mac",

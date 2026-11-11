@@ -145,3 +145,5 @@ AI 发布素材生成海报时，标题由程序用下列字体渲染（均为 S
 N3urda/hongguoTV kotlin-v0.11.1，GPL-3.0-only。以其正式源码档案 SHA256 f0aac3de576bd494d94ec206753a2ee568c45a1b98e645d293afd6fb73f273b2 构建，保留原有核心源码及其第三方来源声明。DesktopPlayer.kt 增加单集 JSON 接口、分集编号和高清片源校验、桌面代理设置。https://github.com/N3urda/hongguoTV/releases/tag/kotlin-v0.11.1
 
 运行组件包含 OkHttp 4.12.0、Bouncy Castle 1.79、JSON-java 20240303、jsoup 1.23.2、Kotlin 2.1.20。原始依赖 JAR 原样提供并保留各自许可。Eclipse Temurin OpenJDK JRE 17.0.21+9 为 GPLv2 with Classpath Exception，其许可与第三方声明保留在随附 runtime/legal。重建入口为 scripts/setup-hongguo-player.cjs。
+
+随附 JRE 的 java.exe 清单增加 UTF-8 activeCodePage，用于兼容含中文的安装路径；原生程序代码不变。此本地资源修改及对应源码入口见 scripts/setup-hongguo-player.cjs，修改后的启动器不保留上游签名。其余 JRE 文件与许可证原样保留。
