@@ -5,6 +5,7 @@ module.exports = async (context) => {
   const key = fs.readFileSync(path.join(context.packager.projectDir, 'src/native/license/public-key.pem'));
   if (createPublicKey(key).asymmetricKeyType !== 'ed25519') throw new Error('缺少有效的设备授权公钥');
   if (context.electronPlatformName === 'win32') {
+    require('./check-hongguo-player.cjs').verifyPlayerBundle(context.packager.projectDir);
     const office = path.join(context.packager.projectDir, 'build/libreoffice/win32-x64/program');
     for (const file of ['soffice.com', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']) {
       if (!fs.existsSync(path.join(office, file))) {

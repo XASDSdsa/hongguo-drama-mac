@@ -139,3 +139,9 @@ AI 发布素材生成海报时，标题由程序用下列字体渲染（均为 S
 | ZCOOL QingKe HuangYou（站酷庆科黄油体） | 站酷，@fontsource/zcool-qingke-huangyou |
 | ZCOOL KuaiLe（站酷快乐体） | 站酷，@fontsource/zcool-kuaile |
 | Ma Shan Zheng（马善政毛笔楷书） | Ma Shan Zheng Project Authors，@fontsource/ma-shan-zheng |
+
+## hongguoTV 原生取源核心
+
+N3urda/hongguoTV kotlin-v0.11.1，GPL-3.0-only。以其正式源码档案 SHA256 f0aac3de576bd494d94ec206753a2ee568c45a1b98e645d293afd6fb73f273b2 构建，保留原有核心源码及其第三方来源声明。DesktopPlayer.kt 增加单集 JSON 接口、分集编号和高清片源校验、桌面代理设置。https://github.com/N3urda/hongguoTV/releases/tag/kotlin-v0.11.1
+
+运行组件包含 OkHttp 4.12.0、Bouncy Castle 1.79、JSON-java 20240303、jsoup 1.23.2、Kotlin 2.1.20。原始依赖 JAR 原样提供并保留各自许可。Eclipse Temurin OpenJDK JRE 17.0.21+9 为 GPLv2 with Classpath Exception，其许可与第三方声明保留在随附 runtime/legal。重建入口为 scripts/setup-hongguo-player.cjs。

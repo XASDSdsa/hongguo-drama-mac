@@ -7131,7 +7131,8 @@ async function requestMedia(playInfo, options = {}) {
     responseType: 'stream',
     timeout: 60000,
     ...options,
-    headers: { 'User-Agent': playInfo.userAgent || hongguo.UA, 'Accept-Encoding': 'identity', ...options.headers },
+    headers: { 'User-Agent': playInfo.userAgent || hongguo.UA, 'Accept-Encoding': 'identity',
+      ...(playInfo.referer ? { Referer: playInfo.referer } : {}), ...options.headers },
   };
   try {
     return await axios(config);
@@ -9444,6 +9445,7 @@ ipcMain.handle('retry-task', async (event, taskId) => {
   if (!['failed', 'stopped'].includes(task.status) && !(task.status === 'completed' && !hasCompleteTaskFile(task)))
     return { success: false, error: '任务仍在进行中或已完成' };
 
+  hongguo.invalidatePlayUrl?.(task.hongguoInfo?.vid, task.hongguoInfo?.series_id);
   repairTaskDestination(task);
 
   task.status = 'pending';
@@ -9472,6 +9474,7 @@ ipcMain.handle('retry-tasks', async (event, taskIds) => {
         task.status === 'stopped' ||
         (task.status === 'completed' && !hasCompleteTaskFile(task)))
     ) {
+      hongguo.invalidatePlayUrl?.(task.hongguoInfo?.vid, task.hongguoInfo?.series_id);
       repairTaskDestination(task);
       task.status = 'pending';
       task.progress = 0;

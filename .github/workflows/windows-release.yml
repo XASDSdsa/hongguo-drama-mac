@@ -184,6 +184,14 @@ jobs:
 
       - run: npm ci
 
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build and verify the app-local native playback resolver
+        run: npm run setup:hongguo-player
+
       - name: Check cost reports and build the Windows package
         shell: pwsh
         run: |
@@ -191,6 +199,8 @@ jobs:
           node scripts/check-undefined-names.cjs
           node scripts/check-cost-report.cjs
           node scripts/check-app-source.cjs
+          node scripts/check-native-player.cjs
+          node scripts/check-hongguo-player.cjs --live
           node src/components/check-ui-state.cjs
           node scripts/check-cost-report-image.cjs
           node scripts/check-series-library.cjs
@@ -379,6 +389,14 @@ jobs:
           fi
 
       - run: npm ci
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build and verify the app-local native playback resolver
+        run: npm run setup:hongguo-player
 
       - name: Prepare and test the offline report conversion engine
         shell: pwsh

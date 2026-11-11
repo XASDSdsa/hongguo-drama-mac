@@ -1,6 +1,6 @@
 {
   "name": "ai-drama-assistant",
-  "version": "1.2.47",
+  "version": "1.2.48",
   "description": "changeFileName：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -9,11 +9,11 @@
     "dev": "node scripts/dev.js",
     "dev:react": "vite",
     "build:react": "vite build",
-    "build": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win",
-    "build:zip": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
-    "build:dir": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir",
-    "build:portable": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win portable",
-    "build:installer": "npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win nsis",
+    "build": "npm run setup:hongguo-player && npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win",
+    "build:zip": "npm run setup:hongguo-player && npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir && node scripts/make-zip.js",
+    "build:dir": "npm run setup:hongguo-player && npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win --dir",
+    "build:portable": "npm run setup:hongguo-player && npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win portable",
+    "build:installer": "npm run setup:hongguo-player && npm run setup:office:win && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --win nsis",
     "check:quchong": "node scripts/check-quchong.cjs",
     "check:openai": "node scripts/check-openai-adapter.cjs",
     "check:pipeline": "node scripts/check-pipeline-gate.cjs",
@@ -25,7 +25,7 @@
     "setup:transcription": "node scripts/setup-faster-whisper.cjs",
     "check:transcription-bundle": "node scripts/check-faster-whisper-bundle.cjs",
     "check:ai": "node scripts/check-openai-adapter.cjs && node scripts/check-ai-material-queue.cjs && node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs",
-    "pack": "npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && electron-builder --dir",
+    "pack": "npm run setup:hongguo-player && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
     "build:mac": "npm run setup:office:mac && npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
@@ -50,7 +50,8 @@
     "check:poster-title": "node scripts/check-poster-title.cjs",
     "check:publish": "node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs && node scripts/check-poster-title.cjs && node scripts/check-title-fonts.cjs",
     "setup:office:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-libreoffice-win.ps1",
-    "setup:office:mac": "bash scripts/setup-libreoffice-mac.sh"
+    "setup:office:mac": "bash scripts/setup-libreoffice-mac.sh",
+    "setup:hongguo-player": "node scripts/setup-hongguo-player.cjs"
   },
   "dependencies": {
     "axios": "^1.13.2",
@@ -155,6 +156,10 @@
         {
           "from": "build/libreoffice/win32-x64",
           "to": "LibreOffice"
+        },
+        {
+          "from": "build/hongguo-player/win32-x64",
+          "to": "hongguo-player"
         }
       ],
       "extraFiles": [

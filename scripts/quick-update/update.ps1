@@ -44,6 +44,15 @@ function Confirm-Base([string]$exe) {
 
 try {
   Write-Host "changeFileName 快速更新 $($manifest.version)" -ForegroundColor Cyan
+  foreach ($item in $manifest.sha256.PSObject.Properties) {
+    $name = [string]$item.Name
+    if ($targets.Contains($name)) { continue }
+    if ($name -notmatch '^hongguo-player/([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$' -or
+        ($name.Split('/') -contains '..') -or ($name.Split('/') -contains '.')) {
+      throw '更新文件路径无效'
+    }
+    $targets[$name] = 'resources\' + $name.Replace('/', '\')
+  }
   foreach ($name in $targets.Keys) {
     if (!(Test-Hash (Join-Path $PSScriptRoot $name) $name)) { throw '更新文件校验失败，请重新下载完整 ZIP。' }
   }
@@ -78,17 +87,18 @@ try {
     $replaced = @()
     try {
       foreach ($name in $targets.Keys) {
-        $leaf = Split-Path -Leaf $name
-        $file = Join-Path $backup "$leaf.new"
+        $file = Join-Path $backup ('staged\' + $name.Replace('/', '\'))
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $file)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $file
         if (!(Test-Hash $file $name)) { throw "复制后校验失败：$name" }
       }
       foreach ($name in $targets.Keys) {
-        $leaf = Split-Path -Leaf $name
-        $staged = Join-Path $backup "$leaf.new"
+        $staged = Join-Path $backup ('staged\' + $name.Replace('/', '\'))
+        $saved = Join-Path $backup ('original\' + $name.Replace('/', '\'))
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $saved)) | Out-Null
         $destination = Join-Path $InstallDir $targets[$name]
         if (Test-Path -LiteralPath $destination) {
-          [IO.File]::Replace($staged, $destination, (Join-Path $backup $leaf), $true)
+          [IO.File]::Replace($staged, $destination, $saved, $true)
         } else {
           [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
           [IO.File]::Move($staged, $destination)
@@ -101,7 +111,7 @@ try {
     } catch {
       $failure = $_
       foreach ($name in $replaced) {
-        $saved = Join-Path $backup (Split-Path -Leaf $name)
+        $saved = Join-Path $backup ('original\' + $name.Replace('/', '\'))
         $destination = Join-Path $InstallDir $targets[$name]
         if (Test-Path -LiteralPath $saved) {
           Copy-Item -LiteralPath $saved -Destination $destination -Force
