@@ -11,6 +11,7 @@ function rectangle(x0, y0, x1, y1, color) {
   }
 }
 for (const y of [410, 610, 820]) rectangle(170, y, 1030, y + 2, [30, 30, 30]);
+rectangle(260, 1005, 300, 1014, [20, 20, 20]);
 rectangle(720, 1110, 760, 1150, [180, 32, 30]);
 rectangle(730, 1120, 750, 1126, [35, 35, 35]);
 const before = new Uint8ClampedArray(source);
@@ -61,6 +62,7 @@ const upper = deviation(15);
 const lower = deviation(height - 95);
 assert.ok(upper > 2 && lower < 6 && lower > upper + .3, `grain ${upper}, ${lower}`);
 const slopes = [];
+const curves = [];
 for (const center of [410, 610, 820]) {
   const points = [];
   for (let x = 230; x < 970; x++) {
@@ -77,11 +79,30 @@ for (const center of [410, 610, 820]) {
   const slope = (n * points.reduce((s, [x, y]) => s + x * y, 0) - sx * sy) /
     (n * points.reduce((s, [x]) => s + x * x, 0) - sx * sx);
   slopes.push(Math.atan(slope) * 180 / Math.PI);
+  const intercept = (sy - slope * sx) / n;
+  curves.push(Math.sqrt(points.reduce((sum, [x, y]) => sum + (y - slope * x - intercept) ** 2, 0) / n));
 }
 assert.ok(slopes.every((angle) => angle > .15 && angle < .8), `line angles ${slopes}`);
 assert.ok(Math.max(...slopes) - Math.min(...slopes) > .04, 'local angles vary');
+assert.ok(curves.every((value) => value > .25 && value < 2), `gentle line curvature ${curves}`);
 for (const offset of [0, (width - 1) * 4, (height - 1) * width * 4, (width * height - 1) * 4]) {
   assert.ok(image[offset] > 225, 'paper reaches the corners without a border');
 }
 assert.notDeepEqual(run([box], 314159), image, 'different exports vary');
-console.log('PASS final image processing', { upper, lower, slopes, mixedInk, redChannelText });
+const letterMask = new Uint8ClampedArray(source.length);
+for (let y = 1005; y < 1014; y++) {
+  for (let x = 260; x < 300; x++) letterMask[(y * width + x) * 4 + 3] = 255;
+}
+const texturedText = run([{ x: 250, y: 995, w: 60, h: 30 }], 0, letterMask);
+const inkLevels = [];
+for (let y = 1000; y < 1020; y++) {
+  for (let x = 250; x < 310; x++) {
+    const p = (y * width + x) * 4;
+    if ([p, p - 4, p + 4, p - width * 4, p + width * 4].every((at) => control[at] >= 20 && control[at] < 38)) inkLevels.push(texturedText[p]);
+  }
+}
+assert.ok(inkLevels.length > 50);
+const inkMean = inkLevels.reduce((sum, n) => sum + n, 0) / inkLevels.length;
+const inkDeviation = Math.sqrt(inkLevels.reduce((sum, n) => sum + (n - inkMean) ** 2, 0) / inkLevels.length);
+assert.ok(inkDeviation > 1.5 && inkDeviation < 6 && inkMean > 22 && inkMean < 34, `text grain ${inkMean}, ${inkDeviation}`);
+console.log('PASS final image processing', { upper, lower, slopes, curves, mixedInk, redChannelText, inkMean, inkDeviation });

@@ -25,8 +25,10 @@ function finishReportPage(context, width, height, textBoxes, variation = 0, text
       0.025 * Math.cos(5.4 * Math.PI * v)) * Math.PI / 180;
     const shift = angle * (y - height / 2) + 1.3 * Math.sin(8 * v + 0.3);
     for (let x = 0; x < width; x++) {
-      const sx = x + shift;
-      const sy = y - angle * (x - width / 2) + 1.4 * Math.sin(curve[x] + 3.5 * v);
+      const lateral = 1.8 * mottling(x, y, 155, 269) + 1.2 * mottling(x, y, 375, 307);
+      const vertical = 2.8 * mottling(x, y, 105, 229) + 2.0 * mottling(x, y, 285, 251);
+      const sx = x + shift + lateral;
+      const sy = y - angle * (x - width / 2) + 1.4 * Math.sin(curve[x] + 3.5 * v) + vertical;
       const index = y * width + x;
       const at = index * 4;
       pixels[at + 3] = 255;
@@ -90,6 +92,12 @@ function finishReportPage(context, width, height, textBoxes, variation = 0, text
         const paper = shade * ((low - 228) / 27) * (1 - chroma / 12);
         for (let c = 0; c < 3; c++) output[at + c] -= paper;
       }
+      // Share the paper grain with neutral ink, including text WPS rasterizes.
+      if (low < 200 && chroma < 16) {
+        const texture = 10 * grainAt(x, y, 101) + 8 * mottling(x, y, 3, 83);
+        const lift = Math.max(0, 6 + texture) * (1 - low / 200) * (1 - chroma / 16);
+        for (let c = 0; c < 3; c++) output[at + c] += lift;
+      }
       if (!ink[index] || x < 1 || x + 1 === width || y < 1 || y + 1 === height) continue;
       const stride = width * 4;
       const adjacent = [at - 4, at + 4, at - stride, at + stride];
@@ -115,6 +123,7 @@ function finishReportPage(context, width, height, textBoxes, variation = 0, text
         const mean = (pixels[at - 4 + c] + pixels[at + 4 + c] + pixels[at - stride + c] + pixels[at + stride + c]) / 4;
         output[at + c] += 0.27 * (mean - pixels[at + c]);
       }
+
     }
   }
   warped.data.set(output);
