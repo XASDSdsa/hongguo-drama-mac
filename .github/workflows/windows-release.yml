@@ -298,6 +298,7 @@ jobs:
           compression-level: 0
 
       - name: Upload to the draft release
+        if: inputs.tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
