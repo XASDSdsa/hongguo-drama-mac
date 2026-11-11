@@ -19,7 +19,10 @@ function verifyPlayerUpdate(stage, unpacked, scratch) {
   fs.writeFileSync(injected, script.replace('$replaced += $name', "$replaced += $name\n        if ($replaced.Count -eq 3) { throw 'Injected copy failure' }"));
   let rolledBack = false;
   try { execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', injected, '-InstallDir', install], { stdio: 'pipe', timeout: 60000 }); }
-  catch (_) { rolledBack = true; }
+  catch (error) {
+    assert.match(String(error.stdout), /Injected copy failure/, 'the test must reach the intentional mid-copy failure');
+    rolledBack = true;
+  }
   finally { fs.unlinkSync(injected); }
   assert.ok(rolledBack, 'injected failure must stop the update');
   assert.equal(sha(archive), before, 'old archive restored');

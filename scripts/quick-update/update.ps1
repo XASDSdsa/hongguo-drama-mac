@@ -32,7 +32,15 @@ function Find-Install {
 }
 
 function Test-Hash([string]$file, [string]$name) {
-  return (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $manifest.sha256.$name
+  $stream = [IO.File]::OpenRead($file)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    $digest = [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+    return $digest -eq $manifest.sha256.$name
+  } finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
 }
 
 function Confirm-Base([string]$exe) {

@@ -215,6 +215,8 @@ jobs:
           if ($errors) { throw ($errors -join "`n") }
           npm run build:react
           node scripts/make-quick-update.cjs dist/quick
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Get-ChildItem dist/quick/*-update.zip -ErrorAction SilentlyContinue)) { throw 'Quick update package was not produced' }
 
       - uses: actions/cache/restore@v4
         id: wps-installer
