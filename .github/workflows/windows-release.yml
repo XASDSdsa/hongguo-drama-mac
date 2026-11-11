@@ -190,6 +190,8 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           node scripts/check-undefined-names.cjs
           node scripts/check-cost-report.cjs
+          node scripts/check-app-source.cjs
+          node src/components/check-ui-state.cjs
           node scripts/check-cost-report-image.cjs
           node scripts/check-series-library.cjs
           $errors = $null

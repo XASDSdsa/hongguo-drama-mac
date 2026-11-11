@@ -43,6 +43,9 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
   const [root, setRoot] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [retryingDownloads, setRetryingDownloads] = useState(false);
+  const [downloadNotice, setDownloadNotice] = useState('');
+  const retryRequest = useRef(false);
   const [current, setCurrent] = useState(null); // 正在看的剧（文件夹记录）
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -129,6 +132,30 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
     refreshOverview();
   };
 
+  const retryFailedDownloads = async () => {
+    if (retryRequest.current) return;
+    retryRequest.current = true;
+    setRetryingDownloads(true);
+    setDownloadNotice('');
+    try {
+      const tasks = await window.electronAPI.getDownloadTasks();
+      const ids = tasks.filter((task) => task.status === 'failed').map((task) => task.id);
+      if (!ids.length) {
+        setDownloadNotice('当前没有下载失败的集数');
+        return;
+      }
+      const result = await window.electronAPI.retryTasks(ids);
+      if (!result?.success) throw new Error(result?.error || '重新下载失败');
+      setDownloadNotice(`已将 ${result.count} 集加入重新下载队列`);
+      refreshOverview();
+    } catch (error) {
+      setDownloadNotice(error.message || '重新下载失败');
+    } finally {
+      retryRequest.current = false;
+      setRetryingDownloads(false);
+    }
+  };
+
   const importFolder = async () => {
     const result = await window.electronAPI.libraryImport();
     if (!result?.success) return setError(result?.error || '导入失败');
@@ -164,6 +191,10 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
           {root && <span className="lib-root">下载目录：{root}</span>}
         </div>
         <div className="lib-header-actions">
+          <button className="btn" onClick={retryFailedDownloads} disabled={retryingDownloads}>
+            <RefreshCw size={14} className={retryingDownloads ? 'spin' : ''} />
+            {retryingDownloads ? '正在提交…' : '一键重下失败集'}
+          </button>
           <button className="btn" onClick={importFolder}>
             <FolderPlus size={14} /> 导入已有剧
           </button>
@@ -174,6 +205,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
       </header>
 
       {error && <p className="lib-error">{error}</p>}
+      {downloadNotice && <p role="status">{downloadNotice}</p>}
 
       <TaskOverview data={overview} onOpen={openByDir} onDismissJob={dismissJob} />
 

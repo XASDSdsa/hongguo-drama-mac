@@ -6,11 +6,13 @@
 // bounded HTTPS transport; exact episode matching; supported codec selection.
 // Crypto tables and SDK protocol constants below are not user credentials.
 const crypto = require('node:crypto');
+const { gzipSync } = require('node:zlib');
 const sm3 = require('./sm3');
 const { registerPlaybackDevice } = require('./playback-device');
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
 const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
+const VIDEO_TAB_API = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/';
 const VIDEO_UA =
   'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 const PLAYBACK_UA = 'com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)';
@@ -712,10 +714,18 @@ function branchOf(url, body, khronos) {
   const low = iv & 15;
   return low - ((low * 171) >> 9) * 3;
 }
-function signedVideoRequest(payload, identity, endpoint) {
+// Playback routes and bodyless GET signing adapted from jackotom/hongguo-drama
+// a9d5431d0d (6.7/6.8). Keep recovery within the existing request deadline.
+function signedVideoRequest(payload, identity, endpoint, videoId = '') {
   const khronos = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(payload);
-  const device = { ...DEVICE, ...identity };
+  const body = videoId ? null : gzipSync(Buffer.from(payload));
+  const version = videoId ? '73932' : '74332';
+  const device = { ...DEVICE, version_code: version,
+    version_name: videoId ? '7.3.9.32' : '7.4.3.32',
+    manifest_version_code: version, update_version_code: version, pv_player: version, ...identity };
+  const playbackValues = videoId ? { video_id: videoId, video_id_type: '0', device_level: '1',
+    need_all_video_definition: '1', need_mp4_align: '0', use_os_player: '0',
+    video_platform: '1024', source: '0', from_video_id: '' } : {};
   const ticketBase = Date.now();
   let requestTicket = ticketBase;
   let query = '';
@@ -723,7 +733,7 @@ function signedVideoRequest(payload, identity, endpoint) {
   // Match the signing branch and playback profile used by the newer client.
   for (let offset = 0; offset < 128; offset += 1) {
     requestTicket = ticketBase + offset;
-    const values = { ...device, ts: String(khronos), _rticket: String(requestTicket) };
+    const values = { ...device, ...playbackValues, ts: String(khronos), _rticket: String(requestTicket) };
     query = pythonUrlEncode(values);
     url = `${endpoint}?${query}`;
     if (branchOf(url, body, khronos) === 0) break;
@@ -731,9 +741,10 @@ function signedVideoRequest(payload, identity, endpoint) {
   }
   const random = Math.floor(Math.random() * 65536);
   const headers = {
-    'User-Agent': PLAYBACK_UA,
+    'User-Agent': VIDEO_UA.replace(DEVICE.version_code, version),
     Accept: 'application/json; charset=utf-8,application/x-protobuf',
-    'Content-Type': 'application/json; charset=UTF-8',
+    'passport-sdk-version': videoId ? '50561' : '5051452',
+    'x-ss-dp': String(device.aid),
     'x-xs-from-web': '0',
     'x-ss-req-ticket': String(requestTicket),
     'sdk-version': '2',
@@ -747,7 +758,13 @@ function signedVideoRequest(payload, identity, endpoint) {
     'x-tt-store-region': 'cn',
     'x-tt-store-region-src': 'did',
   };
-  return { url, headers, body };
+  if (body) Object.assign(headers, {
+    'Content-Type': 'application/json; charset=UTF-8',
+    'Content-Encoding': 'gzip',
+    'x-ss-stub': crypto.createHash('md5').update(body).digest('hex').toUpperCase(),
+  });
+  else headers['x-tt-request-tag'] = 't=0;n=0';
+  return { url, headers, body, method: videoId ? 'GET' : 'POST' };
 }
 function parseFallback(value) {
   if (typeof value === 'string') {
@@ -893,9 +910,9 @@ async function fetchAppPlayUrl(vid) {
   const deadline = Date.now() + 12000;
   const signal = AbortSignal.timeout(12000);
   const requestModel = async (endpoint, alternate = false) => {
-    const { url, headers, body } = signedVideoRequest(payload, identity, endpoint);
+    const { url, headers, body, method } = signedVideoRequest(payload, identity, endpoint, alternate ? vid : '');
     if (alternate) headers.Connection = 'close';
-    return requestJson(url, { method: 'POST', headers, data: body }, deadline, signal);
+    return requestJson(url, { method, headers, data: body }, deadline, signal);
   };
   let response;
   try {
@@ -911,11 +928,11 @@ async function fetchAppPlayUrl(vid) {
     }
     if (deadline - Date.now() < 500) throw error;
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const alternate = VIDEO_API.replace('api5-normal-sinfonlineb.', 'api5-normal-hl.');
-    response = await requestModel(alternate, true);
+    response = await requestModel(VIDEO_TAB_API, true);
   }
   if (Number(response.Code || response.code || 0) !== 0) throw new Error('App 接口暂未提供本集播放信息');
-  const entry = response.data?.[vid];
+  const entries = response.data?.video_model_data ?? response.data;
+  const entry = entries?.[vid];
   const model = typeof entry?.video_model === 'string' ? jsonBody(entry.video_model) : entry?.video_model;
   if (!model) throw new Error('App 接口未返回所选分集，已停止取址');
   const readFallback = async () => {
@@ -927,7 +944,7 @@ async function fetchAppPlayUrl(vid) {
     }
     return outer?.video_info?.data;
   };
-  if (!Array.isArray(model.video_list) || !model.video_list.length) {
+  if (!model.video_list || typeof model.video_list !== 'object' || !Object.keys(model.video_list).length) {
     return parseAppPlayModel(await readFallback(), VIDEO_UA);
   }
   try {

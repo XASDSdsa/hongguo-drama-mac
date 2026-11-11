@@ -942,6 +942,9 @@ export default function SeriesDetail({ folder, active = true }) {
   const downloadingIds = (detail?.missing || [])
     .filter((item) => item.state === 'downloading' && item.task?.id)
     .map((item) => item.task.id);
+  const failedDownloadIds = (detail?.missing || [])
+    .filter((item) => item.state === 'failed' && item.task?.status === 'failed')
+    .map((item) => item.task.id);
   const pausedIds = (detail?.missing || [])
     .filter((item) => item.state === 'failed' && item.task?.status === 'stopped')
     .map((item) => item.task.id);
@@ -1085,6 +1088,19 @@ export default function SeriesDetail({ folder, active = true }) {
                   : `处理前 ${selectedCount} 集（共 ${episodes.length} 集）`}
               </span>
               <span className="lib-toolbar-btns">
+                {failedDownloadIds.length > 0 && (
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => runTile(async () => {
+                      const result = await window.electronAPI.retryTasks(failedDownloadIds);
+                      if (result?.success) setNotice(`已将 ${result.count} 集加入重新下载队列`);
+                      return result;
+                    })}
+                    title="重新获取播放地址，批量下载这部剧中失败的集数"
+                  >
+                    一键重下失败集（{failedDownloadIds.length} 集）
+                  </button>
+                )}
                 {downloadingIds.length > 0 && (
                   <button
                     className="btn btn-sm"

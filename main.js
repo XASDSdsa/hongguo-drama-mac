@@ -2193,7 +2193,7 @@ async function executeHongguoDownload(task, attempt = 0) {
       }
     } else if (
       attempt < downloadRetryDelays.length &&
-      !(error.source === 'app' && (error.code === 'EMPTY_RESPONSE' || [403, 429].includes(error.status))) &&
+      !(error.source === 'app' && [403, 429].includes(error.status)) &&
       downloadErrors.isAutoRetryable({
         message: error.message,
         code: error.code,

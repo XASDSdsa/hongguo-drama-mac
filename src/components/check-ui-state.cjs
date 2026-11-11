@@ -801,5 +801,52 @@ function mount(file, api, props = {}) {
     const detailSource = fs.readFileSync(`${__dirname}/SeriesDetail.jsx`, 'utf8');
     assert.ok(!detailSource.includes('/> 返回剧集列表') && !/onBack/.test(detailSource), 'no back button inside the page');
   });
+  await test('one-click retry submits only failed downloads and blocks duplicate clicks', async () => {
+    const pending = deferred();
+    const calls = [];
+    let reads = 0;
+    const ui = mount('SeriesLibrary', {
+      libraryList: async () => ({ success: true, folders: [], root: '/root' }),
+      getDownloadTasks: async () => {
+        reads++;
+        return [
+          { id: 'failed-1', status: 'failed' }, { id: 'completed', status: 'completed' },
+          { id: 'active', status: 'downloading' }, { id: 'pending', status: 'pending' },
+          { id: 'stopped', status: 'stopped' }, { id: 'failed-2', status: 'failed' },
+        ];
+      },
+      retryTasks: (ids) => { calls.push([...ids]); return pending.promise; },
+    });
+    await ui.flush();
+    const retry = ui.button('一键重下失败集');
+    assert.ok(retry, 'visible without opening a series or changing pages');
+    const request = retry.props.onClick();
+    retry.props.onClick();
+    await ui.flush();
+    assert.equal(reads, 1);
+    assert.deepEqual(calls, [['failed-1', 'failed-2']]);
+    assert.equal(ui.button('正在提交').props.disabled, true);
+    pending.resolve({ success: true, count: 2 });
+    await request;
+    await ui.flush();
+    assert.ok(ui.text().includes('已将 2 集加入重新下载队列'));
+    assert.equal(ui.button('一键重下失败集').props.disabled, false);
+    ui.unmount();
+  });
+  await test('one-click retry handles empty and rejected requests with visible feedback', async () => {
+    for (const mode of ['empty', 'failure']) {
+      const ui = mount('SeriesLibrary', {
+        libraryList: async () => ({ success: true, folders: [], root: '/root' }),
+        getDownloadTasks: async () => mode === 'empty' ? [] : [{ id: 'failed', status: 'failed' }],
+        retryTasks: async () => ({ success: false, error: '无法保存下载任务' }),
+      });
+      await ui.flush();
+      await ui.button('一键重下失败集').props.onClick();
+      await ui.flush();
+      assert.ok(ui.text().includes(mode === 'empty' ? '当前没有下载失败的集数' : '无法保存下载任务'));
+      assert.equal(ui.button('一键重下失败集').props.disabled, false);
+      ui.unmount();
+    }
+  });
   process.exitCode = failures ? 1 : 0;
 })();

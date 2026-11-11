@@ -55,16 +55,29 @@ function fixture({
     assert.equal(config.maxRedirects, 0);
     assert.ok(config.timeout > 0 && config.timeout <= 12000);
     assert.ok(config.signal);
-    if (config.method === 'POST') {
+    if (new URL(config.url).pathname.includes('multi_video_model')) {
       assert.ok(config.headers['x-medusa']);
       assert.ok(config.headers['x-gorgon']);
       assert.equal(new URL(config.url).searchParams.get('device_id'), registrations.at(-1));
+      if (config.method === 'POST') {
+        assert.equal(config.headers['Content-Encoding'], 'gzip');
+        assert.deepEqual(JSON.parse(require('node:zlib').gunzipSync(config.data)).mixed_video_id_map, { 1004: ['11'] });
+        assert.equal(config.headers['x-ss-stub'], crypto.createHash('md5').update(config.data).digest('hex').toUpperCase());
+      } else {
+        assert.equal(config.method, 'GET');
+        assert.equal(config.data, null);
+        assert.equal(config.headers['x-ss-stub'], undefined);
+        assert.equal(new URL(config.url).searchParams.get('video_id'), '11');
+        assert.equal(new URL(config.url).searchParams.get('version_code'), '73932');
+      }
       if (calls.length <= emptyResponses) return { status: 200, headers: {}, data: '' };
       const model = { video_model: JSON.stringify(inline || { fallback_api: fallback }) };
       return {
         status: modelStatus,
         headers: {},
-        data: JSON.stringify({ code: 0, data: { 999: model, ...(wrongVid ? {} : { 11: model }) } }),
+        data: JSON.stringify({ code: 0, data: config.method === 'GET'
+          ? { video_model_data: { 999: model, ...(wrongVid ? {} : { 11: model }) } }
+          : { 999: model, ...(wrongVid ? {} : { 11: model }) } }),
       };
     }
     if (redirect) return { status: 302, headers: { location: redirect }, data: '' };
@@ -98,6 +111,7 @@ function fixture({
     module: { exports: {} },
     require: (name) => {
       if (name === 'axios') return axios;
+      if (name === 'node:zlib') return require(name);
       if (name === './sm3') return require(path.join(nativeDir, 'sm3'));
       if (name === './playback-device') return {
         registerPlaybackDevice: async () => {
@@ -139,14 +153,22 @@ const checks = [
     },
   ],
   [
-    'empty primary response switches host with a fresh device and accepts inline media',
+    'empty primary response switches to signed bodyless video_tab and reads its nested episode model',
     async () => {
       const { fetch, calls, registrations } = fixture({ emptyResponses: 1, inline: { video_list: [inlineRow] } });
       assert.equal((await fetch('11')).url, inlineRow.main_url);
       assert.equal(calls.length, 2);
-      assert.equal(new URL(calls[1].url).hostname, 'api5-normal-hl.fqnovel.com');
+      assert.equal(new URL(calls[1].url).pathname, '/reading/bookapi/video_tab/multi_video_model/v1/');
       assert.equal(calls[1].signal, calls[0].signal);
       assert.equal(registrations.length, 2);
+    },
+  ],
+  [
+    'inline object models are parsed without requesting a fallback URL',
+    async () => {
+      const { fetch, calls } = fixture({ inline: { video_list: { video_1: inlineRow } } });
+      assert.equal((await fetch('11')).url, inlineRow.main_url);
+      assert.equal(calls.length, 1);
     },
   ],
   [
