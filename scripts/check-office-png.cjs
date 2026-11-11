@@ -108,11 +108,14 @@ app.whenReady().then(async () => {
   const lower = paperDeviation(rendered.height - 90);
   assert.ok(upper > 2 && lower < 6 && lower > upper + 0.3, `paper grain varies by region: ${upper}, ${lower}`);
   console.log(`PASS A4 report layout and paper grain: ${rendered.width} × ${rendered.height}`);
-  const missingFont = 'ReportTestFontDefinitelyMissing';
-  onePage['word/document.xml'] = onePage['word/document.xml'].replaceAll('Arial', missingFont);
-  const missingReport = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
-  await assert.rejects(renderCostReportPng(missingReport, options), new RegExp(missingFont));
-  console.log('PASS exact font check rejects a missing template font');
+  if (!wps) {
+    const missingFont = 'ReportTestFontDefinitelyMissing';
+    onePage['word/document.xml'] = onePage['word/document.xml'].replaceAll('Arial', missingFont);
+    const missingReport = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
+    await assert.rejects(renderCostReportPng(missingReport, options), new RegExp(missingFont));
+    console.log('PASS exact font check rejects a missing template font');
+  }
+
 
 
   app.exit(0);

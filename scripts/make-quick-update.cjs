@@ -11,7 +11,7 @@ const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
 const pkg = require('../package.json');
 
 const root = path.join(__dirname, '..');
-const baseVersions = ['1.2.39', '1.2.40', '1.2.41', '1.2.42', '1.2.43', '1.2.44'];
+const baseVersions = ['1.2.39', '1.2.40', '1.2.41', '1.2.42', '1.2.43', '1.2.44', '1.2.45'];
 const exeName = `${pkg.build.productName}.exe`;
 const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 

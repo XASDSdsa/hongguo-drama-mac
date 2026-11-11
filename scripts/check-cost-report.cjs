@@ -23,6 +23,18 @@ assert.throws(() => checkReportFonts(
   { fonts: ['仿宋_GB2312'], eastAsianFonts: ['仿宋_GB2312'] },
   [{ name: 'FandolFang-Regular', embedded: true, han: true }],
 ), /仿宋_GB2312/);
+assert.doesNotThrow(() => checkReportFonts(
+  { nativeWps: true, fonts: ['方正小标宋简体'], eastAsianFonts: ['方正小标宋简体'] },
+  [{ name: 'ABCDEF+WpsSubsetFont', embedded: true, han: true }],
+));
+assert.doesNotThrow(() => checkReportFonts(
+  { nativeWps: true, fonts: ['方正小标宋简体'], eastAsianFonts: ['方正小标宋简体'] },
+  [], // WPS may freeze the text as paths or pixels.
+));
+assert.throws(() => checkReportFonts(
+  { nativeWps: true, fonts: ['方正小标宋简体'], eastAsianFonts: ['方正小标宋简体'] },
+  [{ name: 'SomeSystemFont', embedded: false, han: true }],
+), /未嵌入/);
 const root = path.join(__dirname, '..');
 
 // ---- 价格：官方示例（doubao-seedance-2.5，输入不含视频，5 秒 16:9）480p 3.36、720p 7.56、1080p 18.71 元 ----

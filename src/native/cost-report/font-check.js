@@ -3,6 +3,14 @@
 // Localized family names and PostScript names can identify the same font.
 // FangSong and the older GB2312 face are distinct entries.
 function checkReportFonts(required, used) {
+  // A WPS PDF can use subset names, glyph outlines or page images. Its embedded
+  // glyph data is authoritative for the appearance the user sees in WPS.
+  if (required.nativeWps) {
+    if (used.some((font) => !font.embedded)) {
+      throw new Error('WPS 输出中存在未嵌入的文字字形，无法保证 PNG 与 WPS 显示一致。');
+    }
+    return;
+  }
   const aliases = {
     方正小标宋简体: ['FZXiaoBiaoSong-B05S', 'FZXiaoBiaoSong', 'FZXBSJW', 'FZXBSJW--GB1-0'],
     仿宋_GB2312: ['FangSong_GB2312', 'FangSong-GB2312', 'SimFang_GB2312'],

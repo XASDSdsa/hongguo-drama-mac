@@ -88,7 +88,7 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
     data: Uint8Array.fromBase64(data),
     useSystemFonts: true,
     stopAtErrors: true,
-    fontExtraProperties: requirements.fonts.length > 0,
+    fontExtraProperties: requirements.nativeWps || requirements.fonts.length > 0,
   });
   const createCanvas = (width, height) => Object.assign(document.createElement('canvas'), { width, height });
   try {
@@ -127,9 +127,9 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
       await page.render({ canvas, canvasContext, viewport, background: '#fff' }).promise;
       const { items } = await page.getTextContent();
       const textBoxes = items.filter((item) => item.str?.trim()).map((item) => {
-        if (requirements.fonts.length && /[\p{L}\p{N}]/u.test(item.str)) {
+        if ((requirements.nativeWps || requirements.fonts.length) && /[\p{L}\p{N}]/u.test(item.str)) {
           const font = page.commonObjs.has(item.fontName) ? page.commonObjs.get(item.fontName) : null;
-          const identity = usedFonts.get(item.fontName) || { name: font?.name, embedded: Boolean(font?.data) && !font.missingFile };
+          const identity = usedFonts.get(item.fontName) || { name: font?.name, embedded: Boolean(font?.data?.byteLength || (font?.isType3Font && font.charProcOperatorList)) && !font.missingFile && !font.isInvalidPDFjsFont };
           identity.han ||= /\p{Script=Han}/u.test(item.str);
           usedFonts.set(item.fontName, identity);
         }
@@ -166,7 +166,7 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
       const renderedLines = [...lines.values()].map((line) =>
         line.sort((a, b) => a.x - b.x).map(({ text }) => text).join('').normalize('NFKC').replace(/\s/g, ''),
       );
-      if (requirements.notes.some((note) => !renderedLines.some((line) => line.includes(note)))) {
+      if (!requirements.nativeWps && requirements.notes.some((note) => !renderedLines.some((line) => line.includes(note)))) {
         throw new Error('转换时表头换行与原模板不一致，无法按原模板导出 PNG。');
       }
     }
@@ -218,9 +218,10 @@ async function renderCostReportPng(docx, { office } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cost-report-png-'));
   try {
     const requirements = costReportPngRequirements(docx);
+    requirements.nativeWps = process.platform === 'win32' && !office;
     const input = path.join(dir, 'report.docx');
     await fs.writeFile(input, docx);
-    const pdf = process.platform === 'win32' && !office
+    const pdf = requirements.nativeWps
       ? await renderWpsPdf(input, path.join(dir, 'report.pdf'))
       : await renderLibreOfficePdf(input, dir, office || await findLibreOffice());
     return await renderPdf(pdf, requirements);
