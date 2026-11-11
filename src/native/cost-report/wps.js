@@ -34,10 +34,9 @@ try {
   $wps.Visible = $false
   $wps.DisplayAlerts = 0
   $wps.AutomationSecurity = 3
-  $missing = [System.Reflection.Missing]::Value
-  $report = $wps.Documents.Open($env:COST_REPORT_WPS_DOCX, $false, $true, $false, $missing, $missing, $false, $missing, $missing, $missing, $missing, $false, $false, $missing, $true)
+  $report = $wps.Documents.Open($env:COST_REPORT_WPS_DOCX, $false, $true, $false)
   # PDF, print quality, all pages, and do not open the result in a viewer.
-  $report.ExportAsFixedFormat($env:COST_REPORT_WPS_PDF, 17, $false, 0, 0, 1, 1, 0, $false, $false, 0, $true, $false, $false)
+  $report.ExportAsFixedFormat($env:COST_REPORT_WPS_PDF, 17, $false)
 } catch {
   $fault = $_
 } finally {

@@ -199,33 +199,41 @@ jobs:
           npm run build:react
           node scripts/make-quick-update.cjs dist/quick
 
+      - uses: actions/cache/restore@v4
+        id: wps-installer
+        with:
+          path: ${{ runner.temp }}/WPS_Setup_29690.exe
+          key: wps-cn-29690-e3a12702-windows
+
       - name: Install WPS on the disposable Windows test machine
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $installer = Join-Path $env:RUNNER_TEMP 'WPS_Setup_29690.exe'
-          $chunks = Join-Path $env:RUNNER_TEMP 'wps-download-parts'
-          New-Item -ItemType Directory -Force -Path $chunks | Out-Null
-          $size = 311844128
-          $partSize = 8388608
-          $count = [int][Math]::Ceiling($size / $partSize)
-          0..($count - 1) | ForEach-Object -Parallel {
-            $start = $_ * $using:partSize
-            $end = [Math]::Min($using:size - 1, $start + $using:partSize - 1)
-            $output = Join-Path $using:chunks "$_.part"
-            & curl.exe --fail --location --retry 1 --max-time 120 --silent --show-error --range "$start-$end" 'https://official-package.wpscdn.cn/wps/download/WPS_Setup_29690.exe' --output $output
-            if ($LASTEXITCODE -ne 0) { throw "WPS download part $_ failed" }
-          } -ThrottleLimit 8
-          $joined = [IO.File]::Create($installer)
-          try {
-            for ($part = 0; $part -lt $count; $part++) {
-              $piece = Join-Path $chunks "$part.part"
-              $expected = [Math]::Min($partSize, $size - $part * $partSize)
-              if (!(Test-Path $piece) -or (Get-Item $piece).Length -ne $expected) { throw "Incomplete WPS part $part" }
-              $stream = [IO.File]::OpenRead($piece)
-              try { $stream.CopyTo($joined) } finally { $stream.Dispose() }
-            }
-          } finally { $joined.Dispose() }
+          if (!(Test-Path $installer)) {
+            $chunks = Join-Path $env:RUNNER_TEMP 'wps-download-parts'
+            New-Item -ItemType Directory -Force -Path $chunks | Out-Null
+            $size = 311844128
+            $partSize = 8388608
+            $count = [int][Math]::Ceiling($size / $partSize)
+            0..($count - 1) | ForEach-Object -Parallel {
+              $start = $_ * $using:partSize
+              $end = [Math]::Min($using:size - 1, $start + $using:partSize - 1)
+              $output = Join-Path $using:chunks "$_.part"
+              & curl.exe --fail --location --retry 1 --max-time 120 --silent --show-error --range "$start-$end" 'https://official-package.wpscdn.cn/wps/download/WPS_Setup_29690.exe' --output $output
+              if ($LASTEXITCODE -ne 0) { throw "WPS download part $_ failed" }
+            } -ThrottleLimit 20
+            $joined = [IO.File]::Create($installer)
+            try {
+              for ($part = 0; $part -lt $count; $part++) {
+                $piece = Join-Path $chunks "$part.part"
+                $expected = [Math]::Min($partSize, $size - $part * $partSize)
+                if (!(Test-Path $piece) -or (Get-Item $piece).Length -ne $expected) { throw "Incomplete WPS part $part" }
+                $stream = [IO.File]::OpenRead($piece)
+                try { $stream.CopyTo($joined) } finally { $stream.Dispose() }
+              }
+            } finally { $joined.Dispose() }
+          }
           if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne 'E3A12702BA1196654C6454D2881ABBE903EF71019D0342127845D76A12F8C120') { throw 'WPS installer hash mismatch' }
           $signature = Get-AuthenticodeSignature -LiteralPath $installer
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Kingsoft') { throw 'WPS signature check failed' }
@@ -241,6 +249,12 @@ jobs:
           $end = $source.IndexOf([char]96 + ';', $start)
           [void][System.Management.Automation.Language.Parser]::ParseInput($source.Substring($start, $end - $start), [ref]$null, [ref]$errors)
           if ($errors) { throw ($errors -join "`n") }
+
+      - uses: actions/cache/save@v4
+        if: steps.wps-installer.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/WPS_Setup_29690.exe
+          key: wps-cn-29690-e3a12702-windows
 
       - name: Verify the complete WPS to final PNG pipeline
         shell: pwsh
