@@ -57,12 +57,6 @@ try {
   Write-Host "安装位置 $InstallDir"
   $exe = Join-Path $InstallDir $exeName
   Confirm-Base $exe
-  $office = Join-Path $InstallDir 'resources\LibreOffice\program'
-  foreach ($name in @('soffice.com', 'msvcp140.dll', 'vcruntime140_1.dll')) {
-    if (!(Test-Path -LiteralPath (Join-Path $office $name) -PathType Leaf)) {
-      throw "安装缺少报告转换组件，请先安装 Windows 1.2.39 完整版。"
-    }
-  }
   while (@(Get-Process -Name changeFileName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count) {
     if ((Read-Host '请退出 changeFileName 后按回车。输入 Q 取消') -eq 'Q') { return }
   }

@@ -190,6 +190,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           node scripts/check-undefined-names.cjs
           node scripts/check-cost-report.cjs
+          node scripts/check-cost-report-image.cjs
           node scripts/check-series-library.cjs
           $errors = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -198,11 +199,33 @@ jobs:
           npm run build:react
           node scripts/make-quick-update.cjs dist/quick
 
-      - name: Verify bundled offline PNG conversion
+      - name: Install WPS on the disposable Windows test machine
         shell: pwsh
         run: |
-          ./scripts/setup-libreoffice-win.ps1
-          & ./node_modules/.bin/electron.cmd scripts/check-office-png.cjs
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'WPS_Setup_29690.exe'
+          & curl.exe --fail --location --retry 3 --max-time 180 --silent --show-error 'https://official-package.wpscdn.cn/wps/download/WPS_Setup_29690.exe' --output $installer
+          if ($LASTEXITCODE -ne 0) { throw 'WPS download failed' }
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne 'E3A12702BA1196654C6454D2881ABBE903EF71019D0342127845D76A12F8C120') { throw 'WPS installer hash mismatch' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Kingsoft') { throw 'WPS signature check failed' }
+          $destination = Join-Path $env:RUNNER_TEMP 'wps-test'
+          $setup = Start-Process -FilePath $installer -ArgumentList @('/S', '-agreelicense', "/D=$destination") -PassThru
+          if (!$setup.WaitForExit(180000)) { Stop-Process -Id $setup.Id -Force; throw 'WPS install timed out' }
+          if ($setup.ExitCode -ne 0) { throw "WPS install failed $($setup.ExitCode)" }
+          # This is an empty disposable runner, with no user documents.
+          Get-Process -Name wps,wpsoffice,wpscenter -ErrorAction SilentlyContinue | Stop-Process -Force
+          $errors = $null
+          $source = Get-Content 'src/native/cost-report/wps.js' -Raw
+          $start = $source.IndexOf('String.raw' + [char]96) + 11
+          $end = $source.IndexOf([char]96 + ';', $start)
+          [void][System.Management.Automation.Language.Parser]::ParseInput($source.Substring($start, $end - $start), [ref]$null, [ref]$errors)
+          if ($errors) { throw ($errors -join "`n") }
+
+      - name: Verify the complete WPS to final PNG pipeline
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-office-png.cjs --wps
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v7

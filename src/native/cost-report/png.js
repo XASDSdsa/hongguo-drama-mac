@@ -9,6 +9,7 @@ const { promisify } = require('node:util');
 const { costReportPngRequirements } = require('./docx');
 const { checkReportFonts } = require('./font-check');
 const { finishReportPage } = require('./page-look');
+const { renderWpsPdf } = require('./wps');
 
 const run = promisify(execFile);
 
@@ -29,9 +30,7 @@ async function findLibreOffice() {
   return process.platform === 'win32' ? 'soffice.com' : 'soffice';
 }
 
-async function renderWord(docx, dir, office) {
-  const input = path.join(dir, 'report.docx');
-  await fs.writeFile(input, docx);
+async function renderLibreOfficePdf(input, dir, office) {
   const profile = pathToFileURL(path.join(dir, 'office-profile')).href;
   let diagnostics = '';
   try {
@@ -114,21 +113,21 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
     context.fillRect(0, 0, width, height);
     const usedFonts = new Map();
     const lines = new Map();
-    let top = 0;
-    for (const { page, viewport, w, h } of pages) {
+    for (const entry of pages) {
+      const { page, viewport, w, h } = entry;
       const canvas = createCanvas(w, h);
       const canvasContext = canvas.getContext('2d');
       await page.render({ canvas, canvasContext, viewport, background: '#fff' }).promise;
       const { items } = await page.getTextContent();
       const textBoxes = items.filter((item) => item.str?.trim()).map((item) => {
         if (requirements.fonts.length && /[\p{L}\p{N}]/u.test(item.str)) {
-          const font = page.commonObjs.get(item.fontName);
+          const font = page.commonObjs.has(item.fontName) ? page.commonObjs.get(item.fontName) : null;
           const identity = usedFonts.get(item.fontName) || { name: font?.name, embedded: Boolean(font?.data) && !font.missingFile };
           identity.han ||= /\p{Script=Han}/u.test(item.str);
           usedFonts.set(item.fontName, identity);
         }
         if (requirements.singlePage) {
-          const row = Math.round((item.transform[5] - top) * 2);
+          const row = Math.round(item.transform[5] * 2);
           if (!lines.has(row)) lines.set(row, []);
           lines.get(row).push({ x: item.transform[4], text: item.str });
         }
@@ -136,9 +135,7 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
         const height = Math.hypot(skew, size);
         return { x, y: baseline - height, w: item.width * viewport.scale, h: height * 1.22 };
       });
-      finishPage(canvasContext, w, h, textBoxes);
-      context.drawImage(canvas, Math.floor((width - w) / 2), top);
-      top += h;
+      entry.raster = { canvas, canvasContext, textBoxes };
       page.cleanup();
     }
     checkFonts(requirements, [...usedFonts.values()]);
@@ -150,6 +147,14 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
       if (requirements.notes.some((note) => !renderedLines.some((line) => line.includes(note)))) {
         throw new Error('转换时表头换行与原模板不一致，无法按原模板导出 PNG。');
       }
+    }
+    // WPS has already fixed the layout and each clean page is fully rasterized.
+    let top = 0;
+    for (const { raster, w, h } of pages) {
+      finishPage(raster.canvasContext, w, h, raster.textBoxes, crypto.getRandomValues(new Uint32Array(1))[0]);
+      context.drawImage(raster.canvas, Math.floor((width - w) / 2), top);
+      raster.canvas.width = 0;
+      top += h;
     }
     return output.toDataURL('image/png');
   } finally {
@@ -190,9 +195,12 @@ async function renderPdf(pdf, requirements) {
 async function renderCostReportPng(docx, { office } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cost-report-png-'));
   try {
-    const executable = office || await findLibreOffice();
     const requirements = costReportPngRequirements(docx);
-    const pdf = await renderWord(docx, dir, executable);
+    const input = path.join(dir, 'report.docx');
+    await fs.writeFile(input, docx);
+    const pdf = process.platform === 'win32' && !office
+      ? await renderWpsPdf(input, path.join(dir, 'report.pdf'))
+      : await renderLibreOfficePdf(input, dir, office || await findLibreOffice());
     return await renderPdf(pdf, requirements);
   } finally {
     await fs.rm(dir, { force: true, recursive: true });

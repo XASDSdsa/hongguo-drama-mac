@@ -1,7 +1,7 @@
 'use strict';
 
 // This function also runs inside the isolated PDF canvas. Keep it self-contained.
-function finishReportPage(context, width, height, textBoxes) {
+function finishReportPage(context, width, height, textBoxes, variation = 0) {
   const source = context.getImageData(0, 0, width, height);
   const warped = context.createImageData(width, height);
   const textMask = new Uint8Array(width * height);
@@ -18,7 +18,10 @@ function finishReportPage(context, width, height, textBoxes) {
   for (let x = 0; x < width; x++) curve[x] = (x / width) * 4.5;
   for (let y = 0; y < height; y++) {
     const v = y / height;
-    const angle = (0.33 + 0.07 * Math.sin(2 * Math.PI * v + 0.35) + 0.025 * Math.cos(5.4 * Math.PI * v)) * Math.PI / 180;
+    const phase = (variation % 65521) / 65521;
+    const direction = variation & 1 ? -1 : 1;
+    const angle = direction * (0.33 + 0.07 * Math.sin(2 * Math.PI * v + 0.35 + phase) +
+      0.025 * Math.cos(5.4 * Math.PI * v)) * Math.PI / 180;
     const shift = angle * (y - height / 2) + 1.3 * Math.sin(8 * v + 0.3);
     for (let x = 0; x < width; x++) {
       const sx = x + shift;
@@ -46,7 +49,7 @@ function finishReportPage(context, width, height, textBoxes) {
   }
 
   function grainAt(x, y, seed) {
-    let hash = Math.imul(x ^ seed, 0x45d9f3b) ^ Math.imul(y, 0x119de1f3);
+    let hash = Math.imul(x ^ seed ^ variation, 0x45d9f3b) ^ Math.imul(y, 0x119de1f3);
     hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
     return ((hash ^ (hash >>> 16)) >>> 0) / 0xffffffff - 0.5;
   }
@@ -81,8 +84,22 @@ function finishReportPage(context, width, height, textBoxes) {
         const paper = shade * ((low - 228) / 27) * (1 - chroma / 12);
         for (let c = 0; c < 3; c++) output[at + c] -= paper;
       }
-      if (!ink[index] || chroma > 16 || x < 1 || x + 1 === width || y < 1 || y + 1 === height) continue;
+      if (!ink[index] || x < 1 || x + 1 === width || y < 1 || y + 1 === height) continue;
       const stride = width * 4;
+      const adjacent = [at - 4, at + 4, at - stride, at + stride];
+      const isRed = (offset) => pixels[offset] > 95 &&
+        pixels[offset] - pixels[offset + 1] > 45 && pixels[offset] - pixels[offset + 2] > 35;
+      const isDark = (offset) => Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]) < 145 &&
+        Math.abs(pixels[offset] - pixels[offset + 1]) < 18;
+      // Only mix pigment where the existing red ink meets a text stroke.
+      if (isRed(at) && adjacent.some(isDark)) {
+        const contact = 0.6 + grainAt(x, y, 179) * 0.35;
+        for (let c = 0; c < 3; c++) output[at + c] -= pixels[at + c] * 0.10 * contact;
+      } else if (isDark(at) && adjacent.some(isRed)) {
+        output[at + 1] -= 5;
+        output[at + 2] -= 4;
+      }
+      if (chroma > 16) continue;
       const neighbors = [at - 4, at + 4, at - stride, at + stride];
       if (low > 174 && neighbors.every((p) => pixels[p + 1] > 174)) continue;
       for (let c = 0; c < 3; c++) {

@@ -40,11 +40,13 @@ const entries = {
 
 app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
+  const wps = process.argv[2] === '--wps';
   const mac = process.platform === 'darwin';
   const runtime = process.argv[2] || (mac ? 'build/libreoffice/darwin-arm64' : 'build/libreoffice/win32-x64');
   const office = path.resolve(runtime, mac ? 'LibreOffice.app/Contents/MacOS/soffice' : 'program/soffice.com');
+  const options = wps ? {} : { office };
   const docx = writeZip(Object.entries(entries).map(([name, data]) => ({ name, data: Buffer.from(data) })));
-  const bytes = await renderCostReportPng(docx, { office });
+  const bytes = await renderCostReportPng(docx, options);
   assert.equal(bytes[25], 2, 'export must be RGB');
   const { width, height, data } = PNG.sync.read(bytes);
   assert(width > 1100 && height >= 3200, 'both A4 pages must be rendered');
@@ -61,7 +63,9 @@ app.whenReady().then(async () => {
   const cell = (content, index) => `<w:tc><w:tcPr><w:tcW w:w="${widths[index]}" w:type="dxa"/></w:tcPr>` + content + '</w:tc>';
   const headers = ['序号', '微短剧名称', '集数和总时长', '总投资额', '演员总片酬占比'];
   const notes = ['', '', '', '（需＜100万）', '（需＜40%）'];
-  const table = '<w:tbl><w:tblPr/><w:tblGrid>' + widths.map((width) => `<w:gridCol w:w="${width}"/>`).join('') + '</w:tblGrid>' +
+  const table = '<w:tbl><w:tblPr><w:tblBorders>' +
+    ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map((side) => `<w:${side} w:val="single" w:sz="4" w:color="202020"/>`).join('') +
+    '</w:tblBorders></w:tblPr><w:tblGrid>' + widths.map((width) => `<w:gridCol w:w="${width}"/>`).join('') + '</w:tblGrid>' +
     '<w:tr>' + headers.map((text, index) => cell(paragraph(text) + (notes[index] ? paragraph(notes[index]) : ''), index)).join('') + '</w:tr>' +
     '<w:tr>' + ['1', '合成测试', '71集', '6万元', '15%'].map((text, index) => cell(paragraph(text), index)).join('') + '</w:tr></w:tbl>';
   const body = paragraph('成本配置比例情况报告') + table + paragraph('Exact Font Test', 'Arial') +
@@ -69,7 +73,9 @@ app.whenReady().then(async () => {
     '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:docGrid w:type="lines" w:linePitch="312"/></w:sectPr>';
   const onePage = { ...entries, 'word/document.xml': entries['word/document.xml'].replace(/<w:body>[\s\S]*<\/w:body>/, '<w:body>' + body + '</w:body>') };
   const report = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
-  const rendered = PNG.sync.read(await renderCostReportPng(report, { office }));
+  const originalBytes = Buffer.from(report);
+  const rendered = PNG.sync.read(await renderCostReportPng(report, options));
+  assert.deepEqual(report, originalBytes, 'the Word input is unchanged');
   assert.equal(rendered.height, 2573, 'report fits on one page');
   assert.ok(Math.abs(rendered.width / rendered.height - 210 / 297) < 0.002, 'A4 aspect ratio');
   function paperDeviation(yStart) {
@@ -93,7 +99,7 @@ app.whenReady().then(async () => {
   const missingFont = 'ReportTestFontDefinitelyMissing';
   onePage['word/document.xml'] = onePage['word/document.xml'].replaceAll('Arial', missingFont);
   const missingReport = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
-  await assert.rejects(renderCostReportPng(missingReport, { office }), new RegExp(missingFont));
+  await assert.rejects(renderCostReportPng(missingReport, options), new RegExp(missingFont));
   console.log('PASS exact font check rejects a missing template font');
 
 
