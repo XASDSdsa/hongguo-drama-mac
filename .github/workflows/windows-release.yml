@@ -204,8 +204,28 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $installer = Join-Path $env:RUNNER_TEMP 'WPS_Setup_29690.exe'
-          & curl.exe --fail --location --retry 3 --max-time 180 --silent --show-error 'https://official-package.wpscdn.cn/wps/download/WPS_Setup_29690.exe' --output $installer
-          if ($LASTEXITCODE -ne 0) { throw 'WPS download failed' }
+          $chunks = Join-Path $env:RUNNER_TEMP 'wps-download-parts'
+          New-Item -ItemType Directory -Force -Path $chunks | Out-Null
+          $size = 311844128
+          $partSize = 8388608
+          $count = [int][Math]::Ceiling($size / $partSize)
+          0..($count - 1) | ForEach-Object -Parallel {
+            $start = $_ * $using:partSize
+            $end = [Math]::Min($using:size - 1, $start + $using:partSize - 1)
+            $output = Join-Path $using:chunks "$_.part"
+            & curl.exe --fail --location --retry 1 --max-time 120 --silent --show-error --range "$start-$end" 'https://official-package.wpscdn.cn/wps/download/WPS_Setup_29690.exe' --output $output
+            if ($LASTEXITCODE -ne 0) { throw "WPS download part $_ failed" }
+          } -ThrottleLimit 8
+          $joined = [IO.File]::Create($installer)
+          try {
+            for ($part = 0; $part -lt $count; $part++) {
+              $piece = Join-Path $chunks "$part.part"
+              $expected = [Math]::Min($partSize, $size - $part * $partSize)
+              if (!(Test-Path $piece) -or (Get-Item $piece).Length -ne $expected) { throw "Incomplete WPS part $part" }
+              $stream = [IO.File]::OpenRead($piece)
+              try { $stream.CopyTo($joined) } finally { $stream.Dispose() }
+            }
+          } finally { $joined.Dispose() }
           if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne 'E3A12702BA1196654C6454D2881ABBE903EF71019D0342127845D76A12F8C120') { throw 'WPS installer hash mismatch' }
           $signature = Get-AuthenticodeSignature -LiteralPath $installer
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Kingsoft') { throw 'WPS signature check failed' }
@@ -227,6 +247,14 @@ jobs:
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-office-png.cjs --wps
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: wps-report-acceptance
+          path: dist/report-qa
+          if-no-files-found: ignore
+          retention-days: 2
 
       - uses: actions/upload-artifact@v7
         with:

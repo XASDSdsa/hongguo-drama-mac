@@ -82,7 +82,7 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
     URL.createObjectURL(new Blob([Uint8Array.fromBase64(source)], { type: 'text/javascript' }));
   const libraryUrl = moduleUrl(library);
   const workerUrl = moduleUrl(worker);
-  const { getDocument, GlobalWorkerOptions, Util } = await import(libraryUrl);
+  const { getDocument, GlobalWorkerOptions, Util, OPS } = await import(libraryUrl);
   GlobalWorkerOptions.workerSrc = workerUrl;
   const task = getDocument({
     data: Uint8Array.fromBase64(data),
@@ -111,6 +111,13 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
     const context = output.getContext('2d', { alpha: false });
     context.fillStyle = '#fff';
     context.fillRect(0, 0, width, height);
+    const paintOps = new Set([
+      OPS.stroke, OPS.closeStroke, OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke,
+      OPS.closeFillStroke, OPS.closeEOFillStroke, OPS.shadingFill, OPS.rawFillPath,
+      OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintInlineImageXObjectGroup,
+      OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObject, OPS.paintImageMaskXObjectGroup,
+      OPS.paintImageMaskXObjectRepeat, OPS.paintSolidColorImageMask,
+    ]);
     const usedFonts = new Map();
     const lines = new Map();
     for (const entry of pages) {
@@ -135,7 +142,22 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
         const height = Math.hypot(skew, size);
         return { x, y: baseline - height, w: item.width * viewport.scale, h: height * 1.22 };
       });
-      entry.raster = { canvas, canvasContext, textBoxes };
+      const glyphCanvas = createCanvas(w, h);
+      const glyphContext = glyphCanvas.getContext('2d');
+      await page.render({
+        canvas: glyphCanvas,
+        canvasContext: glyphContext,
+        viewport,
+        background: 'rgba(0,0,0,0)',
+        annotationMode: 0,
+        operationsFilter: (index, list) => {
+          const op = list.fnArray[index];
+          return !paintOps.has(op) && (op !== OPS.constructPath || !paintOps.has(list.argsArray[index][0]));
+        },
+      }).promise;
+      const textGlyphs = glyphContext.getImageData(0, 0, w, h).data;
+      glyphCanvas.width = 0;
+      entry.raster = { canvas, canvasContext, textBoxes, textGlyphs };
       page.cleanup();
     }
     checkFonts(requirements, [...usedFonts.values()]);
@@ -151,7 +173,7 @@ async function renderPages(data, library, worker, finishPage, checkFonts, requir
     // WPS has already fixed the layout and each clean page is fully rasterized.
     let top = 0;
     for (const { raster, w, h } of pages) {
-      finishPage(raster.canvasContext, w, h, raster.textBoxes, crypto.getRandomValues(new Uint32Array(1))[0]);
+      finishPage(raster.canvasContext, w, h, raster.textBoxes, crypto.getRandomValues(new Uint32Array(1))[0], raster.textGlyphs);
       context.drawImage(raster.canvas, Math.floor((width - w) / 2), top);
       raster.canvas.width = 0;
       top += h;

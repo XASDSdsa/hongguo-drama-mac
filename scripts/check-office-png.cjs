@@ -2,6 +2,8 @@
 
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const { renderWpsPdf } = require('../src/native/cost-report/wps');
 const { app } = require('electron');
 const { PNG } = require('pngjs');
 const { writeZip } = require('../src/native/cost-report/zip');
@@ -74,7 +76,17 @@ app.whenReady().then(async () => {
   const onePage = { ...entries, 'word/document.xml': entries['word/document.xml'].replace(/<w:body>[\s\S]*<\/w:body>/, '<w:body>' + body + '</w:body>') };
   const report = writeZip(Object.entries(onePage).map(([name, data]) => ({ name, data: Buffer.from(data) })));
   const originalBytes = Buffer.from(report);
-  const rendered = PNG.sync.read(await renderCostReportPng(report, options));
+  const finalPng = await renderCostReportPng(report, options);
+  const rendered = PNG.sync.read(finalPng);
+  if (wps) {
+    const output = path.resolve('dist/report-qa');
+    await fs.mkdir(output, { recursive: true });
+    const source = path.join(output, '成本配置报告-合成验收.docx');
+    await fs.writeFile(source, report);
+    await renderWpsPdf(source, path.join(output, 'wps-baseline.pdf'));
+    assert.ok((await fs.readFile(source)).equals(originalBytes), 'WPS leaves the source byte-for-byte intact');
+    await fs.writeFile(path.join(output, 'final-processed.png'), finalPng);
+  }
   assert.deepEqual(report, originalBytes, 'the Word input is unchanged');
   assert.equal(rendered.height, 2573, 'report fits on one page');
   assert.ok(Math.abs(rendered.width / rendered.height - 210 / 297) < 0.002, 'A4 aspect ratio');

@@ -1,7 +1,7 @@
 'use strict';
 
 // This function also runs inside the isolated PDF canvas. Keep it self-contained.
-function finishReportPage(context, width, height, textBoxes, variation = 0) {
+function finishReportPage(context, width, height, textBoxes, variation = 0, textGlyphs = null) {
   const source = context.getImageData(0, 0, width, height);
   const warped = context.createImageData(width, height);
   const textMask = new Uint8Array(width * height);
@@ -13,6 +13,7 @@ function finishReportPage(context, width, height, textBoxes, variation = 0) {
     }
   }
   const ink = new Uint8Array(width * height);
+  const glyphs = textGlyphs ? new Uint8Array(width * height) : null;
   const pixels = warped.data;
   const curve = new Float32Array(width);
   for (let x = 0; x < width; x++) curve[x] = (x / width) * 4.5;
@@ -40,6 +41,11 @@ function finishReportPage(context, width, height, textBoxes, variation = 0) {
       const near = (top * width + left) * 4;
       const far = near + width * 4;
       ink[index] = textMask[Math.round(sy) * width + Math.round(sx)];
+      if (glyphs) {
+        const a = textGlyphs[near + 3] * (1 - dx) + textGlyphs[near + 7] * dx;
+        const b = textGlyphs[far + 3] * (1 - dx) + textGlyphs[far + 7] * dx;
+        glyphs[index] = a * (1 - dy) + b * dy;
+      }
       for (let c = 0; c < 3; c++) {
         const a = source.data[near + c] * (1 - dx) + source.data[near + 4 + c] * dx;
         const b = source.data[far + c] * (1 - dx) + source.data[far + 4 + c] * dx;
@@ -92,7 +98,10 @@ function finishReportPage(context, width, height, textBoxes, variation = 0) {
       const isDark = (offset) => Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]) < 145 &&
         Math.abs(pixels[offset] - pixels[offset + 1]) < 18;
       // Only mix pigment where the existing red ink meets a text stroke.
-      if (isRed(at) && adjacent.some(isDark)) {
+      if (isRed(at) && glyphs?.[index]) {
+        const contact = (glyphs[index] / 255) * (0.6 + grainAt(x, y, 179) * 0.1);
+        for (let c = 0; c < 3; c++) output[at + c] -= pixels[at + c] * contact;
+      } else if (isRed(at) && adjacent.some(isDark)) {
         const contact = 0.6 + grainAt(x, y, 179) * 0.35;
         for (let c = 0; c < 3; c++) output[at + c] -= pixels[at + c] * 0.10 * contact;
       } else if (isDark(at) && adjacent.some(isRed)) {
