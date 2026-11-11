@@ -170,6 +170,7 @@ jobs:
           cache: npm
 
       - name: Verify release target
+        if: inputs.tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

@@ -31,8 +31,9 @@ function verifyPlayerUpdate(stage, unpacked, scratch) {
       : name.startsWith('hongguo-player/') ? path.join(install, 'resources', name) : path.join(install, name);
     assert.equal(sha(target), expected, name);
   }
+  execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(stage, 'update.ps1'), '-InstallDir', install], { stdio: 'pipe', timeout: 90000 });
   const java = path.join(install, 'resources/hongguo-player/runtime/bin/java.exe');
   execFileSync(java, ['-version'], { stdio: 'pipe', timeout: 20000 });
-  console.log('PASS real Windows update in a Chinese path: rollback restores old files; successful retry installs every native runtime file');
+  console.log('PASS real Windows update in a Chinese path: rollback restores old files; successful update and repeat installation verify the native runtime');
 }
 module.exports = { verifyPlayerUpdate };

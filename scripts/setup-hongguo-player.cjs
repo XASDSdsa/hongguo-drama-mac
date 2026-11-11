@@ -39,7 +39,7 @@ function unzip(file, destination) {
   fs.cpSync(path.join(project, 'build/bundle'), output, { recursive: true });
   fs.copyFileSync(path.join(original, 'LICENSE'), path.join(output, 'LICENSE.hongguotv.txt'));
   fs.copyFileSync(path.join(original, 'kotlin-tv/NOTICE.md'), path.join(output, 'NOTICE.hongguotv.md'));
-  fs.writeFileSync(path.join(output, 'SOURCE.txt'), 'hongguoTV kotlin-v0.11.1, GPL-3.0-only\nhttps://github.com/N3urda/hongguoTV/releases/tag/kotlin-v0.11.1\nSource archive SHA256 ' + SOURCE_SHA + '\nDesktop adapter source: scripts/hongguo-player in the changeFileName source repository.\nTemurin 17.0.21+9 runtime and its licenses are included in runtime/.\n');
+  fs.writeFileSync(path.join(output, 'SOURCE.txt'), 'hongguoTV kotlin-v0.11.1, GPL-3.0-only\nhttps://github.com/N3urda/hongguoTV/releases/tag/kotlin-v0.11.1\nSource archive SHA256 ' + SOURCE_SHA + '\nDesktop adapter source: scripts/hongguo-player in the changeFileName source repository.\nTemurin 17.0.21+9 runtime and its licenses are included in runtime/.\nCorresponding OpenJDK source: https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk-sources_17.0.21_9.tar.gz\n');
   const runtimeZip = path.join(cache, 'temurin17-win32-x64.zip');
   await download('https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_x64_windows_hotspot_17.0.21_9.zip', runtimeZip, JRE_SHA);
   const runtime = path.join(cache, 'jre');
