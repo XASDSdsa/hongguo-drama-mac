@@ -23,6 +23,10 @@ on:
         description: "true = 只出 Windows 快速更新包，沿用已安装的运行库。"
         required: false
         default: ''
+      native_verify_run:
+        description: "Validate the packaged native download pipeline from this build artifact run."
+        required: false
+        default: ''
       installer_only:
         description: "true = 构建并检查完整安装程序，跳过额外的绿色版 ZIP。"
         required: false
@@ -301,6 +305,44 @@ jobs:
           $archive = (Resolve-Path "dist/quick/ai-drama-assistant-$version-update.zip").Path
           gh release upload $env:RELEASE_TAG $archive
 
+  verify-native-download:
+    if: inputs.native_verify_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-quick-update
+          run-id: ${{ inputs.native_verify_run }}
+          github-token: ${{ github.token }}
+          path: dist/packaged-download-test
+      - name: Install the published Windows FFmpeg for full-media validation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ff"
+          gh release download v1.2.6 --repo "${{ github.repository }}" -p 'ffmpeg-*-win-x64.zip' -D "$RUNNER_TEMP/ff"
+          (cd "$RUNNER_TEMP/ff" && 7z x -y -bd ffmpeg-*-win-x64.zip > /dev/null)
+          ff=$(find "$RUNNER_TEMP/ff" -iname ffmpeg.exe | head -n 1)
+          echo "FFMPEG_PATH=$(cygpath -w "$ff")" >> "$GITHUB_ENV"
+          cygpath -w "$(dirname "$ff")" >> "$GITHUB_PATH"
+      - name: Download and fully decode two episodes through the packaged app
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem dist/packaged-download-test/*-update.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath dist/packaged-download-test/stage
+          node scripts/check-native-download.cjs dist/packaged-download-test/stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   publish-existing:
     if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
     runs-on: windows-latest
@@ -356,7 +398,7 @@ jobs:
           exit $failed
 
   build-windows:
-    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
+    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true' && inputs.native_verify_run == ''
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
