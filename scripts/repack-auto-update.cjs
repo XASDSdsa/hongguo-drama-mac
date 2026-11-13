@@ -57,7 +57,7 @@ async function main() {
   }
   uncache(path.join(unpacked, 'resources/app.asar'));
   for (const name of ['main.js', 'preload.js', 'src/native/app-updates.js']) {
-    assert.equal(extractFile(path.join(unpacked, 'resources/app.asar'), name).toString().replace(/\r\n/g, '\n'), fs.readFileSync(path.join(__dirname, '..', name), 'utf8').replace(/\r\n/g, '\n'), name);
+    assert.equal(extractFile(path.join(unpacked, 'resources/app.asar'), path.normalize(name)).toString().replace(/\r\n/g, '\n'), fs.readFileSync(path.join(__dirname, '..', name), 'utf8').replace(/\r\n/g, '\n'), name);
   }
   fs.mkdirSync(destination, { recursive: true });
   await build({ targets: Platform.WINDOWS.createTarget('nsis', Arch.x64), prepackaged: unpacked, config: configFile, publish: 'never' });
