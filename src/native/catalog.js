@@ -89,7 +89,8 @@ function readRankData(html) {
     const found = findRankData(args);
     if (found) return found;
   }
-  return null;
+  // Current pages may inline the completed rank data in loaderData.
+  try { return findRankData(readRouterData(String(html))); } catch (_) { return null; }
 }
 
 function parseRank(html, rank, page, sourceUrl) {

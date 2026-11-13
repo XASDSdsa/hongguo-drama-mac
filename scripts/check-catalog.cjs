@@ -166,6 +166,10 @@ async function main() {
     )}"></script><script async data-fn-name="r" data-fn-args='${esc(
       JSON.stringify(['rank_hot-drama/page', 'content', { isSuccess: true, rankList: list, pagination: { pageNum: page, totalPages: 5 } }]),
     )}'></script>`;
+  const inlineRank = `<script>_ROUTER_DATA = ${JSON.stringify({loaderData: {'rank_hot-drama/page': {content: {isSuccess: true, rankList: [rankItem(1, '7000000000000000001')], pagination: {pageNum: 1, totalPages: 5}}}}})}</script>`;
+  const currentRank = context.module.exports.parseRank(inlineRank, {label: '总榜'}, 1, 'https://hongguoduanju.com/rank/hot-drama');
+  assert.equal(currentRank.results[0].series_id, '7000000000000000001');
+  assert.equal(currentRank.totalPages, 5);
   response = async (url) => ({
     data: url.includes('page=2')
       ? laterPage([rankItem(21, '7000000000000000021'), rankItem(22, '7000000000000000022')], 2)

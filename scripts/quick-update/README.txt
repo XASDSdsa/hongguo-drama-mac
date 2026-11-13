@@ -1,4 +1,4 @@
-﻿changeFileName 1.2.48 Windows 更新
+﻿changeFileName 1.2.49 Windows 更新
 
 关闭软件，完整解压 ZIP，双击 update.cmd。支持从1.2.39至1.2.47以及本版重新安装。
 包含新的原生高清取源组件和配套运行库，直接使用，无需另装Java。
