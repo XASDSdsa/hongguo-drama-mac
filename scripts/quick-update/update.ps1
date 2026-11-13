@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $exeName = 'changeFileName.exe'
-$targets = [ordered]@{ 'app.asar' = 'resources\app.asar'; 'changeFileName.exe' = 'changeFileName.exe' }
+$targets = [ordered]@{ 'app.asar' = 'resources\app.asar'; 'app-update.yml' = 'resources\app-update.yml'; 'changeFileName.exe' = 'changeFileName.exe' }
 $required = $manifest.requires -join ' 或 '
 
 function Test-Install([string]$dir) {

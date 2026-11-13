@@ -35,6 +35,10 @@ on:
         description: "true = 构建并检查完整安装程序，跳过额外的绿色版 ZIP。"
         required: false
         default: ''
+      repack_from_installer_run:
+        description: "Reuse the accepted 1.2.49 installer runtimes and build/test the in-app-update installer after a quick build."
+        required: false
+        default: ''
 
 permissions:
   actions: read
@@ -191,6 +195,10 @@ jobs:
             throw 'A new draft release targeting this commit is required'
           }
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - run: npm ci
 
       - uses: actions/setup-java@v5
@@ -207,6 +215,8 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           node scripts/check-undefined-names.cjs
           node scripts/check-cost-report.cjs
+          node scripts/check-app-updates.cjs
+          python scripts/check-update-server.py
           node scripts/check-app-source.cjs
           node scripts/check-native-player.cjs
           node scripts/check-hongguo-player.cjs --live
@@ -311,6 +321,50 @@ jobs:
           $version = node -p "require('./package.json').version"
           $archive = (Resolve-Path "dist/quick/ai-drama-assistant-$version-update.zip").Path
           gh release upload $env:RELEASE_TAG $archive
+
+  in-app-update-installer:
+    if: inputs.quick == 'true' && inputs.repack_from_installer_run != ''
+    needs: quick-update
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-quick-update
+          path: dist/new-quick
+      - uses: actions/download-artifact@v7
+        with:
+          name: hongguo-windows
+          run-id: ${{ inputs.repack_from_installer_run }}
+          github-token: ${{ github.token }}
+          path: dist/accepted-full
+      - name: Repack accepted runtimes into an automatic-update installer
+        run: node scripts/repack-auto-update.cjs dist/accepted-full dist/new-quick dist/auto-update
+      - name: Exercise the real updater download and silent NSIS installation
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-in-app-update-install.cjs dist/auto-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/auto-update/*-Setup-*.exe
+            dist/auto-update/*.blockmap
+            dist/auto-update/release-*.json
+            dist/auto-update/latest.yml
+            dist/auto-update/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   verify-native-download:
     if: inputs.native_verify_run != ''

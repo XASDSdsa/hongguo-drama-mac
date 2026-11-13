@@ -30,7 +30,7 @@ function verifyPlayerUpdate(stage, unpacked, scratch) {
   execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(stage, 'update.ps1'), '-InstallDir', install], { stdio: 'inherit', timeout: 90000 });
   const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'manifest.json')));
   for (const [name, expected] of Object.entries(manifest.sha256)) {
-    const target = name === 'app.asar' ? path.join(install, 'resources', name)
+    const target = ['app.asar', 'app-update.yml'].includes(name) ? path.join(install, 'resources', name)
       : name.startsWith('hongguo-player/') ? path.join(install, 'resources', name) : path.join(install, name);
     assert.equal(sha(target), expected, name);
   }

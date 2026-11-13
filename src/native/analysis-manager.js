@@ -382,7 +382,7 @@ function createAnalysisManager({ getSettings, getEpisodes, getState, saveState, 
     return snapshot(id, runningBySeries.get(id) || null);
   }
 
-  return { start, cancel, status };
+  return { start, cancel, status, hasActive: () => runningBySeries.size > 0 };
 }
 
 module.exports = { createAnalysisManager, fingerprint };

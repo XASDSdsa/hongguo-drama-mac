@@ -5,6 +5,7 @@ import HongguoDownload from './components/HongguoDownload';
 import SettingsPage from './components/Settings';
 import Browse from './components/Browse';
 import SeriesLibrary from './components/SeriesLibrary';
+import AppUpdate from './components/AppUpdate';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
@@ -111,6 +112,7 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-footer">
+          <AppUpdate />
           <button
             className={`sidebar-item ${page === 'settings' ? 'active' : ''}`}
             aria-current={page === 'settings' ? 'page' : undefined}

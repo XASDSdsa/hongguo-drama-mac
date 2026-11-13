@@ -879,5 +879,27 @@ function mount(file, api, props = {}, options = {}) {
     ui=await open('/series-a');assert.equal(select(ui).props.value,'second');ui.unmount();
     ui=await open('/series-b');assert.equal(select(ui).props.value,'legacy');ui.unmount();
   });
+  await test('in-app update UI: newer events win, duplicate clicks are ignored and busy install failures stay visible', async () => {
+    const initial = deferred(); const download = deferred();
+    let event; let off = false; let calls = 0; let installs = 0;
+    const ui = mount('AppUpdate', {
+      appUpdateStatus: () => initial.promise,
+      onAppUpdate: cb => { event = cb; return () => { off = true; }; },
+      appUpdateDownload: () => { calls++; return download.promise; },
+      appUpdateInstall: async () => { installs++; return { success: false, error: '任务正在运行，请稍后重试' }; },
+    });
+    event({status:'available',version:'1.2.51',notes:'测试'}); await ui.flush();
+    initial.resolve({status:'idle'}); await ui.flush();
+    assert.ok(ui.text().includes('发现 v1.2.51'));
+    const button = ui.button('下载更新'); const pending = button.props.onClick(); button.props.onClick();
+    await ui.flush(); assert.equal(calls,1);
+    event({status:'downloading',version:'1.2.51',percent:37}); await ui.flush();
+    assert.ok(ui.text().includes('37%'));
+    event({status:'ready',version:'1.2.51',percent:100});
+    download.resolve({success:true,state:{status:'ready',version:'1.2.51',percent:100}}); await pending; await ui.flush();
+    await ui.button('重启并更新').props.onClick(); await ui.flush(); assert.equal(installs,1);
+    assert.ok(ui.text().includes('任务正在运行'));
+    ui.unmount(); assert.equal(off,true);
+  });
   process.exitCode = failures ? 1 : 0;
 })();

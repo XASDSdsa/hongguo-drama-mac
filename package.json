@@ -1,6 +1,6 @@
 {
   "name": "ai-drama-assistant",
-  "version": "1.2.50",
+  "version": "1.2.51",
   "description": "changeFileName：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",
@@ -55,6 +55,7 @@
   },
   "dependencies": {
     "axios": "^1.13.2",
+    "electron-updater": "6.8.11",
     "pdfjs-dist": "6.4.299",
     "pngjs": "7.0.0"
   },
@@ -72,9 +73,9 @@
     "globals": "15.15.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "resedit": "1.7.2",
     "vite": "^5.4.11",
-    "wait-on": "^7.2.0",
-    "resedit": "1.7.2"
+    "wait-on": "^7.2.0"
   },
   "build": {
     "appId": "io.github.jackotom.hongguo-drama-mac",
@@ -188,7 +189,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "changeFileName",
       "artifactName": "${productName}-Setup-${version}.${ext}",
-      "differentialPackage": false
+      "differentialPackage": true
     },
     "mac": {
       "target": [
@@ -311,7 +312,14 @@
       "enableNodeCliInspectArguments": false,
       "enableEmbeddedAsarIntegrityValidation": true,
       "onlyLoadAppFromAsar": true
-    }
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://license.91.200.243.95.sslip.io/updates/windows/",
+        "useMultipleRangeRequests": false
+      }
+    ]
   },
   "engines": {
     "node": ">=22.12"

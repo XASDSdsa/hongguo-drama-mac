@@ -127,6 +127,7 @@ function createAiMaterialQueue({
     cancel,
     pump: schedule,
     active,
+    hasActive: () => list().some(item => ACTIVE.has(item.status)),
     stopAll() {
       for (const id of [...admitted]) cancel(id);
     },

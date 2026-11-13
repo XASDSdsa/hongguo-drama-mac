@@ -12,7 +12,7 @@ const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
 const pkg = require('../package.json');
 
 const root = path.join(__dirname, '..');
-const baseVersions = ['1.2.39', '1.2.40', '1.2.41', '1.2.42', '1.2.43', '1.2.44', '1.2.45', '1.2.46', '1.2.47', '1.2.48', '1.2.49', '1.2.50'];
+const baseVersions = ['1.2.39', '1.2.40', '1.2.41', '1.2.42', '1.2.43', '1.2.44', '1.2.45', '1.2.46', '1.2.47', '1.2.48', '1.2.49', '1.2.50', '1.2.51'];
 const exeName = `${pkg.build.productName}.exe`;
 const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
@@ -36,7 +36,7 @@ async function main() {
     const exe = path.join(unpacked, exeName);
     const asar = path.join(unpacked, 'resources', 'app.asar');
     assert.equal(JSON.parse(extractFile(asar, 'package.json').toString()).version, pkg.version);
-    for (const file of ['main.js', 'src/native/app-source.js', 'src/native/native-player.js', 'src/native/hongguo.js', 'src/native/cost-report/templates.js', 'dist-react/index.html', 'src/native/cost-report/page-look.js', 'src/native/cost-report/font-check.js', 'src/native/cost-report/wps.js']) {
+    for (const file of ['main.js', 'src/native/app-source.js', 'src/native/native-player.js', 'src/native/hongguo.js', 'src/native/cost-report/templates.js', 'src/native/app-updates.js', 'dist-react/index.html', 'src/native/cost-report/page-look.js', 'src/native/cost-report/font-check.js', 'src/native/cost-report/wps.js']) {
       assert.deepEqual(extractFile(asar, path.normalize(file)), fs.readFileSync(path.join(root, file)), file);
     }
     const wire = await getCurrentFuseWire(exe);
@@ -64,9 +64,11 @@ async function main() {
     for (const name of ['update.cmd', 'update.ps1', 'README.txt']) {
       fs.copyFileSync(path.join(__dirname, 'quick-update', name), path.join(stage, name));
     }
+    const updateConfig = { ...pkg.build.publish[0], updaterCacheDirName: pkg.name + '-updater' };
+    fs.writeFileSync(path.join(stage, 'app-update.yml'), JSON.stringify(updateConfig));
     const player = path.join(root, 'build/hongguo-player/win32-x64');
     fs.cpSync(player, path.join(stage, 'hongguo-player'), { recursive: true });
-    const files = [exeName, 'app.asar', ...fs.readdirSync(player, { recursive: true, withFileTypes: true }).filter(item => item.isFile()).map(item => 'hongguo-player/' + path.relative(player, path.join(item.parentPath, item.name)).split(path.sep).join('/'))];
+    const files = [exeName, 'app.asar', 'app-update.yml', ...fs.readdirSync(player, { recursive: true, withFileTypes: true }).filter(item => item.isFile()).map(item => 'hongguo-player/' + path.relative(player, path.join(item.parentPath, item.name)).split(path.sep).join('/'))];
     fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify({
       version: pkg.version,
       requires: baseVersions,

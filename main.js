@@ -85,6 +85,30 @@ if (app.isPackaged) {
 
 let mainWindow = null;
 let launchAuthorized = false;
+let appUpdates = null;
+let pendingIpcWork = 0;
+let activeCostReports = 0;
+const registerIpc = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => registerIpc(channel, (event, ...args) => {
+  if (appUpdates?.snapshot().status === 'installing' && !channel.startsWith('app-update-')) {
+    return { success: false, error: '正在重启更新，请稍候' };
+  }
+  const result = listener(event, ...args);
+  if (result?.then && !channel.startsWith('app-update-')) {
+    pendingIpcWork++;
+    return Promise.resolve(result).finally(() => { pendingIpcWork--; });
+  }
+  return result;
+});
+ipcMain.handle('app-update-status', () => appUpdates?.snapshot() || { status: 'unsupported' });
+for (const method of ['check', 'download', 'install']) {
+  ipcMain.handle(`app-update-${method}`, event => {
+    if (!launchAuthorized || !mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      return { success: false, error: '请从软件主窗口操作更新' };
+    }
+    return appUpdates?.[method]() || { success: false, error: '更新服务尚未就绪' };
+  });
+}
 // 用户在「还有任务在跑」的提示里确认过退出，之后关窗口不再拦。
 let quitConfirmed = false;
 // 软件改名后数据目录跟着名字变了：新目录里还没有数据时，把旧目录里的设置、
@@ -5923,6 +5947,7 @@ async function makeCostReport(dir, request = {}) {
 /** 处理做完（或没勾去重、直接开始）时自动生成，结果写进这部剧的处理日志。 */
 async function runCostReportTask(dir, task) {
   if (!task?.enabled || !dir) return;
+  activeCostReports++;
   try {
     const made = await makeCostReport(dir, task);
     if (made.success)
@@ -5935,6 +5960,8 @@ async function runCostReportTask(dir, task) {
     else libLog(dir, 'error', `成本配置报告：没有生成：${made.error}`, 'side');
   } catch (error) {
     libLog(dir, 'error', `成本配置报告：没有生成：${error?.message || error}`, 'side');
+  } finally {
+    activeCostReports--;
   }
 }
 
@@ -9889,7 +9916,21 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[Encoder] 检测失败:', e.message);
   }
+  const { createAppUpdates } = require('./src/native/app-updates');
+  appUpdates = createAppUpdates({
+    app,
+    installDir: path.dirname(process.execPath),
+    updater: process.platform === 'win32' && app.isPackaged ? require('electron-updater').autoUpdater : null,
+    notify: state => sendToRenderer('app-update-state', state),
+    busy: () => pendingIpcWork > 0 || activeCostReports > 0 || appBusy() || draftStartLocks.size > 0 ||
+      [...libraryJobs.values()].some(job => ['waiting', 'starting'].includes(job.status)) ||
+      [...publishJobs.values()].some(job => job.status === 'running') ||
+      !!aiMaterialQueue?.hasActive() ||
+      !!analysisManager?.hasActive?.() || ['running', 'stopping'].includes(oneclick.status()?.status),
+  });
   createWindow();
+  setTimeout(() => appUpdates.check(), 15_000).unref?.();
+  setInterval(() => appUpdates.check(), 6 * 60 * 60 * 1000).unref?.();
   startSleepBlockerWatch();
   // 草稿挪过位置的话把素材路径改过来（后台做，不耽误启动）。
   setTimeout(() => relinkMovedDrafts(), 8000).unref?.();
