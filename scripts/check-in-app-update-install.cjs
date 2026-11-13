@@ -43,11 +43,12 @@ async function main() {
     if (req.method === 'HEAD') res.end(); else fs.createReadStream(file, { start, end }).pipe(res);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const updater = new NsisUpdater({ provider: 'generic', url: `http://127.0.0.1:${server.address().port}/`, useMultipleRangeRequest: false });
+  const fixtureUrl = `http://127.0.0.1:${server.address().port}/`;
+  const updater = new NsisUpdater({ provider: 'generic', url: fixtureUrl, useMultipleRangeRequest: false });
   updater.currentVersion = require('node:module').createRequire(require.resolve('electron-updater'))('semver').parse(paths.previous);
   updater.forceDevUpdateConfig = true;
   const testConfigPath = path.join(output, 'test-app-update.yml');
-  fs.writeFileSync(testConfigPath, JSON.stringify({ ...require('../package.json').build.publish[0], updaterCacheDirName: 'changeFileName-clean-update-test' }));
+  fs.writeFileSync(testConfigPath, JSON.stringify({ ...require('../package.json').build.publish[0], url: fixtureUrl, updaterCacheDirName: 'changeFileName-clean-update-test' }));
   updater.updateConfigPath = testConfigPath;
   // Keep only this test harness alive to observe the detached real installer completing.
   let requestedQuit = false;
