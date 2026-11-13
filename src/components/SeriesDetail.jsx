@@ -273,6 +273,7 @@ function readCostSettings(dir) {
   const stored = readJson(COST_KEY)[dir] || {};
   const settings = {
     title: String(stored.title ?? ''),
+    templateId: String(stored.templateId || ''),
     drawMin: String(stored.drawMin ?? 1),
     drawMax: String(stored.drawMax ?? 3),
     drawSeed: stored.drawSeed || newSeed(),
@@ -285,6 +286,7 @@ const saveCostSettings = (dir, settings) => writeJson(COST_KEY, { ...readJson(CO
 /** 发给主进程的：剧名、演员片酬占比、抽卡（范围 + 种子）。 */
 const costRequest = (settings) => ({
   title: settings.title.trim(),
+  templateId: settings.templateId || '',
   actorPercent: settings.actorPercent,
   draws: { min: Number(settings.drawMin) || 1, max: Number(settings.drawMax) || 1, seed: settings.drawSeed },
 });
@@ -311,6 +313,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
           if (!alive) return;
           if (result?.success) {
             setInfo(result);
+            setSettings(current => current.templateId || !result.template?.ready ? current : { ...current, templateId: result.template.id });
             setError('');
           } else setError(result?.error || '算不出来');
         })
@@ -332,9 +335,12 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
     const result = await window.electronAPI.costReportTemplatePick?.().catch(() => null);
     setBusy('');
     if (!result?.success) setError(result?.error || '模板没选上');
+    else if (!result.canceled && result.template?.id) setSettings(value => ({ ...value, templateId: result.template.id }));
     setReload((value) => value + 1);
   };
 
+  const selectedTemplateId = settings.templateId || info?.template?.id || '';
+  const availableTemplates = info?.templates || (info?.template?.ready ? [info.template] : []);
   const cost = info?.cost;
   return (
     <div className="lib-mask lib-mask-top" onClick={onClose}>
@@ -465,14 +471,28 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
             <dt>报告模板</dt>
             <dd>
               <span className="cost-inline">
-                {info.template.ready ? info.template.name : '还没选'}
+                <select
+                  className="input-field"
+                  aria-label="选择报告模板"
+                  value={selectedTemplateId}
+                  onChange={set('templateId')}
+                  disabled={!!busy || !availableTemplates.length}
+                >
+                  {!selectedTemplateId && <option value="">请先添加模板</option>}
+                  {selectedTemplateId && !availableTemplates.some(item => item.id === selectedTemplateId) && (
+                    <option value={selectedTemplateId}>所选模板已不存在，请重新选择</option>
+                  )}
+                  {availableTemplates.map((item, index) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}{availableTemplates.filter(other => other.name === item.name).length > 1 ? `（${index + 1}）` : ''}
+                    </option>
+                  ))}
+                </select>
                 <button type="button" className="btn btn-sm" onClick={pickTemplate} disabled={!!busy}>
-                  {info.template.ready ? '换模板' : '选择模板'}
+                  {busy === 'template' ? '正在添加…' : '添加模板'}
                 </button>
               </span>
-              {!info.template.ready && (
-                <span className="cost-sub">选你那份 Word 模板（有公章和签名的），只存在这台电脑上</span>
-              )}
+              <span className="cost-sub">可添加多份 Word 模板，保存在本机；这部剧使用上面选中的一份。点「确定」保存选择。</span>
             </dd>
           </dl>
         )}

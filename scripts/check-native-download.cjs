@@ -16,7 +16,7 @@ const previousResources = process.resourcesPath;
 (async () => {
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'manifest.json')));
-    assert.equal(manifest.version, '1.2.49');
+    assert.equal(manifest.version, '1.2.50');
     asar.extractAll(path.join(stage, 'app.asar'), directory);
     const resources = path.join(directory, 'resources');
     fs.mkdirSync(resources);

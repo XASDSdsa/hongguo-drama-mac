@@ -5721,17 +5721,11 @@ ipcMain.handle('library-durations', async (_event, payload = {}) => {
 // ===== 成本配置报告 =====
 // Word 总投资额按原剧集数填报；Seedance 2.5 明细用于估算。
 // 模板里有公章和签名：只存在本机的用户数据目录里，不进仓库、不进安装包。
-const costTemplateFile = () => path.join(app.getPath('userData'), 'cost-report-template.docx');
-function costTemplateInfo() {
-  const file = costTemplateFile();
-  const stat = fs.statSync(file, { throwIfNoEntry: false });
-  if (!stat) return { ready: false };
-  let name = '';
-  try {
-    name = JSON.parse(fs.readFileSync(`${file}.json`, 'utf8')).name || '';
-  } catch (_) {}
-  return { ready: true, name: name || '成本配置报告模板.docx', importedAt: Math.round(stat.mtimeMs) };
-}
+const costTemplates = () => require('./src/native/cost-report/templates').createTemplateStore(
+  app.getPath('userData'), buffer => costDocx.checkTemplate(buffer),
+);
+const costTemplateFile = (id) => costTemplates().file(id);
+const costTemplateInfo = (id) => costTemplates().info(id);
 
 // 每集的时长和画面大小（按文件大小和修改时间缓存，改了就重新读）
 const episodeShapes = new Map();
@@ -5802,7 +5796,8 @@ ipcMain.handle('library-cost-report', async (_event, payload = {}) => {
     return {
       success: true,
       title: seriesLayout.readNewInfo(dir).title || '',
-      template: costTemplateInfo(),
+      template: costTemplateInfo(payload.templateId),
+      templates: costTemplates().list(),
       report: stat ? { name: seriesLayout.COST_REPORT, updatedAt: Math.round(stat.mtimeMs) } : null,
       price: { model, mode, checked, source, fps },
       ...summary,
@@ -5869,21 +5864,13 @@ ipcMain.handle('library-cost-report-export-png', async (_event, payload = {}) =>
 ipcMain.handle('cost-report-template-pick', async () => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择成本配置报告模板（Word 文件）',
-      properties: ['openFile'],
+      title: '添加成本配置报告模板（可多选 Word 文件）',
+      properties: ['openFile', 'multiSelections'],
       filters: [{ name: 'Word 文件', extensions: ['docx'] }],
     });
-    if (result.canceled || !result.filePaths[0]) return { success: true, template: costTemplateInfo() };
-    const source = result.filePaths[0];
-    const buffer = await fsp.readFile(source);
-    const problems = costDocx.checkTemplate(buffer);
-    if (problems.length) return { success: false, error: `这个模板填不了：${problems.join('；')}` };
-    const file = costTemplateFile();
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(`${file}.tmp`, buffer);
-    await fsp.rename(`${file}.tmp`, file);
-    await fsp.writeFile(`${file}.json`, JSON.stringify({ name: path.basename(source) }));
-    return { success: true, template: costTemplateInfo() };
+    if (result.canceled || !result.filePaths.length) return { success: true, canceled: true, templates: costTemplates().list() };
+    const added = await costTemplates().add(result.filePaths);
+    return { success: true, templates: costTemplates().list(), added, template: added[0] };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -5895,6 +5882,7 @@ function normalizeCostRequest(value = {}) {
     title: String(value.title || '')
       .trim()
       .slice(0, 200),
+    templateId: String(value.templateId || costTemplateInfo().id || ''),
     actorPercent: costPricing.normalizeActorPercent(value.actorPercent),
     draws: costPricing.normalizeDraws(value.draws || costPricing.DEFAULT_DRAWS),
   };
@@ -5902,8 +5890,10 @@ function normalizeCostRequest(value = {}) {
 
 /** 生成报告：放在剧文件夹根目录，已经有就换成新的。 */
 async function makeCostReport(dir, request = {}) {
-  if (!costTemplateInfo().ready) return { success: false, error: '还没选报告模板（在「报告设置」里选）' };
   const payload = normalizeCostRequest(request);
+  if (!costTemplateInfo(payload.templateId).ready) return { success: false, error: '所选报告模板不存在，请在「报告设置」中选择模板' };
+  // Capture the submitted template before any asynchronous media analysis.
+  const templateBuffer = await fsp.readFile(costTemplateFile(payload.templateId));
   const title = payload.title || seriesLayout.readNewInfo(dir).title;
   if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在「报告设置」里填' };
   const summary = await costSummary(dir, payload.actorPercent, payload.draws);
@@ -5911,7 +5901,7 @@ async function makeCostReport(dir, request = {}) {
   if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
   if (summary.unreadable.length)
     return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };
-  const buffer = costDocx.fillCostReport(await fsp.readFile(costTemplateFile()), {
+  const buffer = costDocx.fillCostReport(templateBuffer, {
     name: title,
     episodes: summary.text.episodes,
     total: summary.text.total,

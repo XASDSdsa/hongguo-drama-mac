@@ -14,7 +14,7 @@ const episode = (n) => ({ vid: `vid${n}`, vid_index: n, status: 'missing' });
 const detail = (id) => ({ series_id: id, series_title: id, total: 2, episodes: [episode(1), episode(2)] });
 const ok = (data) => ({ success: true, data });
 
-function mount(file, api, props = {}) {
+function mount(file, api, props = {}, options = {}) {
   const slots = [],
     effects = [],
     cleanups = [];
@@ -59,11 +59,12 @@ function mount(file, api, props = {}) {
   };
   const fallback = () => Promise.resolve({});
   const window = {
+    localStorage: options.storage || {getItem: () => null, setItem() {}},
     electronAPI: new Proxy(api, { get: (obj, key) => obj[key] || (key.startsWith('on') ? () => () => {} : fallback) }),
     addEventListener() {},
     removeEventListener() {},
   };
-  const source = transformSync(fs.readFileSync(`${__dirname}/${file}.jsx`, 'utf8'), {
+  const source = transformSync(fs.readFileSync(`${__dirname}/${file}.jsx`, 'utf8') + (options.component ? `\nexport { ${options.component} };` : ''), {
     loader: 'jsx',
     format: 'cjs',
   }).code;
@@ -120,7 +121,7 @@ function mount(file, api, props = {}) {
   };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
-  Component = context.module.exports.default;
+  Component = context.module.exports[options.component || 'default'];
   const render = () => {
     cursor = 0;
     tree = Component(props);
@@ -847,6 +848,36 @@ function mount(file, api, props = {}) {
       assert.equal(ui.button('一键重下失败集').props.disabled, false);
       ui.unmount();
     }
+  });
+  await test('cost report templates: import choices, confirm/cancel and per-series persistence', async () => {
+    const values = new Map();
+    const storage = {getItem: key => values.get(key), setItem: (key,value) => values.set(key,value)};
+    let templates = [{id:'legacy',name:'原模板.docx',ready:true}];
+    let canceled = false;
+    const api = {
+      libraryCostReport: async request => ({success:true, template: templates.find(t=>t.id===request.templateId) || templates[0], templates,
+        title:'测试', cost:{episodes:0,tiers:[],draws:{min:1,max:1}}, text:{}, price:{}, over:{}}),
+      costReportTemplatePick: async () => canceled ? {success:true,canceled:true} : (() => {
+        const added = [{id:'first',name:'公司一.docx',ready:true},{id:'second',name:'公司二.docx',ready:true}];
+        templates=[...templates,...added];return {success:true,template:added[0],added,templates};
+      })(),
+    };
+    const open = async dir => {
+      const ui=mount('SeriesDetail',api,{dir,onClose(){}},{component:'CostReportDialog',storage});
+      ui.advanceTimers(200);await ui.flush();ui.advanceTimers(200);await ui.flush();return ui;
+    };
+    const select = ui => ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
+    let ui=await open('/series-a');
+    assert.equal(select(ui).props.value,'legacy');
+    await ui.button('添加模板').props.onClick();await ui.flush();ui.advanceTimers(200);await ui.flush();
+    assert.equal(select(ui).props.value,'first');
+    select(ui).props.onChange({target:{value:'second'}});await ui.flush();
+    ui.button('确定').props.onClick();ui.unmount();
+    ui=await open('/series-a');assert.equal(select(ui).props.value,'second');
+    canceled=true;await ui.button('添加模板').props.onClick();await ui.flush();assert.equal(select(ui).props.value,'second');
+    select(ui).props.onChange({target:{value:'first'}});await ui.flush();ui.button('取消').props.onClick();ui.unmount();
+    ui=await open('/series-a');assert.equal(select(ui).props.value,'second');ui.unmount();
+    ui=await open('/series-b');assert.equal(select(ui).props.value,'legacy');ui.unmount();
   });
   process.exitCode = failures ? 1 : 0;
 })();
