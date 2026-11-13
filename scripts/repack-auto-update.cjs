@@ -18,6 +18,11 @@ async function main() {
   const update = files(quickFolder).find(p => p.endsWith('-update.zip'));
   assert.ok(setup && update, 'Accepted full installer and new quick update are both required');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'update-repack-'));
+  const config = structuredClone(pkg.build); delete config.beforePack; config.directories.output = destination;
+  const configFile = path.join(temp, 'builder-auto-update.json');
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config');
+  await validateConfiguration(await getConfig(path.join(__dirname, '..'), configFile), { isEnabled: false });
   const nsis = path.join(temp, 'old-nsis');
   const unpacked = path.join(temp, 'app');
   const stage = path.join(temp, 'stage');
@@ -50,9 +55,11 @@ async function main() {
   for (const name of ['bin/ffmpeg.exe', 'bin/ffprobe.exe', 'LibreOffice/program/soffice.com', 'faster-whisper', 'video-structure', 'jianying', 'title-fonts', 'hongguo-player/runtime/bin/java.exe']) {
     assert.ok(fs.existsSync(path.join(unpacked, 'resources', name)), name);
   }
+  for (const name of ['main.js', 'preload.js', 'src/native/app-updates.js']) {
+    assert.equal(extractFile(path.join(unpacked, 'resources/app.asar'), name).toString().replace(/\r\n/g, '\n'), fs.readFileSync(path.join(__dirname, '..', name), 'utf8').replace(/\r\n/g, '\n'), name);
+  }
   fs.mkdirSync(destination, { recursive: true });
-  const config = structuredClone(pkg.build); delete config.beforePack; config.directories.output = destination;
-  await build({ targets: Platform.WINDOWS.createTarget('nsis', Arch.x64), prepackaged: unpacked, config, publish: 'never' });
+  await build({ targets: Platform.WINDOWS.createTarget('nsis', Arch.x64), prepackaged: unpacked, config: configFile, publish: 'never' });
   execFileSync(process.execPath, [path.join(__dirname, 'make-update-release.cjs'), destination], { stdio: 'inherit' });
   fs.writeFileSync(path.join(destination, 'acceptance-paths.json'), JSON.stringify({ testInstall, previous, unpacked, destination }));
   console.log('PASS repacked full automatic-update installer with accepted runtimes and matching ' + pkg.version + ' source');

@@ -29,6 +29,10 @@ class FakeUpdater extends EventEmitter {
 }
 (async () => {
   await require('app-builder-lib/out/util/config/config').validateConfiguration(require('../package.json').build, { isEnabled: false });
+  const configFile = path.join(temp, 'builder-auto-update.json');
+  fs.writeFileSync(configFile, JSON.stringify(require('../package.json').build));
+  const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config');
+  await validateConfiguration(await getConfig(path.join(__dirname, '..'), configFile), { isEnabled: false });
   const updater = new FakeUpdater(); let busy = false;
   const service = createAppUpdates({ app: { isPackaged: true, getVersion: () => '1.2.50' }, updater, platform: 'win32', busy: () => busy });
   assert.equal(updater.autoDownload, false); assert.equal(updater.autoInstallOnAppQuit, false); assert.equal(updater.allowDowngrade, false);

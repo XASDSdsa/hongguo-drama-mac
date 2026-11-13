@@ -39,6 +39,10 @@ on:
         description: "Reuse the accepted 1.2.49 installer runtimes and build/test the in-app-update installer after a quick build."
         required: false
         default: ''
+      quick_artifact_run:
+        description: "Reuse an already verified quick-update artifact when rebuilding only the automatic-update installer."
+        required: false
+        default: ''
 
 permissions:
   actions: read
@@ -120,7 +124,7 @@ jobs:
   # 快速更新也要在真 Windows 上过一遍剪映草稿：用打包时同一个 pyJianYingDraft 和发布过的 Windows FFmpeg，
   # 实际生成一份三分轨草稿（中文路径），核对 Windows 版剪映读的 draft_content.json 等。几分钟，不打安装包。
   quick-windows-check:
-    if: inputs.quick == 'true'
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == ''
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -168,7 +172,7 @@ jobs:
           grep '^::notice' "$RUNNER_TEMP/c.log" || true
 
   quick-update:
-    if: inputs.quick == 'true'
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == ''
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -323,7 +327,7 @@ jobs:
           gh release upload $env:RELEASE_TAG $archive
 
   in-app-update-installer:
-    if: inputs.quick == 'true' && inputs.repack_from_installer_run != ''
+    if: always() && inputs.quick == 'true' && inputs.repack_from_installer_run != '' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
     needs: quick-update
     runs-on: windows-latest
     timeout-minutes: 60
@@ -340,6 +344,8 @@ jobs:
         with:
           name: windows-quick-update
           path: dist/new-quick
+          run-id: ${{ inputs.quick_artifact_run || github.run_id }}
+          github-token: ${{ github.token }}
       - uses: actions/download-artifact@v7
         with:
           name: hongguo-windows
