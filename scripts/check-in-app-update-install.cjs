@@ -23,14 +23,12 @@ function probe(exe, name, base) {
 async function main() {
   await app.whenReady();
   const output = path.resolve(process.argv[2]);
-  const paths = JSON.parse(fs.readFileSync(path.join(output, 'acceptance-paths.json')));
+  const paths = { testInstall: path.join(output, 'changeFileName全新安装测试'), previous: '0.0.0' };
   const exe = path.join(paths.testInstall, 'changeFileName.exe');
-  assert.equal(versionOf(exe), paths.previous + '.0');
-  const oldProbe = probe(exe, 'before-update', output);
+  assert.ok(!fs.existsSync(exe), 'Verify a clean installation without any old application');
   const metadata = JSON.parse(fs.readFileSync(path.join(output, `release-${require('../package.json').version}.json`)));
-  const archive = path.join(paths.unpacked, 'resources/app.asar');
-  const { createAppUpdates } = require(archive + '/src/native/app-updates.js');
-  const { NsisUpdater } = require(archive + '/node_modules/electron-updater');
+  const { createAppUpdates } = require('../src/native/app-updates');
+  const { NsisUpdater } = require('electron-updater');
   server = http.createServer((req, res) => {
     const name = decodeURIComponent(new URL(req.url, 'http://localhost').pathname.slice(1));
     if (name === 'latest.yml') { res.end(JSON.stringify(metadata)); return; }
@@ -46,9 +44,10 @@ async function main() {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const updater = new NsisUpdater({ provider: 'generic', url: `http://127.0.0.1:${server.address().port}/`, useMultipleRangeRequest: false });
-  updater.currentVersion = require('semver').parse(paths.previous);
+  updater.currentVersion = require('node:module').createRequire(require.resolve('electron-updater'))('semver').parse(paths.previous);
   updater.forceDevUpdateConfig = true;
-  updater.updateConfigPath = path.join(paths.unpacked, 'resources/app-update.yml');
+  updater.updateConfigPath = path.join(output, 'test-app-update.yml');
+  fs.writeFileSync(updater.updateConfigPath, JSON.stringify({ ...require('../package.json').build.publish[0], updaterCacheDirName: 'changeFileName-clean-update-test' }));
   // Keep only this test harness alive to observe the detached real installer completing.
   let requestedQuit = false;
   updater.app.quit = () => { requestedQuit = true; };
@@ -78,8 +77,13 @@ async function main() {
   for (const [name, data] of Object.entries(markers)) assert.equal(fs.readFileSync(path.join(persistent, name), 'utf8'), data);
   for (const file of ['bin/ffmpeg.exe', 'bin/ffprobe.exe', 'hongguo-player/runtime/bin/java.exe', 'LibreOffice/program/soffice.com']) assert.ok(fs.existsSync(path.join(paths.testInstall, 'resources', file)), file);
   const startup = probe(exe, 'after-update', output);
-  const evidence = { from: paths.previous, to: metadata.version, downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit, preservedUserData: true, oldProbe, startup };
+  const archive = path.join(paths.testInstall, 'resources/app.asar');
+  const installedPackage = require(archive + '/package.json');
+  assert.equal(installedPackage.version, metadata.version);
+  assert.equal(installedPackage.dependencies['electron-updater'], require('../package.json').dependencies['electron-updater']);
+  assert.equal(require(archive + '/src/native/app-updates.js').createAppUpdates.toString().replace(/\r\n/g, '\n'), createAppUpdates.toString().replace(/\r\n/g, '\n'));
+  const evidence = { from: 'clean installation', to: metadata.version, downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit, preservedUserData: true, startup };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
-  console.log('PASS real packaged electron-updater download, checksum, busy guard, silent NSIS replacement, Chinese path and retained activation gate');
+  console.log('PASS newest standalone installer: real updater download, checksum, busy guard, clean silent NSIS installation, Chinese path, source match and activation gate');
 }
 main().then(() => { server?.close(); app.exit(0); }).catch(error => { console.error(error); server?.close(); app.exit(1); });
