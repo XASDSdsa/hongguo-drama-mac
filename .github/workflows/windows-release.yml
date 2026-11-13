@@ -768,6 +768,7 @@ jobs:
 
       # GitHub 发布页每个文件必须小于 2 GiB：超了在这里就停，说清楚，不等到最后上传才失败
       - name: Installer must stay under the 2 GiB release asset limit
+        if: inputs.tag != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -823,7 +824,24 @@ jobs:
         run: npx --no-install electron scripts/check-office-png.cjs dist/win-unpacked/resources/LibreOffice
 
       - name: Prepare release assets
+        env:
+          SELF_HOSTED_UPDATES: ${{ inputs.tag == '' && '1' || '0' }}
         run: node scripts/prepare-release-assets.js
+
+      - name: Prepare the matching self-hosted update metadata
+        run: node scripts/make-update-release.cjs dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/*-Setup-*.exe
+            dist/*.blockmap
+            dist/release-*.json
+            dist/latest.yml
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
       - name: Add the bundled FFmpeg and its complete source to the release assets
         shell: bash

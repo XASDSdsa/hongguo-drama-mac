@@ -20,7 +20,7 @@ async function main() {
   const sha512 = await digest(installer, 'sha512', 'base64');
   if (sha512 !== metadata.files[0].sha512 || fs.statSync(installer).size !== metadata.files[0].size) throw new Error('Installer checksum mismatch');
   const result = { ...metadata, blockmapSha256: await digest(installer + '.blockmap', 'sha256'),
-    releaseNotes: '新增软件内更新：检查新版本、下载进度、任务完成后重启安装；保留授权、设置和多份报告模板。' };
+    releaseNotes: process.env.UPDATE_RELEASE_NOTES || metadata.releaseNotes || '软件功能改进与问题修复。' };
   fs.writeFileSync(path.join(folder, `release-${pkg.version}.json`), JSON.stringify(result, null, 2));
   console.log('PASS update release metadata, installer SHA512 and differential blockmap');
 }

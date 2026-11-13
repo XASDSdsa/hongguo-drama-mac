@@ -7,6 +7,8 @@
 <section><h2>当前发布</h2><p id="active">正在读取…</p><button id="withdraw" hidden>撤回当前更新</button><p class="muted">撤回后停止提示该更新，已安装用户保留当前版本。需要修复时发布更高版本。</p></section>
 <section><h2>上传并发布新版本</h2><p>选择同一次构建的三个文件：<strong>安装程序 .exe、.exe.blockmap、release-版本号.json</strong>。上传完成后核对版本，再点发布。</p>
 <input id="files" type="file" multiple accept=".exe,.blockmap,.json" aria-label="选择更新文件"><br>
+<label for="notes">更新说明（用户会在软件里看到）</label><br>
+<textarea id="notes" rows="3" maxlength="10000" style="width:100%;margin:10px 0;padding:10px;font:inherit" placeholder="填写这次改进或修复的内容"></textarea><br>
 <button id="upload">上传文件</button> <button id="publish" disabled>发布上传的版本</button>
 <p id="message" role="status" aria-live="polite"></p><progress id="progress" value="0" max="100" hidden></progress>
 </section><section><h2>已上传的发布版本</h2><table><thead><tr><th>版本</th><th>更新说明</th><th>操作</th></tr></thead><tbody id="versions"></tbody></table></section>

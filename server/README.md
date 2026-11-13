@@ -9,7 +9,7 @@
 1. 为每次发布递增 `package.json` 和 lockfile 中的版本，构建同一批 Windows NSIS 安装程序。
 2. 构建运行 `node scripts/make-update-release.cjs <输出目录>`，检查安装包 SHA512 与块映射，产生 `release-版本号.json`。
 3. 在「软件更新」选择三个文件：`changeFileName-Setup-版本号.exe`、对应 `.exe.blockmap`、`release-版本号.json`。
-4. 上传完成后点击发布。服务器检查版本、文件长度和哈希，所有文件就位后原子切换当前发布版本。已发布版本不能覆盖。
+4. 上传完成后填写更新说明并点击发布。服务器检查版本、文件长度和哈希，所有文件就位后原子切换当前发布版本。已发布版本不能覆盖。
 5. 用户启动软件会检查新版本，也可以在左下角点击「检查更新」。下载完成后点「重启并更新」。有任务时禁止安装，正常退出不会擅自安装。
 
 撤回会停止提示该版本，并阻止已下载客户端继续安装。已经安装的客户端不会降级；修复请发布更高版本。旧版本文件保留以支持差量下载。首次没有更新缓存时可能完整下载。
@@ -24,4 +24,4 @@ Caddy 将 `/manage`、`/admin/updates`、`/admin/updates/*`、`/updates/windows/
 
 1.2.51 首次启用更新器：现有用户需最后手动更新一次。快速更新包含 `resources/app-update.yml`；以后 NSIS 更新会保留原安装路径和用户数据。此发行线支持 Windows；Mac 需要正式签名后另行接入。
 
-验证：`node scripts/check-app-updates.cjs`、`python3 scripts/check-update-server.py`、`node src/components/check-ui-state.cjs`。Windows 工作流可复用已验收的 1.2.49 完整安装包运行库，并运行实际打包更新器的下载、忙碌保护及静默安装验收。
+验证：`node scripts/check-app-updates.cjs`、`python3 scripts/check-update-server.py`、`node src/components/check-ui-state.cjs`。Windows 完整构建会提供 windows-in-app-update-release，包含后台上传所需的三份文件。仅在运行库和 Electron 版本未变时可复用已验收的 1.2.49 完整安装包运行库，并运行实际打包更新器的下载、忙碌保护及静默安装验收。

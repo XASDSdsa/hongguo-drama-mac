@@ -105,7 +105,7 @@ def file_response(handler, path):
             remaining -= len(block)
 
 
-def publish(version):
+def publish(version, notes=None):
     if not isinstance(version, str) or not re.fullmatch(VERSION, version):
         raise ValueError('版本号格式不正确')
     folder = ROOT / 'releases' / version
@@ -141,6 +141,10 @@ def publish(version):
             raise ValueError('文件完整性校验失败，不能发布')
         if not isinstance(release.get('releaseNotes', ''), str) or len(release.get('releaseNotes', '')) > 10000:
             raise ValueError('更新说明无效')
+        if notes is not None:
+            if not isinstance(notes, str) or len(notes) > 10000:
+                raise ValueError('更新说明无效')
+            release['releaseNotes'] = notes
         folder.mkdir(parents=True, exist_ok=True)
         for source in [installer, blockmap]:
             os.replace(source, folder / source.name)
@@ -240,7 +244,7 @@ def handle(handler, authenticated, secret):
             data = json.loads(handler.rfile.read(length))
             with LOCK:
                 if route.endswith('/publish'):
-                    publish(data.get('version'))
+                    publish(data.get('version'), data.get('notes'))
                 else:
                     active = current()
                     if not active or active['version'] != data.get('version'):

@@ -81,11 +81,12 @@ with tempfile.TemporaryDirectory() as temporary:
         assert request(endpoint, b'{"version":"1.2.51"}')[0] == 400
         assert updates.current() is None
         updates.os.replace = original_replace
-        assert request(endpoint, b'{"version":"1.2.51"}')[0] == 200
+        assert request(endpoint, json.dumps({'version':'1.2.51', 'notes':'用户可见更新说明'}).encode())[0] == 200
         assert updates.current()['version'] == '1.2.51'
         code, body, _ = request('/updates/windows/latest.yml', logged=False)
         info = json.loads(body)
         assert code == 200 and info['files'][0]['sha512'] == digest
+        assert info['releaseNotes'] == '用户可见更新说明'
         file_url = '/updates/windows/' + info['files'][0]['url']
         code, body, headers = request(file_url, logged=False, headers={'Range': 'bytes=3-15'})
         assert code == 206 and body == payload[3:16] and headers['Content-Range'].startswith('bytes 3-15/')

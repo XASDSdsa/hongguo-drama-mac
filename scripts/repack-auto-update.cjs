@@ -6,7 +6,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { extractFile } = require('@electron/asar');
+const { extractFile, uncache } = require('@electron/asar');
 const { build, Platform, Arch } = require('electron-builder');
 const pkg = require('../package.json');
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -55,6 +55,7 @@ async function main() {
   for (const name of ['bin/ffmpeg.exe', 'bin/ffprobe.exe', 'LibreOffice/program/soffice.com', 'faster-whisper', 'video-structure', 'jianying', 'title-fonts', 'hongguo-player/runtime/bin/java.exe']) {
     assert.ok(fs.existsSync(path.join(unpacked, 'resources', name)), name);
   }
+  uncache(path.join(unpacked, 'resources/app.asar'));
   for (const name of ['main.js', 'preload.js', 'src/native/app-updates.js']) {
     assert.equal(extractFile(path.join(unpacked, 'resources/app.asar'), name).toString().replace(/\r\n/g, '\n'), fs.readFileSync(path.join(__dirname, '..', name), 'utf8').replace(/\r\n/g, '\n'), name);
   }

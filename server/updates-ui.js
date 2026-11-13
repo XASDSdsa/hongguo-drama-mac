@@ -7,8 +7,9 @@ let busy = false;
 function message(text, error = false) { element('message').textContent = text; element('message').className = error ? 'error' : ''; }
 function lock(value) {
   busy = value;
-  for (const button of document.querySelectorAll('button')) button.disabled = value;
+  for (const button of document.querySelectorAll('button')) button.disabled = value || button.dataset.current === '1';
   element('files').disabled = value;
+  element('notes').disabled = value;
   element('publish').disabled = value || !uploadedVersion;
 }
 async function request(route, body) {
@@ -33,6 +34,7 @@ async function refresh() {
     const notes = document.createElement('td'); notes.className = 'notes'; notes.textContent = release.releaseNotes || '—';
     const actions = document.createElement('td'); const button = document.createElement('button');
     button.textContent = release.version === activeVersion ? '已发布' : '发布此版本';
+    button.dataset.current = release.version === activeVersion ? '1' : '';
     button.disabled = release.version === activeVersion;
     button.onclick = () => publish(release.version);
     actions.append(button); row.append(version, notes, actions); element('versions').append(row);
@@ -43,7 +45,7 @@ async function publish(version) {
   lock(true);
   try {
     message('正在校验并发布，请稍候…');
-    await request('publish', { version });
+    await request('publish', { version, ...(version === uploadedVersion ? { notes: element('notes').value } : {}) });
     uploadedVersion = '';
     await refresh(); message('已发布 v' + version + '，软件检查更新时即可收到。');
   } catch (error) { message(error.message, true); }
@@ -83,6 +85,7 @@ element('upload').onclick = async () => {
     let offset = 0;
     const total = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files) { await upload(file, offset, total); offset += file.size; }
+    element('notes').value = JSON.parse(await manifest.text()).releaseNotes || '';
     uploadedVersion = version;
     message('v' + version + ' 上传完成。点击「发布上传的版本」进行最终校验并发布。');
   } catch (error) { message(error.message, true); }
