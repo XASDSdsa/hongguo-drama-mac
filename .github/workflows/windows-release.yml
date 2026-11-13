@@ -124,7 +124,7 @@ jobs:
   # 快速更新也要在真 Windows 上过一遍剪映草稿：用打包时同一个 pyJianYingDraft 和发布过的 Windows FFmpeg，
   # 实际生成一份三分轨草稿（中文路径），核对 Windows 版剪映读的 draft_content.json 等。几分钟，不打安装包。
   quick-windows-check:
-    if: inputs.quick == 'true' && inputs.quick_artifact_run == ''
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == ''
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -172,7 +172,7 @@ jobs:
           grep '^::notice' "$RUNNER_TEMP/c.log" || true
 
   quick-update:
-    if: inputs.quick == 'true' && inputs.quick_artifact_run == ''
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == ''
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -417,7 +417,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   verify-full-installer:
-    if: inputs.installer_verify_run != ''
+    if: inputs.installer_verify_run != '' && inputs.quick != 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -887,3 +887,42 @@ jobs:
 
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
+
+  verify-new-install:
+    if: inputs.quick == 'true' && inputs.installer_verify_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          run-id: ${{ inputs.installer_verify_run }}
+          github-token: ${{ github.token }}
+          path: dist/new-installer
+      - name: Verify the newest full installer without an old installation
+        shell: pwsh
+        run: |
+          node scripts/check-app-updates.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./node_modules/.bin/electron.cmd scripts/check-in-app-update-install.cjs dist/new-installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/new-installer/*-Setup-*.exe
+            dist/new-installer/*.blockmap
+            dist/new-installer/release-*.json
+            dist/new-installer/latest.yml
+            dist/new-installer/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
