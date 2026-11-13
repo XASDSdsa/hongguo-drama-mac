@@ -65,4 +65,4 @@ async function main() {
   fs.writeFileSync(path.join(destination, 'acceptance-paths.json'), JSON.stringify({ testInstall, previous, unpacked, destination }));
   console.log('PASS repacked full automatic-update installer with accepted runtimes and matching ' + pkg.version + ' source');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+main().catch(error => { console.error(error); process.exit(1); });

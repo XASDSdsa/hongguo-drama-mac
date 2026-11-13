@@ -15,7 +15,17 @@ async function main() {
   const folder = path.resolve(process.argv[2] || 'dist');
   const file = `changeFileName-Setup-${pkg.version}.exe`;
   const installer = path.join(folder, file);
-  const metadata = yaml.load(fs.readFileSync(path.join(folder, 'latest.yml'), 'utf8'));
+  const metadataFile = path.join(folder, 'latest.yml');
+  // Keep the dense NSIS archive below its 2 GiB mmap limit, then create the
+  // standard external blockmap independently using builder's own implementation.
+  if (!fs.existsSync(installer + '.blockmap')) {
+    const { buildBlockMap } = require('app-builder-lib/out/targets/blockmap/blockmap');
+    const info = await buildBlockMap(installer, 'gzip', installer + '.blockmap');
+    const metadata = { version: pkg.version, files: [{ url: file, size: info.size, sha512: info.sha512 }],
+      path: file, sha512: info.sha512, releaseDate: new Date().toISOString() };
+    fs.writeFileSync(metadataFile, JSON.stringify(metadata, null, 2));
+  }
+  const metadata = yaml.load(fs.readFileSync(metadataFile, 'utf8'));
   if (metadata.version !== pkg.version || metadata.files?.length !== 1 || metadata.files[0].url !== file) throw new Error('Builder release metadata mismatch');
   const sha512 = await digest(installer, 'sha512', 'base64');
   if (sha512 !== metadata.files[0].sha512 || fs.statSync(installer).size !== metadata.files[0].size) throw new Error('Installer checksum mismatch');

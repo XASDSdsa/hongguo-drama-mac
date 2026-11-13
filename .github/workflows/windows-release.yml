@@ -353,13 +353,19 @@ jobs:
           github-token: ${{ github.token }}
           path: dist/accepted-full
       - name: Repack accepted runtimes into an automatic-update installer
-        run: node scripts/repack-auto-update.cjs dist/accepted-full dist/new-quick dist/auto-update
+        id: repack
+        shell: pwsh
+        run: |
+          node scripts/repack-auto-update.cjs dist/accepted-full dist/new-quick dist/auto-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path dist/auto-update/acceptance-paths.json)) { throw 'Repack did not produce its acceptance manifest' }
       - name: Exercise the real updater download and silent NSIS installation
         shell: pwsh
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-in-app-update-install.cjs dist/auto-update
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v7
+        if: always() && steps.repack.outcome == 'success'
         with:
           name: windows-in-app-update-release
           path: |

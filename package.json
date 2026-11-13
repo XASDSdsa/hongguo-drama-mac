@@ -189,7 +189,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "changeFileName",
       "artifactName": "${productName}-Setup-${version}.${ext}",
-      "differentialPackage": true
+      "differentialPackage": false
     },
     "mac": {
       "target": [
