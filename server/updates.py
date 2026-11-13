@@ -121,6 +121,11 @@ def publish(version):
             raise ValueError('更新说明与安装包不匹配')
         installer = uploads / name
         blockmap = uploads / (name + '.blockmap')
+        # A stopped promotion may already have moved one file; verify and resume it.
+        if not installer.exists():
+            installer = folder / name
+        if not blockmap.exists():
+            blockmap = folder / (name + '.blockmap')
         if not installer.is_file() or not blockmap.is_file():
             raise ValueError('请同时上传安装程序、blockmap 和 release JSON 三个文件')
         if installer.stat().st_size != files[0].get('size'):

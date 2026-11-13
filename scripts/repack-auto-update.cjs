@@ -55,6 +55,6 @@ async function main() {
   await build({ targets: Platform.WINDOWS.createTarget('nsis', Arch.x64), prepackaged: unpacked, config, publish: 'never' });
   execFileSync(process.execPath, [path.join(__dirname, 'make-update-release.cjs'), destination], { stdio: 'inherit' });
   fs.writeFileSync(path.join(destination, 'acceptance-paths.json'), JSON.stringify({ testInstall, previous, unpacked, destination }));
-  console.log('PASS repacked full automatic-update installer with accepted runtimes and matching 1.2.51 source');
+  console.log('PASS repacked full automatic-update installer with accepted runtimes and matching ' + pkg.version + ' source');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

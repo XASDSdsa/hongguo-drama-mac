@@ -27,7 +27,7 @@ async function main() {
   const exe = path.join(paths.testInstall, 'changeFileName.exe');
   assert.equal(versionOf(exe), paths.previous + '.0');
   const oldProbe = probe(exe, 'before-update', output);
-  const metadata = JSON.parse(fs.readFileSync(path.join(output, 'release-1.2.51.json')));
+  const metadata = JSON.parse(fs.readFileSync(path.join(output, `release-${require('../package.json').version}.json`)));
   const archive = path.join(paths.unpacked, 'resources/app.asar');
   const { createAppUpdates } = require(archive + '/src/native/app-updates.js');
   const { NsisUpdater } = require(archive + '/node_modules/electron-updater');
@@ -45,7 +45,7 @@ async function main() {
     if (req.method === 'HEAD') res.end(); else fs.createReadStream(file, { start, end }).pipe(res);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const updater = new NsisUpdater({ provider: 'generic', url: `http://127.0.0.1:${server.address().port}/`, useMultipleRangeRequests: false });
+  const updater = new NsisUpdater({ provider: 'generic', url: `http://127.0.0.1:${server.address().port}/`, useMultipleRangeRequest: false });
   updater.currentVersion = require('semver').parse(paths.previous);
   updater.forceDevUpdateConfig = true;
   updater.updateConfigPath = path.join(paths.unpacked, 'resources/app-update.yml');

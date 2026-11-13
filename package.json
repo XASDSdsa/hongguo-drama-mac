@@ -317,7 +317,7 @@
       {
         "provider": "generic",
         "url": "https://license.91.200.243.95.sslip.io/updates/windows/",
-        "useMultipleRangeRequests": false
+        "useMultipleRangeRequest": false
       }
     ]
   },

@@ -72,6 +72,15 @@ with tempfile.TemporaryDirectory() as temporary:
         assert request(endpoint, b'{"version":"1.2.51"}')[0] == 400
         assert updates.current() is None
         assert request('/admin/updates/upload/' + name, payload)[0] == 200
+        original_replace = updates.os.replace
+        def interrupted_replace(source, target):
+            if str(target).endswith('.exe.blockmap'):
+                raise OSError('test interrupted promotion')
+            return original_replace(source, target)
+        updates.os.replace = interrupted_replace
+        assert request(endpoint, b'{"version":"1.2.51"}')[0] == 400
+        assert updates.current() is None
+        updates.os.replace = original_replace
         assert request(endpoint, b'{"version":"1.2.51"}')[0] == 200
         assert updates.current()['version'] == '1.2.51'
         code, body, _ = request('/updates/windows/latest.yml', logged=False)
