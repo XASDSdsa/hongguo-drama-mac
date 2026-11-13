@@ -27,6 +27,10 @@ on:
         description: "Validate the packaged native download pipeline from this build artifact run."
         required: false
         default: ''
+      installer_verify_run:
+        description: "Verify a complete NSIS installer artifact on a clean Windows machine."
+        required: false
+        default: ''
       installer_only:
         description: "true = 构建并检查完整安装程序，跳过额外的绿色版 ZIP。"
         required: false
@@ -346,6 +350,36 @@ jobs:
           node scripts/check-native-download.cjs dist/packaged-download-test/stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  verify-full-installer:
+    if: inputs.installer_verify_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: hongguo-windows
+          run-id: ${{ inputs.installer_verify_run }}
+          github-token: ${{ github.token }}
+          path: dist/full-installer
+      - name: Install and exercise the complete packaged application
+        shell: pwsh
+        run: ./scripts/check-installed-app.ps1 dist/full-installer
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: installed-acceptance
+          path: |
+            dist/installed-acceptance.json
+            dist/report-qa
+          if-no-files-found: ignore
+
   publish-existing:
     if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
     runs-on: windows-latest
@@ -401,7 +435,7 @@ jobs:
           exit $failed
 
   build-windows:
-    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true' && inputs.native_verify_run == ''
+    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true' && inputs.native_verify_run == '' && inputs.installer_verify_run == ''
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
