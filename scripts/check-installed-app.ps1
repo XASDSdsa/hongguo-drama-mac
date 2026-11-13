@@ -4,7 +4,17 @@ $setup = Get-ChildItem $ArtifactDir -Recurse -Filter '*-Setup.exe' | Select-Obje
 if (!$setup) { throw 'Complete installer missing' }
 $install = Join-Path $env:RUNNER_TEMP 'changeFileName安装测试'
 $p = Start-Process $setup.FullName -ArgumentList @('/S', "/D=$install") -PassThru
-if (!$p.WaitForExit(300000) -or $p.ExitCode -ne 0) { throw 'Installer failed' }
+$timer = [Diagnostics.Stopwatch]::StartNew()
+while (!$p.WaitForExit(30000)) {
+  $files = @(Get-ChildItem $install -Recurse -File -ErrorAction SilentlyContinue)
+  $bytes = ($files | Measure-Object Length -Sum).Sum
+  Write-Host "Installing: $([int]$timer.Elapsed.TotalSeconds)s, $($files.Count) files, $bytes bytes"
+  if ($timer.Elapsed.TotalMinutes -ge 15) {
+    Get-Process | Where-Object MainWindowTitle | Select-Object ProcessName, MainWindowTitle | Format-Table
+    throw 'Installer did not finish within 15 minutes'
+  }
+}
+if ($p.ExitCode -ne 0) { throw "Installer exit code $($p.ExitCode)" }
 $exe = Join-Path $install 'changeFileName.exe'
 $resources = Join-Path $install 'resources'
 $version = (Get-Item $exe).VersionInfo.ProductVersion
