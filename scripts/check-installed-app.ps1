@@ -18,7 +18,8 @@ if ($p.ExitCode -ne 0) { throw "Installer exit code $($p.ExitCode)" }
 $exe = Join-Path $install 'changeFileName.exe'
 $resources = Join-Path $install 'resources'
 $version = (Get-Item $exe).VersionInfo.ProductVersion
-if ($version -ne '1.2.51.0') { throw "Unexpected installed version $version" }
+$expectedVersion = (node -p "require('./package.json').version").Trim()
+if ($version -ne ($expectedVersion + '.0')) { throw "Unexpected installed version $version" }
 foreach ($name in @('app.asar','hongguo-player/player.jar','hongguo-player/runtime/bin/java.exe','bin/ffmpeg.exe','bin/ffprobe.exe','faster-whisper','video-structure','jianying','title-fonts','LibreOffice/program/soffice.com')) {
   if (!(Test-Path (Join-Path $resources $name))) { throw "Installed resource missing: $name" }
 }
@@ -36,7 +37,7 @@ $stage = Join-Path $env:RUNNER_TEMP 'installed-download-stage'
 New-Item $stage -ItemType Directory | Out-Null
 Copy-Item (Join-Path $resources 'app.asar') $stage
 Copy-Item (Join-Path $resources 'hongguo-player') $stage -Recurse
-'{"version":"1.2.51"}' | Set-Content (Join-Path $stage 'manifest.json') -Encoding utf8NoBOM
+(@{version=$expectedVersion} | ConvertTo-Json -Compress) | Set-Content (Join-Path $stage 'manifest.json') -Encoding utf8NoBOM
 $env:FFMPEG_PATH = Join-Path $resources 'bin/ffmpeg.exe'
 $env:PATH = (Join-Path $resources 'bin') + ';' + $env:PATH
 node scripts/check-native-download.cjs $stage
