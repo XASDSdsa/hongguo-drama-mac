@@ -126,7 +126,10 @@ async function main() {
   while (true) {
     await sleep(1500);
     if (sha(exe) === manifest.exe.sha256 && !fs.existsSync(path.join(install, '.app-update-transaction'))) break;
-    assert.ok(Date.now() < deadline, 'Small patch installation timeout');
+    if (Date.now() >= deadline) {
+      const log = path.join(process.env.LOCALAPPDATA, 'changeFileName/updates/installer.log');
+      assert.fail('Small patch installation timeout: ' + (fs.existsSync(log) ? fs.readFileSync(log).toString('utf16le') : 'NSIS did not write its installer log'));
+    }
   }
   assert.equal(requestedQuit, true);
   await sleep(3000);

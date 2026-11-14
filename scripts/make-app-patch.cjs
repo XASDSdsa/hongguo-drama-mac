@@ -57,6 +57,8 @@ async function main() {
   assert.equal(newPackage.version, pkg.version);
   assert.deepEqual(newPackage.dependencies, pkg.dependencies);
   assert.equal(oldSourcePackage.devDependencies.electron, pkg.devDependencies.electron);
+  assert.equal(oldSourcePackage.build.appId, pkg.build.appId);
+  assert.equal(oldSourcePackage.build.productName, pkg.build.productName);
   assert.deepEqual(oldSourcePackage.build.win.extraResources, pkg.build.win.extraResources);
   assert.deepEqual(oldSourcePackage.build.extraResources, pkg.build.extraResources);
   for (const [name, sha256] of Object.entries(oldManifest.sha256)) {
@@ -75,8 +77,10 @@ async function main() {
   for (const name of ['app.asar', 'app-update.yml']) fs.copyFileSync(path.join(target, name), path.join(payload, name));
   fs.copyFileSync(path.join(__dirname, 'app-patch/apply.ps1'), path.join(payload, 'apply.ps1'));
   const installer = path.join(output, `changeFileName-Setup-${pkg.version}.exe`);
+  const { UUID } = require('builder-util-runtime');
+  const guid = UUID.v5(pkg.build.appId, UUID.parse('50e065bc-3134-11e6-9bab-38c9862bdaf3'));
   const nsis = await getMakeNsisPath();
-  execFileSync(nsis.path, ['/V2', `/DVERSION=${pkg.version}`, `/DOUTPUT=${installer}`, `/DPAYLOAD=${payload}`, path.join(__dirname, 'app-patch/install.nsi')],
+  execFileSync(nsis.path, ['/V2', `/DVERSION=${pkg.version}`, `/DAPP_GUID=${guid}`, `/DOUTPUT=${installer}`, `/DPAYLOAD=${payload}`, path.join(__dirname, 'app-patch/install.nsi')],
     { env: { ...process.env, ...nsis.env }, stdio: 'inherit' });
   const bytes = fs.statSync(installer).size;
   assert.ok(bytes < 25 * 1024 * 1024, `Small update exceeds 25 MiB (${bytes}); refuse full-package fallback`);
