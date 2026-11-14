@@ -223,7 +223,7 @@ jobs:
           python scripts/check-update-server.py
           node scripts/check-app-source.cjs
           node scripts/check-native-player.cjs
-          node scripts/check-hongguo-player.cjs --live
+          node scripts/check-hongguo-player.cjs
           node src/components/check-ui-state.cjs
           node scripts/check-cost-report-image.cjs
           node scripts/check-series-library.cjs
