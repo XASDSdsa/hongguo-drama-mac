@@ -89,7 +89,8 @@ function readRankData(html) {
     const found = findRankData(args);
     if (found) return found;
   }
-  return null;
+  // Current pages may inline the completed rank data in loaderData.
+  try { return findRankData(readRouterData(String(html))); } catch (_) { return null; }
 }
 
 function parseRank(html, rank, page, sourceUrl) {
@@ -122,7 +123,8 @@ function parseRank(html, rank, page, sourceUrl) {
         series_id: id,
         series_title: item.title.trim(),
         cover: typeof item.cover === 'string' ? item.cover : '',
-        episode_count: Array.isArray(item.episodeVids) ? item.episodeVids.length : 0,
+        episode_count: Number.isSafeInteger(Number(item.episodeCount)) && Number(item.episodeCount) > 0
+          ? Number(item.episodeCount) : Array.isArray(item.episodeVids) ? item.episodeVids.length : 0,
         tags: strings(item.tags, 4),
         rank: Number(item.rank) || 0,
         heat: typeof item.heatText === 'string' ? item.heatText.trim() : '',

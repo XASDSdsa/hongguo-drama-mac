@@ -743,11 +743,17 @@ function SettingsPage({ active = true }) {
               <input
                 className="input-field"
                 aria-label="视频理解模型"
+                list="ark-model-presets"
                 value={settings.ark_video_model || ''}
                 onChange={(e) => update('ark_video_model', e.target.value)}
                 placeholder="方舟控制台里的模型名或接入点 ID"
                 spellCheck={false}
               />
+              <datalist id="ark-model-presets">
+                {AI_PROVIDERS.text.find((item) => item.id === 'doubao').models.map((model) => (
+                  <option key={model.id} value={model.id}>{model.name}</option>
+                ))}
+              </datalist>
             </label>
           </div>
           <details className="settings-advanced">
@@ -856,6 +862,7 @@ function SettingsPage({ active = true }) {
                   <input
                     className="input-field"
                     aria-label="文案改写模型"
+                    list={copyProvider.id === 'doubao' ? 'ark-model-presets' : undefined}
                     value={settings.ai_copy_model || ''}
                     onChange={(e) => update('ai_copy_model', e.target.value)}
                     placeholder={copyProvider.model || '模型名'}

@@ -20,11 +20,27 @@ on:
         required: false
         default: ''
       quick:
-        description: "true = 只出 Windows 快速更新包，沿用已安装的运行库。"
+        description: "true = 生成并验收软件内小包更新，保留已安装的运行库。"
+        required: false
+        default: 'true'
+      native_verify_run:
+        description: "Validate the packaged native download pipeline from this build artifact run."
+        required: false
+        default: ''
+      installer_verify_run:
+        description: "Verify a complete NSIS installer artifact on a clean Windows machine."
         required: false
         default: ''
       installer_only:
         description: "true = 构建并检查完整安装程序，跳过额外的绿色版 ZIP。"
+        required: false
+        default: ''
+      repack_from_installer_run:
+        description: "通常留空或 patch，生成小包。仅完整运行库升级时指定旧完整包 run。"
+        required: false
+        default: ''
+      quick_artifact_run:
+        description: "Reuse an already verified quick-update artifact when rebuilding only the automatic-update installer."
         required: false
         default: ''
 
@@ -108,7 +124,7 @@ jobs:
   # 快速更新也要在真 Windows 上过一遍剪映草稿：用打包时同一个 pyJianYingDraft 和发布过的 Windows FFmpeg，
   # 实际生成一份三分轨草稿（中文路径），核对 Windows 版剪映读的 draft_content.json 等。几分钟，不打安装包。
   quick-windows-check:
-    if: inputs.quick == 'true'
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == '' && inputs.repack_from_installer_run != 'fast-patch'
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -156,7 +172,7 @@ jobs:
           grep '^::notice' "$RUNNER_TEMP/c.log" || true
 
   quick-update:
-    if: inputs.quick == 'true'
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == '' && inputs.repack_from_installer_run != 'fast-patch'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -170,6 +186,7 @@ jobs:
           cache: npm
 
       - name: Verify release target
+        if: inputs.tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,7 +199,19 @@ jobs:
             throw 'A new draft release targeting this commit is required'
           }
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - run: npm ci
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build and verify the app-local native playback resolver
+        run: npm run setup:hongguo-player
 
       - name: Check cost reports and build the Windows package
         shell: pwsh
@@ -190,7 +219,11 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           node scripts/check-undefined-names.cjs
           node scripts/check-cost-report.cjs
+          node scripts/check-app-updates.cjs
+          python scripts/check-update-server.py
           node scripts/check-app-source.cjs
+          node scripts/check-native-player.cjs
+          node scripts/check-hongguo-player.cjs
           node src/components/check-ui-state.cjs
           node scripts/check-cost-report-image.cjs
           node scripts/check-series-library.cjs
@@ -200,6 +233,8 @@ jobs:
           if ($errors) { throw ($errors -join "`n") }
           npm run build:react
           node scripts/make-quick-update.cjs dist/quick
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Get-ChildItem dist/quick/*-update.zip -ErrorAction SilentlyContinue)) { throw 'Quick update package was not produced' }
 
       - uses: actions/cache/restore@v4
         id: wps-installer
@@ -281,6 +316,7 @@ jobs:
           compression-level: 0
 
       - name: Upload to the draft release
+        if: inputs.tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -289,6 +325,126 @@ jobs:
           $version = node -p "require('./package.json').version"
           $archive = (Resolve-Path "dist/quick/ai-drama-assistant-$version-update.zip").Path
           gh release upload $env:RELEASE_TAG $archive
+
+  in-app-update-installer:
+    if: always() && inputs.quick == 'true' && inputs.repack_from_installer_run != '' && inputs.repack_from_installer_run != 'patch' && inputs.repack_from_installer_run != 'fast-patch' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
+    needs: quick-update
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-quick-update
+          path: dist/new-quick
+          run-id: ${{ inputs.quick_artifact_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: hongguo-windows
+          run-id: ${{ inputs.repack_from_installer_run }}
+          github-token: ${{ github.token }}
+          path: dist/accepted-full
+      - name: Repack accepted runtimes into an automatic-update installer
+        id: repack
+        shell: pwsh
+        run: |
+          node scripts/repack-auto-update.cjs dist/accepted-full dist/new-quick dist/auto-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path dist/auto-update/acceptance-paths.json)) { throw 'Repack did not produce its acceptance manifest' }
+      - name: Exercise the real updater download and silent NSIS installation
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-in-app-update-install.cjs dist/auto-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.repack.outcome == 'success'
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/auto-update/*-Setup-*.exe
+            dist/auto-update/*.blockmap
+            dist/auto-update/release-*.json
+            dist/auto-update/latest.yml
+            dist/auto-update/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  verify-native-download:
+    if: inputs.native_verify_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-quick-update
+          run-id: ${{ inputs.native_verify_run }}
+          github-token: ${{ github.token }}
+          path: dist/packaged-download-test
+      - name: Install the published Windows FFmpeg for full-media validation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ff"
+          gh release download v1.2.6 --repo "${{ github.repository }}" -p 'ffmpeg-*-win-x64.zip' -D "$RUNNER_TEMP/ff"
+          (cd "$RUNNER_TEMP/ff" && 7z x -y -bd ffmpeg-*-win-x64.zip > /dev/null)
+          ff=$(find "$RUNNER_TEMP/ff" -iname ffmpeg.exe | head -n 1)
+          echo "FFMPEG_PATH=$(cygpath -w "$ff")" >> "$GITHUB_ENV"
+          cygpath -w "$(dirname "$ff")" >> "$GITHUB_PATH"
+      - name: Download and fully decode two episodes through the packaged app
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem dist/packaged-download-test/*-update.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath dist/packaged-download-test/stage
+          node scripts/check-native-download.cjs dist/packaged-download-test/stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  verify-full-installer:
+    if: inputs.installer_verify_run != '' && inputs.quick != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: hongguo-windows
+          run-id: ${{ inputs.installer_verify_run }}
+          github-token: ${{ github.token }}
+          path: dist/full-installer
+      - name: Install and exercise the complete packaged application
+        shell: pwsh
+        run: ./scripts/check-installed-app.ps1 dist/full-installer
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: installed-acceptance
+          path: |
+            dist/installed-acceptance.json
+            dist/report-qa
+          if-no-files-found: ignore
 
   publish-existing:
     if: inputs.artifact_run != '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
@@ -345,7 +501,7 @@ jobs:
           exit $failed
 
   build-windows:
-    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true'
+    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true' && inputs.native_verify_run == '' && inputs.installer_verify_run == ''
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
@@ -379,6 +535,14 @@ jobs:
           fi
 
       - run: npm ci
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build and verify the app-local native playback resolver
+        run: npm run setup:hongguo-player
 
       - name: Prepare and test the offline report conversion engine
         shell: pwsh
@@ -610,6 +774,7 @@ jobs:
 
       # GitHub 发布页每个文件必须小于 2 GiB：超了在这里就停，说清楚，不等到最后上传才失败
       - name: Installer must stay under the 2 GiB release asset limit
+        if: inputs.tag != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -665,7 +830,24 @@ jobs:
         run: npx --no-install electron scripts/check-office-png.cjs dist/win-unpacked/resources/LibreOffice
 
       - name: Prepare release assets
+        env:
+          SELF_HOSTED_UPDATES: ${{ inputs.tag == '' && '1' || '0' }}
         run: node scripts/prepare-release-assets.js
+
+      - name: Prepare the matching self-hosted update metadata
+        run: node scripts/make-update-release.cjs dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/*-Setup-*.exe
+            dist/*.blockmap
+            dist/release-*.json
+            dist/latest.yml
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
       - name: Add the bundled FFmpeg and its complete source to the release assets
         shell: bash
@@ -705,3 +887,151 @@ jobs:
 
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
+
+  in-app-fast-update:
+    if: inputs.quick == 'true' && inputs.repack_from_installer_run == 'fast-patch'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      UPDATE_RELEASE_NOTES: '新增火山方舟 doubao-seed-2-1-turbo-260628 预设，保留自定义模型。'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Fetch accepted code baseline
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download windows-patch-baseline-1.2.51 --repo "${{ github.repository }}" --pattern 'changeFileName-1.2.51-patch-baseline.zip' --dir dist/patch-base
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          run-id: 43561340463
+          github-token: ${{ github.token }}
+          path: dist/previous-patch
+      - name: Build application code and model preset only
+        shell: pwsh
+        run: |
+          git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
+          if ($LASTEXITCODE -ne 0) { throw 'Fast release requires the already verified patch engine' }
+          node scripts/check-doubao-preset.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:react
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/make-quick-update.cjs dist/code-update --code-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check 1.2.52 to new preset update only
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/app-patch/*-Setup-*.exe
+            dist/app-patch/*.blockmap
+            dist/app-patch/release-*.json
+            dist/app-patch/latest.yml
+            dist/app-patch/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  in-app-small-update:
+    if: always() && inputs.quick == 'true' && (inputs.repack_from_installer_run == '' || inputs.repack_from_installer_run == 'patch') && inputs.installer_verify_run == '' && inputs.native_verify_run == '' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
+    needs: quick-update
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Fetch the permanent accepted code baseline (no full installer)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download windows-patch-baseline-1.2.51 --repo "${{ github.repository }}" --pattern 'changeFileName-1.2.51-patch-baseline.zip' --dir dist/patch-base
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-quick-update
+          path: dist/patch-target
+          run-id: ${{ inputs.quick_artifact_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Build the small application patch without packaging runtimes
+        shell: pwsh
+        run: |
+          node scripts/check-pe-patch.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/make-app-patch.cjs dist/patch-base dist/patch-target dist/app-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify actual 1.2.51 updater to small patch, rollback and preserved files
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/app-patch/*-Setup-*.exe
+            dist/app-patch/*.blockmap
+            dist/app-patch/release-*.json
+            dist/app-patch/latest.yml
+            dist/app-patch/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  verify-new-install:
+    if: inputs.quick == 'true' && inputs.installer_verify_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          run-id: ${{ inputs.installer_verify_run }}
+          github-token: ${{ github.token }}
+          path: dist/new-installer
+      - name: Verify the newest full installer without an old installation
+        shell: pwsh
+        run: |
+          node scripts/check-app-updates.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./node_modules/.bin/electron.cmd scripts/check-in-app-update-install.cjs dist/new-installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/new-installer/*-Setup-*.exe
+            dist/new-installer/*.blockmap
+            dist/new-installer/release-*.json
+            dist/new-installer/latest.yml
+            dist/new-installer/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

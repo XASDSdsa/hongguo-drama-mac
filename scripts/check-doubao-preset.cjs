@@ -1,0 +1,13 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { providers, arkVideoModel, copyWritingConfig } = require('../src/native/ai-config');
+const model = 'doubao-seed-2-1-turbo-260628';
+assert.equal(arkVideoModel(), model);
+assert.equal(arkVideoModel({ ark_video_model: '  ' }), model);
+assert.equal(arkVideoModel({ ark_video_model: 'ep-custom' }), 'ep-custom');
+assert.ok(providers.text.find(item => item.id === 'doubao').models.some(item => item.id === model));
+const config = copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test-key' });
+assert.equal(config.ai_text_model, model);
+assert.equal(config.ai_api_key, 'test-key');
+assert.equal(copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test-key', ai_copy_model: 'ep-existing' }).ai_text_model, 'ep-existing');
+console.log('PASS Doubao Turbo presets: video/copy defaults, blank fallback, existing custom models and Ark key reuse');

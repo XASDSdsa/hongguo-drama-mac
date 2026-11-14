@@ -23,6 +23,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const VERSION = pkg.version;
 const PRODUCT = pkg.build.productName || pkg.name;
 const SLUG = pkg.name; // ai-drama-assistant
+const MAX_ASSET_SIZE = (process.env.SELF_HOSTED_UPDATES === '1' ? 3 : 2) * 1024 ** 3;
 
 // 本地产物名（中文） -> Release 资产名（ASCII）
 const MAP = [
@@ -52,7 +53,7 @@ function main() {
     }
     // GitHub Release 单个文件上限 2 GiB：超过的放不上去，整个上传步骤会失败。跳过并说明，不影响其余文件。
     const size = fs.statSync(src).size;
-    if (size >= 2 * 1024 * 1024 * 1024) {
+    if (size >= MAX_ASSET_SIZE) {
       skipped.push({ ...m, size });
       continue;
     }
@@ -67,8 +68,8 @@ function main() {
     console.log(`      ${(d.size / 1048576).toFixed(1)} MB   （${d.desc}）`);
   }
   for (const item of skipped)
-    console.log(`  跳过 ${item.to}：${(item.size / 1048576).toFixed(1)} MB，超过 GitHub 单文件 2 GiB 上限`);
-  if (!done.some((item) => /Setup\.exe$/.test(item.to))) throw new Error('安装包 Setup.exe 缺失或超过 2 GiB，无法发布');
+    console.log(`  跳过 ${item.to}：${(item.size / 1048576).toFixed(1)} MB，超过 ${MAX_ASSET_SIZE / 1024 ** 3} GiB 上限`);
+  if (!done.some((item) => /Setup\.exe$/.test(item.to))) throw new Error('安装包 Setup.exe 缺失或超过文件大小上限，无法发布');
   if (missing.length) {
     console.log('\n未找到以下本地产物，请先打包：');
     missing.forEach((m) => console.log('  ' + m));

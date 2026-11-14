@@ -85,6 +85,30 @@ if (app.isPackaged) {
 
 let mainWindow = null;
 let launchAuthorized = false;
+let appUpdates = null;
+let pendingIpcWork = 0;
+let activeCostReports = 0;
+const registerIpc = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => registerIpc(channel, (event, ...args) => {
+  if (appUpdates?.snapshot().status === 'installing' && !channel.startsWith('app-update-')) {
+    return { success: false, error: '正在重启更新，请稍候' };
+  }
+  const result = listener(event, ...args);
+  if (result?.then && !channel.startsWith('app-update-')) {
+    pendingIpcWork++;
+    return Promise.resolve(result).finally(() => { pendingIpcWork--; });
+  }
+  return result;
+});
+ipcMain.handle('app-update-status', () => appUpdates?.snapshot() || { status: 'unsupported' });
+for (const method of ['check', 'download', 'install']) {
+  ipcMain.handle(`app-update-${method}`, event => {
+    if (!launchAuthorized || !mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      return { success: false, error: '请从软件主窗口操作更新' };
+    }
+    return appUpdates?.[method]() || { success: false, error: '更新服务尚未就绪' };
+  });
+}
 // 用户在「还有任务在跑」的提示里确认过退出，之后关窗口不再拦。
 let quitConfirmed = false;
 // 软件改名后数据目录跟着名字变了：新目录里还没有数据时，把旧目录里的设置、
@@ -319,10 +343,10 @@ function getDefaultSettings() {
     ai_image_size: '1024x1536',
     ai_image_quality: 'high',
     ai_concurrency: 2,
-    // 视频反推提示词（火山方舟视频理解）：模型名没有默认值，要用户自己填。
+    // 视频反推提示词：预填方舟模型，仍可使用自定义模型名或接入点 ID。
     ark_base_url: arkVideo.DEFAULT_BASE_URL,
     ark_api_key: '',
-    ark_video_model: '',
+    ark_video_model: aiConfig.arkVideoModel(),
     // 海报 / 封面作图用哪家：seedream（火山方舟，和视频理解共用方舟地址和 Key）/ openai（OpenAI 兼容 images 接口）
     image_provider: 'seedream',
     ark_image_model: seedream.DEFAULT_MODEL,
@@ -454,6 +478,7 @@ async function applyProxySettings(settings) {
 function getCurrentSettings() {
   const saved = store.getSettings() || {};
   const merged = { ...getDefaultSettings(), ...saved };
+  merged.ark_video_model = aiConfig.arkVideoModel(merged);
   // 保证并发数合法
   const mc = parseInt(merged.max_concurrent, 10);
   MAX_CONCURRENT_DOWNLOADS = Number.isInteger(mc) && mc >= 1 && mc <= 10 ? mc : 3;
@@ -4207,7 +4232,7 @@ ipcMain.handle('test-ai-image', async (_event, draft = {}) => {
 ipcMain.handle('ark-test', async (_event, draft = {}) => {
   const settings = { ...getCurrentSettings(), ...draft };
   const apiKey = String(settings.ark_api_key || '').trim();
-  const model = String(settings.ark_video_model || '').trim();
+  const model = aiConfig.arkVideoModel(settings);
   if (!apiKey) return { success: false, error: '请先填方舟 API Key' };
   if (!model) return { success: false, error: '请先填视频理解模型名' };
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-ark-test-'));
@@ -5020,7 +5045,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
   const key = path.resolve(job.dir);
   const label = path.basename(file, path.extname(file));
   const settings = getCurrentSettings();
-  const model = String(settings.ark_video_model || '').trim();
+  const model = aiConfig.arkVideoModel(settings);
   // 分镜工程图的日志单独一栏（和剪映草稿分开）
   const log = (level, text) =>
     libLog(
@@ -5721,17 +5746,11 @@ ipcMain.handle('library-durations', async (_event, payload = {}) => {
 // ===== 成本配置报告 =====
 // Word 总投资额按原剧集数填报；Seedance 2.5 明细用于估算。
 // 模板里有公章和签名：只存在本机的用户数据目录里，不进仓库、不进安装包。
-const costTemplateFile = () => path.join(app.getPath('userData'), 'cost-report-template.docx');
-function costTemplateInfo() {
-  const file = costTemplateFile();
-  const stat = fs.statSync(file, { throwIfNoEntry: false });
-  if (!stat) return { ready: false };
-  let name = '';
-  try {
-    name = JSON.parse(fs.readFileSync(`${file}.json`, 'utf8')).name || '';
-  } catch (_) {}
-  return { ready: true, name: name || '成本配置报告模板.docx', importedAt: Math.round(stat.mtimeMs) };
-}
+const costTemplates = () => require('./src/native/cost-report/templates').createTemplateStore(
+  app.getPath('userData'), buffer => costDocx.checkTemplate(buffer),
+);
+const costTemplateFile = (id) => costTemplates().file(id);
+const costTemplateInfo = (id) => costTemplates().info(id);
 
 // 每集的时长和画面大小（按文件大小和修改时间缓存，改了就重新读）
 const episodeShapes = new Map();
@@ -5802,7 +5821,8 @@ ipcMain.handle('library-cost-report', async (_event, payload = {}) => {
     return {
       success: true,
       title: seriesLayout.readNewInfo(dir).title || '',
-      template: costTemplateInfo(),
+      template: costTemplateInfo(payload.templateId),
+      templates: costTemplates().list(),
       report: stat ? { name: seriesLayout.COST_REPORT, updatedAt: Math.round(stat.mtimeMs) } : null,
       price: { model, mode, checked, source, fps },
       ...summary,
@@ -5869,21 +5889,13 @@ ipcMain.handle('library-cost-report-export-png', async (_event, payload = {}) =>
 ipcMain.handle('cost-report-template-pick', async () => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择成本配置报告模板（Word 文件）',
-      properties: ['openFile'],
+      title: '添加成本配置报告模板（可多选 Word 文件）',
+      properties: ['openFile', 'multiSelections'],
       filters: [{ name: 'Word 文件', extensions: ['docx'] }],
     });
-    if (result.canceled || !result.filePaths[0]) return { success: true, template: costTemplateInfo() };
-    const source = result.filePaths[0];
-    const buffer = await fsp.readFile(source);
-    const problems = costDocx.checkTemplate(buffer);
-    if (problems.length) return { success: false, error: `这个模板填不了：${problems.join('；')}` };
-    const file = costTemplateFile();
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(`${file}.tmp`, buffer);
-    await fsp.rename(`${file}.tmp`, file);
-    await fsp.writeFile(`${file}.json`, JSON.stringify({ name: path.basename(source) }));
-    return { success: true, template: costTemplateInfo() };
+    if (result.canceled || !result.filePaths.length) return { success: true, canceled: true, templates: costTemplates().list() };
+    const added = await costTemplates().add(result.filePaths);
+    return { success: true, templates: costTemplates().list(), added, template: added[0] };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -5895,6 +5907,7 @@ function normalizeCostRequest(value = {}) {
     title: String(value.title || '')
       .trim()
       .slice(0, 200),
+    templateId: String(value.templateId || costTemplateInfo().id || ''),
     actorPercent: costPricing.normalizeActorPercent(value.actorPercent),
     draws: costPricing.normalizeDraws(value.draws || costPricing.DEFAULT_DRAWS),
   };
@@ -5902,8 +5915,10 @@ function normalizeCostRequest(value = {}) {
 
 /** 生成报告：放在剧文件夹根目录，已经有就换成新的。 */
 async function makeCostReport(dir, request = {}) {
-  if (!costTemplateInfo().ready) return { success: false, error: '还没选报告模板（在「报告设置」里选）' };
   const payload = normalizeCostRequest(request);
+  if (!costTemplateInfo(payload.templateId).ready) return { success: false, error: '所选报告模板不存在，请在「报告设置」中选择模板' };
+  // Capture the submitted template before any asynchronous media analysis.
+  const templateBuffer = await fsp.readFile(costTemplateFile(payload.templateId));
   const title = payload.title || seriesLayout.readNewInfo(dir).title;
   if (!title) return { success: false, error: '还没有新剧名：先在「AI 发布素材」里定新剧名，或者在「报告设置」里填' };
   const summary = await costSummary(dir, payload.actorPercent, payload.draws);
@@ -5911,7 +5926,7 @@ async function makeCostReport(dir, request = {}) {
   if (!summary.cost.episodes) return { success: false, error: '「去重」文件夹里还没有成品，算不了时长' };
   if (summary.unreadable.length)
     return { success: false, error: `有 ${summary.unreadable.length} 集读不出时长（${summary.unreadable.slice(0, 3).join('、')}），先检查这几个视频` };
-  const buffer = costDocx.fillCostReport(await fsp.readFile(costTemplateFile()), {
+  const buffer = costDocx.fillCostReport(templateBuffer, {
     name: title,
     episodes: summary.text.episodes,
     total: summary.text.total,
@@ -5933,6 +5948,7 @@ async function makeCostReport(dir, request = {}) {
 /** 处理做完（或没勾去重、直接开始）时自动生成，结果写进这部剧的处理日志。 */
 async function runCostReportTask(dir, task) {
   if (!task?.enabled || !dir) return;
+  activeCostReports++;
   try {
     const made = await makeCostReport(dir, task);
     if (made.success)
@@ -5945,6 +5961,8 @@ async function runCostReportTask(dir, task) {
     else libLog(dir, 'error', `成本配置报告：没有生成：${made.error}`, 'side');
   } catch (error) {
     libLog(dir, 'error', `成本配置报告：没有生成：${error?.message || error}`, 'side');
+  } finally {
+    activeCostReports--;
   }
 }
 
@@ -7131,7 +7149,8 @@ async function requestMedia(playInfo, options = {}) {
     responseType: 'stream',
     timeout: 60000,
     ...options,
-    headers: { 'User-Agent': playInfo.userAgent || hongguo.UA, 'Accept-Encoding': 'identity', ...options.headers },
+    headers: { 'User-Agent': playInfo.userAgent || hongguo.UA, 'Accept-Encoding': 'identity',
+      ...(playInfo.referer ? { Referer: playInfo.referer } : {}), ...options.headers },
   };
   try {
     return await axios(config);
@@ -9444,6 +9463,7 @@ ipcMain.handle('retry-task', async (event, taskId) => {
   if (!['failed', 'stopped'].includes(task.status) && !(task.status === 'completed' && !hasCompleteTaskFile(task)))
     return { success: false, error: '任务仍在进行中或已完成' };
 
+  hongguo.invalidatePlayUrl?.(task.hongguoInfo?.vid, task.hongguoInfo?.series_id);
   repairTaskDestination(task);
 
   task.status = 'pending';
@@ -9472,6 +9492,7 @@ ipcMain.handle('retry-tasks', async (event, taskIds) => {
         task.status === 'stopped' ||
         (task.status === 'completed' && !hasCompleteTaskFile(task)))
     ) {
+      hongguo.invalidatePlayUrl?.(task.hongguoInfo?.vid, task.hongguoInfo?.series_id);
       repairTaskDestination(task);
       task.status = 'pending';
       task.progress = 0;
@@ -9896,7 +9917,21 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[Encoder] 检测失败:', e.message);
   }
+  const { createAppUpdates } = require('./src/native/app-updates');
+  appUpdates = createAppUpdates({
+    app,
+    installDir: path.dirname(process.execPath),
+    updater: process.platform === 'win32' && app.isPackaged ? require('electron-updater').autoUpdater : null,
+    notify: state => sendToRenderer('app-update-state', state),
+    busy: () => pendingIpcWork > 0 || activeCostReports > 0 || appBusy() || draftStartLocks.size > 0 ||
+      [...libraryJobs.values()].some(job => ['waiting', 'starting'].includes(job.status)) ||
+      [...publishJobs.values()].some(job => job.status === 'running') ||
+      !!aiMaterialQueue?.hasActive() ||
+      !!analysisManager?.hasActive?.() || ['running', 'stopping'].includes(oneclick.status()?.status),
+  });
   createWindow();
+  setTimeout(() => appUpdates.check(), 15_000).unref?.();
+  setInterval(() => appUpdates.check(), 6 * 60 * 60 * 1000).unref?.();
   startSleepBlockerWatch();
   // 草稿挪过位置的话把素材路径改过来（后台做，不耽误启动）。
   setTimeout(() => relinkMovedDrafts(), 8000).unref?.();

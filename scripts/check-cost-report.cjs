@@ -282,8 +282,8 @@ const template = writeZip([
   );
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   assert.match(
-    main,
-    /path\.join\(app\.getPath\('userData'\), 'cost-report-template\.docx'\)/,
+    fs.readFileSync(path.join(root, 'src/native/cost-report/templates.js'), 'utf8'),
+    /path\.join\(userData, 'cost-report-template\.docx'\)/,
     '模板存在本机用户数据目录',
   );
   assert.match(main, /costDocx\.checkTemplate\(buffer\)/, '选模板时先核对能不能填');
@@ -356,3 +356,54 @@ const template = writeZip([
   assert.match(main, /成本配置报告：已生成/);
   console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');
 }
+
+// Exercise real template files and the actual report-generation function.
+(async () => {
+  const os = require('node:os');
+  const vm = require('node:vm');
+  const { createTemplateStore } = require('../src/native/cost-report/templates');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cost-templates-'));
+  try {
+    const store = createTemplateStore(path.join(dir, 'userdata'), checkTemplate);
+    assert.deepEqual(store.list(), []);
+    assert.throws(() => store.file('../outside'), /模板不存在/);
+    const first = path.join(dir, '模板一.docx'), second = path.join(dir, '模板二.docx');
+    fs.writeFileSync(first, template);
+    const different = writeZip(readZip(template).map(({name, data}) => ({name, data: name === 'word/media/image2.png' ? Buffer.from('second-template-seal') : data})));
+    fs.writeFileSync(second, different);
+    const added = await store.add([first, second]);
+    assert.equal(store.list().length, 2);
+    assert.notEqual(added[0].id, added[1].id);
+    assert.ok(fs.readFileSync(store.file(added[0].id)).equals(template));
+    assert.ok(fs.readFileSync(store.file(added[1].id)).equals(different));
+    const reopened = createTemplateStore(path.join(dir, 'userdata'), checkTemplate);
+    assert.equal(reopened.info(added[1].id).name, '模板二.docx');
+    const bad = path.join(dir, '无效.docx'); fs.writeFileSync(bad, 'not a template');
+    await assert.rejects(() => store.add([first, bad]));
+    assert.equal(store.list().length, 2, 'invalid batch must not import partial templates');
+    await store.add([]); assert.equal(store.list().length, 2);
+    fs.writeFileSync(path.join(dir, 'userdata/cost-report-template.docx'), template);
+    assert.equal(store.info().id, 'legacy');
+    assert.equal(store.list().length, 3);
+    assert.ok(fs.readFileSync(path.join(dir, 'userdata/cost-report-template.docx')).equals(template));
+    const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+    const extract = name => { const at = main.search(new RegExp('^(?:async )?function '+name+'\\(', 'm')); return main.slice(at, main.indexOf('\n}', at)+2); };
+    const summary = { text: { total: '5万元', episodes: '2集，共3分钟', share: '15%' }, cost: {episodes: 2}, unreadable: [] };
+    const generated = path.join(dir, 'report.docx');
+    let activeId = added[0].id;
+    const context = { fs, fsp: fs.promises, costTemplateInfo: id => store.info(id || activeId), costTemplateFile: id => store.file(id),
+      costPricing: pricing, costDocx: {fillCostReport}, seriesLayout: { readNewInfo: () => ({title:'多模板测试'}), COST_REPORT:'report.docx'},
+      costSummary: async () => { activeId = added[1].id; return summary; }, costReportFile: () => generated };
+    const make = vm.runInNewContext(extract('normalizeCostRequest')+'\n'+extract('makeCostReport')+'\nmakeCostReport', context);
+    const queued = vm.runInNewContext(extract('normalizeCostRequest')+'\nnormalizeCostRequest', context)({});
+    assert.equal(queued.templateId, added[0].id);
+    for (const [id, expected] of [[queued.templateId, seal], [added[1].id, Buffer.from('second-template-seal')]]) {
+      assert.equal((await make(dir, {templateId:id,title:'多模板测试'})).success, true);
+      assert.ok(readZip(fs.readFileSync(generated)).find(item => item.name === 'word/media/image2.png').data.equals(expected), 'report must use the submitted template assets');
+    }
+    const before = fs.readFileSync(generated);
+    assert.equal((await make(dir, {templateId:'../../outside'})).success, false);
+    assert.ok(fs.readFileSync(generated).equals(before), 'missing selection must not overwrite an existing report');
+    console.log('PASS multiple templates: legacy retained, multi-import/reopen, invalid batch atomicity, exact selected report assets and queued template snapshot');
+  } finally { fs.rmSync(dir, {recursive:true,force:true}); }
+})().catch(error => {console.error(error);process.exitCode=1;});

@@ -393,11 +393,11 @@ async function check(name, fn) {
     // 成本配置报告也是支线任务：设置按规矩收好（片酬占比默认 15%，抽卡 1～10 次）
     assert.equal(
       vm.runInContext(
-        "JSON.stringify(normalizeSideTasks({ costReport: { enabled: true, title: ' 新剧 ', actorPercent: 'x', draws: { min: 0, max: 99, seed: 's' } } }))",
+        "JSON.stringify(normalizeSideTasks({ costReport: { enabled: true, title: ' 新剧 ', templateId: 'legacy', actorPercent: 'x', draws: { min: 0, max: 99, seed: 's' } } }))",
         context,
       ),
       JSON.stringify({
-        costReport: { enabled: true, title: '新剧', actorPercent: 15, draws: { min: 1, max: 10, seed: 's' } },
+        costReport: { enabled: true, title: '新剧', templateId: 'legacy', actorPercent: 15, draws: { min: 1, max: 10, seed: 's' } },
       }),
     );
     assert.equal(vm.runInContext('normalizeSideTasks({ costReport: { enabled: false } })', context), null);
