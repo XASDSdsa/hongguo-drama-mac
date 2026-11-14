@@ -7,7 +7,16 @@ $backup = Join-Path $InstallDir '.app-update-transaction'
 $targets = @('resources\app.asar', 'resources\app-update.yml', $exeName)
 
 function Hash-File([string]$file) {
-  return (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+  # Use .NET directly: a host started from PowerShell 7 can inherit a module
+  # search path where Windows PowerShell's Get-FileHash is unavailable.
+  $stream = [IO.File]::OpenRead($file)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
 }
 
 function Restore-Previous {
