@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { extractFile } = require('@electron/asar');
 const pkg = require('../package.json');
@@ -30,6 +31,7 @@ function main() {
     execFileSync('hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mount, dmg], { stdio: 'inherit' });
     const app = fs.readdirSync(mount).find(name => name.endsWith('.app'));
     assert.ok(app);
+    execFileSync('codesign', ['--verify', '--deep', '--strict', path.join(mount, app)], { stdio: 'inherit' });
     const resources = path.join(mount, app, 'Contents/Resources');
     assert.equal(JSON.parse(extractFile(path.join(resources, 'app.asar'), 'package.json')).version, accepted.version);
     for (const item of pkg.build.mac.extraResources) {
@@ -43,6 +45,27 @@ function main() {
           fs.cpSync(path.join(source, name), path.join(destination, name), { recursive: true, verbatimSymlinks: true });
         }
       } else fs.cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
+    }
+    // The accepted DMG and its complete app signature authenticate these files.
+    // App signing can alter a Mach-O signature after the original build manifest
+    // was written; retain strict checks, rebasing only those signed executables.
+    for (const folder of ['build/faster-whisper/darwin-arm64', 'build/video-structure/darwin-arm64', 'build/jianying/darwin-arm64']) {
+      const base = path.join(root, folder);
+      const file = path.join(base, 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(file));
+      const rebased = [];
+      for (const [name, expectedHash] of Object.entries(manifest.sha256 || {})) {
+        const entry = path.resolve(base, name);
+        assert.ok(entry.startsWith(base + path.sep));
+        const actual = createHash('sha256').update(fs.readFileSync(entry)).digest('hex');
+        if (actual === expectedHash) continue;
+        assert.match(execFileSync('file', [entry], { encoding: 'utf8' }), /Mach-O/, name);
+        execFileSync('codesign', ['--verify', '--strict', entry], { stdio: 'inherit' });
+        manifest.sha256[name] = actual;
+        rebased.push(name);
+      }
+      manifest.reusedFrom = { version: accepted.version, run: '42785018549', signedFilesRebased: rebased };
+      fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
     }
   } finally {
     execFileSync('hdiutil', ['detach', mount], { stdio: 'inherit' });
