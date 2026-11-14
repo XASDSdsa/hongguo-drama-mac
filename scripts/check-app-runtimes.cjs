@@ -14,6 +14,7 @@ module.exports = async (context) => {
     }
   }
   if (context.electronPlatformName === 'darwin') {
+    require('./setup-hongguo-player-mac.cjs').verifyBundle(context.packager.projectDir);
     const office = path.join(context.packager.projectDir, 'build/libreoffice/darwin-arm64/LibreOffice.app/Contents/MacOS/soffice');
     if (!fs.existsSync(office)) throw new Error('缺少报告转换组件，请先运行 npm run setup:office:mac');
   }

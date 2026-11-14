@@ -28,8 +28,8 @@
     "pack": "npm run setup:hongguo-player && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && electron-builder --dir",
     "zip": "node scripts/make-zip.js",
     "setup:ffmpeg:mac": "node scripts/setup-ffmpeg-mac.js",
-    "build:mac": "npm run setup:office:mac && npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
-    "build:mac:dir": "npm run setup:office:mac && npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
+    "build:mac": "npm run setup:hongguo-player:mac && npm run setup:office:mac && npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac dmg --arm64 --publish never",
+    "build:mac:dir": "npm run setup:hongguo-player:mac && npm run setup:office:mac && npm run setup:ffmpeg:mac && npm run setup:whisper && npm run setup:transcription && npm run setup:structure && npm run setup:title-fonts && npm run setup:jianying && npm run build:react && electron-builder --mac --arm64 --dir --publish never",
     "check:workflow": "node scripts/check-workflow-wiring.cjs",
     "check:oneclick": "node scripts/check-oneclick.cjs",
     "check:synopsis": "node scripts/check-synopsis.cjs",
@@ -51,7 +51,8 @@
     "check:publish": "node scripts/check-publish-materials.cjs && node scripts/check-publish-ipc.cjs && node scripts/check-poster-title.cjs && node scripts/check-title-fonts.cjs",
     "setup:office:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-libreoffice-win.ps1",
     "setup:office:mac": "bash scripts/setup-libreoffice-mac.sh",
-    "setup:hongguo-player": "node scripts/setup-hongguo-player.cjs"
+    "setup:hongguo-player": "node scripts/setup-hongguo-player.cjs",
+    "setup:hongguo-player:mac": "node scripts/setup-hongguo-player-mac.cjs"
   },
   "dependencies": {
     "axios": "^1.13.2",
@@ -277,6 +278,10 @@
         {
           "from": "build/libreoffice/darwin-arm64/LibreOffice.app",
           "to": "LibreOffice.app"
+        },
+        {
+          "from": "build/hongguo-player/darwin-arm64",
+          "to": "hongguo-player"
         }
       ],
       "binaries": [
@@ -286,7 +291,8 @@
         "Contents/Resources/faster-whisper/transcribe-worker",
         "Contents/Resources/video-structure/worker/structure-worker",
         "Contents/Resources/video-structure/bin/sherpa-onnx-offline-source-separation",
-        "Contents/Resources/jianying/jianying-runtime"
+        "Contents/Resources/jianying/jianying-runtime",
+        "Contents/Resources/hongguo-player/runtime/Contents/Home/bin/java"
       ],
       "signIgnore": [
         "/LibreOffice\\.app(?:/|$)"
