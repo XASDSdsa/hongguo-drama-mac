@@ -51,7 +51,7 @@ function main() {
     // was written; retain strict checks, rebasing only those signed executables.
     for (const folder of ['build/faster-whisper/darwin-arm64', 'build/video-structure/darwin-arm64', 'build/jianying/darwin-arm64']) {
       const base = path.join(root, folder);
-      const file = path.join(base, 'manifest.json');
+      const file = path.join(base, folder.includes('video-structure') ? 'bundle.json' : 'manifest.json');
       const manifest = JSON.parse(fs.readFileSync(file));
       const rebased = [];
       for (const [name, expectedHash] of Object.entries(manifest.sha256 || {})) {
