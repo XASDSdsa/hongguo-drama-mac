@@ -20,9 +20,9 @@ on:
         required: false
         default: ''
       quick:
-        description: "true = 只出 Windows 快速更新包，沿用已安装的运行库。"
+        description: "true = 生成并验收软件内小包更新，保留已安装的运行库。"
         required: false
-        default: ''
+        default: 'true'
       native_verify_run:
         description: "Validate the packaged native download pipeline from this build artifact run."
         required: false
@@ -36,7 +36,7 @@ on:
         required: false
         default: ''
       repack_from_installer_run:
-        description: "Reuse the accepted 1.2.49 installer runtimes and build/test the in-app-update installer after a quick build."
+        description: "通常留空或 patch，生成小包。仅完整运行库升级时指定旧完整包 run。"
         required: false
         default: ''
       quick_artifact_run:
@@ -327,7 +327,7 @@ jobs:
           gh release upload $env:RELEASE_TAG $archive
 
   in-app-update-installer:
-    if: always() && inputs.quick == 'true' && inputs.repack_from_installer_run != '' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
+    if: always() && inputs.quick == 'true' && inputs.repack_from_installer_run != '' && inputs.repack_from_installer_run != 'patch' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
     needs: quick-update
     runs-on: windows-latest
     timeout-minutes: 60
@@ -887,6 +887,57 @@ jobs:
 
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
+
+  in-app-small-update:
+    if: always() && inputs.quick == 'true' && (inputs.repack_from_installer_run == '' || inputs.repack_from_installer_run == 'patch') && inputs.installer_verify_run == '' && inputs.native_verify_run == '' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
+    needs: quick-update
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Fetch the permanent accepted code baseline (no full installer)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download windows-patch-baseline-1.2.51 --repo "${{ github.repository }}" --pattern 'changeFileName-1.2.51-patch-baseline.zip' --dir dist/patch-base
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-quick-update
+          path: dist/patch-target
+          run-id: ${{ inputs.quick_artifact_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Build the small application patch without packaging runtimes
+        shell: pwsh
+        run: |
+          node scripts/check-pe-patch.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/make-app-patch.cjs dist/patch-base dist/patch-target dist/app-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify actual 1.2.51 updater to small patch, rollback and preserved files
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/app-patch/*-Setup-*.exe
+            dist/app-patch/*.blockmap
+            dist/app-patch/release-*.json
+            dist/app-patch/latest.yml
+            dist/app-patch/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
 
   verify-new-install:
     if: inputs.quick == 'true' && inputs.installer_verify_run != ''
