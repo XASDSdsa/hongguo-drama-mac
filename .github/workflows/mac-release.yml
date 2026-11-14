@@ -47,8 +47,9 @@ jobs:
         run: node scripts/setup-hongguo-player-mac.cjs build/hongguo-player/changeFileName-1.2.51-patch-baseline.zip
       - name: Build the latest complete Mac application and DMG
         run: |
+          ulimit -n 65536 2>/dev/null || ulimit -n 10240
           npm run build:react
-          npx --no-install electron-builder --mac dmg --arm64 --publish never
+          node scripts/build-mac-dmg.cjs
       - name: Verify the packaged application and disk image
         run: |
           product=$(node -p "require('./package.json').build.productName")
