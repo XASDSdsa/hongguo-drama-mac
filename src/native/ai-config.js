@@ -3,6 +3,7 @@
 const providers = require('./ai-providers.json');
 
 const trim = (value) => String(value || '').trim();
+const arkVideoModel = (settings = {}) => trim(settings.ark_video_model) || providers.text.find((item) => item.id === 'doubao').model;
 
 /** 没选过「用哪家」的旧设置：按填过的地址认出来；认不出就是「其他」，什么都没填当 DeepSeek。 */
 function copyProviderFor(baseUrl) {
@@ -33,4 +34,4 @@ function copyWritingConfig(settings = {}) {
 /** 作图走 OpenAI 兼容接口（否则走火山方舟 Seedream）。 */
 const usesOpenAiImages = (settings = {}) => trim(settings.image_provider) === 'openai';
 
-module.exports = { providers, copyProviderFor, copyWritingConfig, usesOpenAiImages };
+module.exports = { providers, copyProviderFor, copyWritingConfig, usesOpenAiImages, arkVideoModel };

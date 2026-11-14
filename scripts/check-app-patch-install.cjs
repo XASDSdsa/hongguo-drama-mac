@@ -13,6 +13,7 @@ const sha = file => hash(fs.readFileSync(file));
 const quote = value => value.replace(/'/g, "''");
 const ps = command => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true });
 let server;
+const focused = process.argv.includes('--focused');
 
 async function main() {
   await app.whenReady();
@@ -25,7 +26,7 @@ async function main() {
   fs.rmSync(path.join(install, 'electron.exe'), { force: true });
   const resources = path.join(install, 'resources');
   fs.mkdirSync(resources, { recursive: true });
-  fs.cpSync(path.join(paths.target, 'hongguo-player'), path.join(resources, 'hongguo-player'), { recursive: true });
+  if (!focused) fs.cpSync(path.join(paths.target, 'hongguo-player'), path.join(resources, 'hongguo-player'), { recursive: true });
   fs.cpSync(path.join(paths.base, 'hongguo-player'), path.join(resources, 'hongguo-player'), { recursive: true });
   const exe = path.join(install, 'changeFileName.exe');
   const archive = path.join(resources, 'app.asar');
@@ -34,10 +35,20 @@ async function main() {
     for (const name of ['app.asar', 'app-update.yml']) fs.copyFileSync(path.join(paths.base, name), path.join(resources, name));
   }
   resetBase();
+  let fromVersion = '1.2.51';
+  let harnessArchive = path.join(paths.base, 'app.asar');
+  if (focused) {
+    const previousDir = path.resolve(process.argv[process.argv.indexOf('--focused') + 1]);
+    const previous = path.join(previousDir, 'changeFileName-Setup-1.2.52.exe');
+    assert.equal(sha(previous), '7278aede27834c693d3db38c4c1759358bec5daa1ac389f82bd5b6556e1877a3');
+    execFileSync(previous, ['/S', '/D=' + install], { windowsVerbatimArguments: true, windowsHide: true, timeout: 90000 });
+    harnessArchive = path.join(output, 'previous-app.asar');
+    fs.copyFileSync(archive, harnessArchive);
+    fromVersion = '1.2.52';
+  }
   // Keep the harness's loaded ASAR outside the installation. Electron keeps
   // loaded archives open; the real updating app exits before replacement.
-  const harnessArchive = path.join(paths.base, 'app.asar');
-  assert.equal(require(harnessArchive + '/package.json').version, '1.2.51');
+  assert.equal(require(harnessArchive + '/package.json').version, fromVersion);
   const userData = path.join(output, '实际用户数据');
   fs.mkdirSync(userData, { recursive: true });
   const markers = { 'data.json': '{"setting":"keep"}', 'online-license.json': '{"license":"keep"}', 'cost-report-template.docx': 'preserve template' };
@@ -45,7 +56,8 @@ async function main() {
   // A large unrelated runtime file makes an accidental destructive install visible.
   const sentinel = path.join(resources, 'LibreOffice/runtime-must-stay.bin');
   fs.mkdirSync(path.dirname(sentinel), { recursive: true }); fs.writeFileSync(sentinel, Buffer.alloc(4 * 1024 * 1024, 73));
-  const runtimeHashes = Object.fromEntries(['hongguo-player/runtime/bin/java.exe', 'hongguo-player/player.jar', 'LibreOffice/runtime-must-stay.bin'].map(name => [name, sha(path.join(resources, name))]));
+  const runtimeFiles = focused ? ['hongguo-player/player.jar', 'LibreOffice/runtime-must-stay.bin'] : ['hongguo-player/runtime/bin/java.exe', 'hongguo-player/player.jar', 'LibreOffice/runtime-must-stay.bin'];
+  const runtimeHashes = Object.fromEntries(runtimeFiles.map(name => [name, sha(path.join(resources, name))]));
   function runApply(script, succeeds = true, pattern) {
     try {
       execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-InstallDir', install], { stdio: 'pipe', timeout: 90000, windowsHide: true });
@@ -61,6 +73,7 @@ async function main() {
     assert.equal(sha(archive), oldManifest.sha256['app.asar']);
   }
   const script = path.join(paths.payload, 'apply.ps1');
+  if (!focused) {
   const source = fs.readFileSync(script, 'utf8');
   const checkpoint = '# Failure-injection tests replace this comment; production has no test switch.';
   assert.ok(source.includes(checkpoint));
@@ -84,6 +97,7 @@ async function main() {
   fs.writeFileSync(path.join(paths.payload, 'app.asar'), goodAsar);
   fs.unlinkSync(injected);
   console.log('PASS incompatible core and corrupt ASAR rejected without changing original files');
+  }
 
   const metadata = JSON.parse(fs.readFileSync(path.join(output, `release-${manifest.version}.json`)));
   let servedBytes = 0;
@@ -107,19 +121,19 @@ async function main() {
   const { NsisUpdater } = oldRequire('electron-updater');
   const updater = new NsisUpdater({ provider: 'generic', url: fixtureUrl, useMultipleRangeRequest: false });
   const updaterRequire = createRequire(oldRequire.resolve('electron-updater'));
-  updater.currentVersion = updaterRequire('semver').parse('1.2.51');
+  updater.currentVersion = updaterRequire('semver').parse(fromVersion);
   updater.forceDevUpdateConfig = true;
   const config = path.join(output, 'patch-test-update.yml');
   fs.writeFileSync(config, JSON.stringify({ provider: 'generic', url: fixtureUrl, updaterCacheDirName: 'changeFileName-small-update-test-' + Date.now() }));
   updater.updateConfigPath = config;
   let requestedQuit = false, busy = false;
   updater.app.quit = () => { requestedQuit = true; };
-  const controller = createAppUpdates({ app: { isPackaged: true, getVersion: () => '1.2.51' }, updater,
+  const controller = createAppUpdates({ app: { isPackaged: true, getVersion: () => fromVersion }, updater,
     platform: 'win32', installDir: install, busy: () => busy });
   assert.equal((await controller.check()).success, true);
   assert.equal((await controller.download()).success, true);
   assert.equal(controller.snapshot().status, 'ready');
-  console.log('PASS 1.2.51 actual updater downloaded and verified the small installer');
+  console.log('PASS ' + fromVersion + ' actual updater downloaded and verified the small installer');
   busy = true; assert.equal((await controller.install()).success, false); assert.equal(requestedQuit, false);
   busy = false; assert.equal((await controller.install()).success, true);
   const deadline = Date.now() + 120000;
@@ -138,20 +152,26 @@ async function main() {
   ps(`Get-Process -Name changeFileName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${quote(exe)}' } | Stop-Process -Force`);
   for (const [name, content] of Object.entries(markers)) assert.equal(fs.readFileSync(path.join(userData, name), 'utf8'), content);
   for (const [name, digest] of Object.entries(runtimeHashes)) assert.equal(sha(path.join(resources, name)), digest);
-  execFileSync(path.join(resources, 'hongguo-player/runtime/bin/java.exe'), ['-version'], { stdio: 'pipe', timeout: 20000 });
+  if (!focused) execFileSync(path.join(resources, 'hongguo-player/runtime/bin/java.exe'), ['-version'], { stdio: 'pipe', timeout: 20000 });
   const probe = path.join(output, 'after-patch-startup.json');
   execFileSync(exe, ['--user-data-dir=' + path.join(output, 'probe-user-data')], { env: { ...process.env, AI_DRAMA_STARTUP_PROBE: probe }, windowsHide: true, timeout: 60000 });
   const startup = JSON.parse(fs.readFileSync(probe));
   assert.ok(Number.isFinite(startup.activationLoaded) && startup.pageLoaded == null, 'License gate must remain before the main window');
   assert.equal(sha(exe), manifest.exe.sha256); assert.equal(sha(archive), manifest.sha256['app.asar']);
   assert.equal(ps(`(Get-Item -LiteralPath '${quote(exe)}').VersionInfo.ProductVersion`).trim(), manifest.version + '.0');
-  runApply(script); assert.equal(sha(exe), manifest.exe.sha256); // Repeat is safe.
+  if (!focused) { runApply(script); assert.equal(sha(exe), manifest.exe.sha256); }
+  if (focused) {
+    const ai = require(archive + '/src/native/ai-config.js');
+    assert.equal(ai.arkVideoModel(), 'doubao-seed-2-1-turbo-260628');
+    assert.equal(ai.copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test' }).ai_text_model, 'doubao-seed-2-1-turbo-260628');
+  }
   assert.ok(paths.bytes < 25 * 1024 * 1024 && servedBytes < 25 * 1024 * 1024);
-  const evidence = { from: '1.2.51', to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
+  const evidence = { from: fromVersion, to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
     downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit,
-    preservedUserData: true, runtimesUnchanged: true, rollback: true, interruptedRecovery: true, checksumRejected: true,
-    runtimeMismatchRejected: true, restarted: true, startup };
+    preservedUserData: true, runtimesUnchanged: true, rollback: !focused, interruptedRecovery: !focused, checksumRejected: !focused,
+    runtimeMismatchRejected: !focused, restarted: true, startup,
+    ...(focused ? { scope: 'model-preset-and-update', modelPreset: 'doubao-seed-2-1-turbo-260628', engineRegressionRun: '43561340463' } : {}) };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
-  console.log('PASS actual 1.2.51 updater → small patch:', evidence);
+  console.log('PASS actual updater → small patch:', evidence);
 }
 main().then(() => { server?.close(); app.exit(0); }).catch(error => { console.error(error); server?.close(); app.exit(1); });

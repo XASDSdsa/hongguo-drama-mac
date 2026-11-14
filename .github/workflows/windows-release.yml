@@ -124,7 +124,7 @@ jobs:
   # 快速更新也要在真 Windows 上过一遍剪映草稿：用打包时同一个 pyJianYingDraft 和发布过的 Windows FFmpeg，
   # 实际生成一份三分轨草稿（中文路径），核对 Windows 版剪映读的 draft_content.json 等。几分钟，不打安装包。
   quick-windows-check:
-    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == ''
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == '' && inputs.repack_from_installer_run != 'fast-patch'
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -172,7 +172,7 @@ jobs:
           grep '^::notice' "$RUNNER_TEMP/c.log" || true
 
   quick-update:
-    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == ''
+    if: inputs.quick == 'true' && inputs.quick_artifact_run == '' && inputs.installer_verify_run == '' && inputs.repack_from_installer_run != 'fast-patch'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -327,7 +327,7 @@ jobs:
           gh release upload $env:RELEASE_TAG $archive
 
   in-app-update-installer:
-    if: always() && inputs.quick == 'true' && inputs.repack_from_installer_run != '' && inputs.repack_from_installer_run != 'patch' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
+    if: always() && inputs.quick == 'true' && inputs.repack_from_installer_run != '' && inputs.repack_from_installer_run != 'patch' && inputs.repack_from_installer_run != 'fast-patch' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')
     needs: quick-update
     runs-on: windows-latest
     timeout-minutes: 60
@@ -887,6 +887,64 @@ jobs:
 
       - name: Check packaged subtitle engine without system Python
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
+
+  in-app-fast-update:
+    if: inputs.quick == 'true' && inputs.repack_from_installer_run == 'fast-patch'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      UPDATE_RELEASE_NOTES: '新增火山方舟 doubao-seed-2-1-turbo-260628 预设，保留自定义模型。'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Fetch accepted code baseline
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download windows-patch-baseline-1.2.51 --repo "${{ github.repository }}" --pattern 'changeFileName-1.2.51-patch-baseline.zip' --dir dist/patch-base
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          run-id: 43561340463
+          github-token: ${{ github.token }}
+          path: dist/previous-patch
+      - name: Build application code and model preset only
+        shell: pwsh
+        run: |
+          git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
+          if ($LASTEXITCODE -ne 0) { throw 'Fast release requires the already verified patch engine' }
+          node scripts/check-doubao-preset.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:react
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/make-quick-update.cjs dist/code-update --code-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check 1.2.52 to new preset update only
+        shell: pwsh
+        run: |
+          & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/app-patch/*-Setup-*.exe
+            dist/app-patch/*.blockmap
+            dist/app-patch/release-*.json
+            dist/app-patch/latest.yml
+            dist/app-patch/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
 
   in-app-small-update:
     if: always() && inputs.quick == 'true' && (inputs.repack_from_installer_run == '' || inputs.repack_from_installer_run == 'patch') && inputs.installer_verify_run == '' && inputs.native_verify_run == '' && (needs.quick-update.result == 'success' || inputs.quick_artifact_run != '')

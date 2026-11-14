@@ -343,10 +343,10 @@ function getDefaultSettings() {
     ai_image_size: '1024x1536',
     ai_image_quality: 'high',
     ai_concurrency: 2,
-    // 视频反推提示词（火山方舟视频理解）：模型名没有默认值，要用户自己填。
+    // 视频反推提示词：预填方舟模型，仍可使用自定义模型名或接入点 ID。
     ark_base_url: arkVideo.DEFAULT_BASE_URL,
     ark_api_key: '',
-    ark_video_model: '',
+    ark_video_model: aiConfig.arkVideoModel(),
     // 海报 / 封面作图用哪家：seedream（火山方舟，和视频理解共用方舟地址和 Key）/ openai（OpenAI 兼容 images 接口）
     image_provider: 'seedream',
     ark_image_model: seedream.DEFAULT_MODEL,
@@ -478,6 +478,7 @@ async function applyProxySettings(settings) {
 function getCurrentSettings() {
   const saved = store.getSettings() || {};
   const merged = { ...getDefaultSettings(), ...saved };
+  merged.ark_video_model = aiConfig.arkVideoModel(merged);
   // 保证并发数合法
   const mc = parseInt(merged.max_concurrent, 10);
   MAX_CONCURRENT_DOWNLOADS = Number.isInteger(mc) && mc >= 1 && mc <= 10 ? mc : 3;
@@ -4231,7 +4232,7 @@ ipcMain.handle('test-ai-image', async (_event, draft = {}) => {
 ipcMain.handle('ark-test', async (_event, draft = {}) => {
   const settings = { ...getCurrentSettings(), ...draft };
   const apiKey = String(settings.ark_api_key || '').trim();
-  const model = String(settings.ark_video_model || '').trim();
+  const model = aiConfig.arkVideoModel(settings);
   if (!apiKey) return { success: false, error: '请先填方舟 API Key' };
   if (!model) return { success: false, error: '请先填视频理解模型名' };
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-drama-ark-test-'));
@@ -5044,7 +5045,7 @@ async function deriveLibraryPrompts(job, file, item, { alignment, transcript, so
   const key = path.resolve(job.dir);
   const label = path.basename(file, path.extname(file));
   const settings = getCurrentSettings();
-  const model = String(settings.ark_video_model || '').trim();
+  const model = aiConfig.arkVideoModel(settings);
   // 分镜工程图的日志单独一栏（和剪映草稿分开）
   const log = (level, text) =>
     libLog(

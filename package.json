@@ -1,6 +1,6 @@
 {
   "name": "ai-drama-assistant",
-  "version": "1.2.52",
+  "version": "1.2.53",
   "description": "changeFileName：短剧下载、去重、剪映草稿与 AI 分镜（Windows / Apple Silicon Mac）",
   "main": "main.js",
   "license": "GPL-3.0",

@@ -28,6 +28,10 @@ async function main() {
   fs.mkdirSync(work, { recursive: true });
   const base = path.join(work, 'base'), target = path.join(work, 'target');
   for (const [source, destination] of [[baseDir, base], [quickDir, target]]) {
+    if (fs.existsSync(path.join(source, 'code-stage/manifest.json'))) {
+      fs.cpSync(path.join(source, 'code-stage'), destination, { recursive: true });
+      continue;
+    }
     const zip = files(source).find(file => /-(?:update|patch-baseline)\.zip$/.test(file));
     assert.ok(zip, 'Verified quick-update artifact required');
     if (source === baseDir) assert.equal(hash(fs.readFileSync(zip)), '9f07dc0b2d0f38355b7def6c9e4de9d341241bdfcf832b0f1e5a900c9104bad8', 'Accepted baseline archive checksum');
@@ -62,8 +66,9 @@ async function main() {
   assert.deepEqual(oldSourcePackage.build.win.extraResources, pkg.build.win.extraResources);
   assert.deepEqual(oldSourcePackage.build.extraResources, pkg.build.extraResources);
   for (const [name, sha256] of Object.entries(oldManifest.sha256)) {
-    if (name.startsWith('hongguo-player/runtime/')) assert.equal(newManifest.sha256[name], sha256, 'JRE changed: ' + name);
+    if (name.startsWith('hongguo-player/runtime/') && !newManifest.runtimeBase) assert.equal(newManifest.sha256[name], sha256, 'JRE changed: ' + name);
   }
+  if (newManifest.runtimeBase) assert.equal(newManifest.runtimeBase, oldManifest.version);
   // The accepted 1.2.51 artifact, not an arbitrary same-version executable.
   assert.equal(oldManifest.sha256['changeFileName.exe'], '6ec08a5862a796c0e8cd8a5fcd1cf6ead5f825cec17f34d282dc10ed6e9615c8');
   const pe = makePatch(fs.readFileSync(path.join(base, 'changeFileName.exe')), fs.readFileSync(path.join(target, 'changeFileName.exe')));
@@ -89,7 +94,7 @@ async function main() {
   const release = JSON.parse(fs.readFileSync(releasePath));
   release.updateType = 'application-patch';
   release.minimumVersion = '1.2.51';
-  release.releaseNotes = '剧集管理中移除海报角标输入栏；本次只更新应用程序，保留已安装的运行库。';
+  release.releaseNotes = process.env.UPDATE_RELEASE_NOTES || '应用代码小包更新，保留已安装的运行库。';
   fs.writeFileSync(releasePath, JSON.stringify(release, null, 2));
   fs.writeFileSync(path.join(output, 'patch-paths.json'), JSON.stringify({ base, target, payload, installer, bytes }));
   console.log(`PASS small application update: ${bytes} bytes; no Electron body, JRE, FFmpeg, models or Office runtime payload`);
