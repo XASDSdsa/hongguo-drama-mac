@@ -1,7 +1,8 @@
 'use strict';
 const { app } = require('electron');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
+// Raw ASAR bytes must bypass Electron's virtual directory copyFile hooks.
+const fs = require('original-fs');
 const path = require('node:path');
 const http = require('node:http');
 const { execFileSync } = require('node:child_process');
