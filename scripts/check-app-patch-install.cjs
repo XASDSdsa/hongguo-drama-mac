@@ -34,7 +34,10 @@ async function main() {
     for (const name of ['app.asar', 'app-update.yml']) fs.copyFileSync(path.join(paths.base, name), path.join(resources, name));
   }
   resetBase();
-  assert.equal(require(archive + '/package.json').version, '1.2.51');
+  // Keep the harness's loaded ASAR outside the installation. Electron keeps
+  // loaded archives open; the real updating app exits before replacement.
+  const harnessArchive = path.join(paths.base, 'app.asar');
+  assert.equal(require(harnessArchive + '/package.json').version, '1.2.51');
   const userData = path.join(output, '实际用户数据');
   fs.mkdirSync(userData, { recursive: true });
   const markers = { 'data.json': '{"setting":"keep"}', 'online-license.json': '{"license":"keep"}', 'cost-report-template.docx': 'preserve template' };
@@ -99,7 +102,7 @@ async function main() {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const fixtureUrl = `http://127.0.0.1:${server.address().port}/`;
   // Load the actual old application's updater/controller, not this checkout's.
-  const oldRequire = createRequire(archive + '/package.json');
+  const oldRequire = createRequire(harnessArchive + '/package.json');
   const { createAppUpdates } = oldRequire('./src/native/app-updates.js');
   const { NsisUpdater } = oldRequire('electron-updater');
   const updater = new NsisUpdater({ provider: 'generic', url: fixtureUrl, useMultipleRangeRequest: false });
