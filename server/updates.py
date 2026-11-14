@@ -119,6 +119,12 @@ def publish(version, notes=None):
         if (release.get('version') != version or len(files) != 1 or files[0].get('url') != name or
                 release.get('path') != name or release.get('sha512') != files[0].get('sha512')):
             raise ValueError('更新说明与安装包不匹配')
+        if release.get('updateType') == 'application-patch':
+            size = files[0].get('size')
+            if not isinstance(size, int) or not 0 < size <= 25 * 1024**2:
+                raise ValueError('应用小包不得超过 25 MiB，不能用完整安装包替代')
+            if not re.fullmatch(VERSION, str(release.get('minimumVersion', ''))):
+                raise ValueError('小包缺少有效的最低兼容版本')
         installer = uploads / name
         blockmap = uploads / (name + '.blockmap')
         # A stopped promotion may already have moved one file; verify and resume it.

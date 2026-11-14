@@ -65,9 +65,16 @@ with tempfile.TemporaryDirectory() as temporary:
         digest = base64.b64encode(hashlib.sha512(payload).digest()).decode()
         release = {'version': '1.2.51', 'files': [{'url': name, 'size': len(payload), 'sha512': digest}],
                    'path': name, 'sha512': digest, 'blockmapSha256': hashlib.sha256(block).hexdigest(),
+                   'updateType': 'application-patch', 'minimumVersion': '1.2.51',
                    'releaseDate': '2026-11-13T00:00:00.000Z', 'releaseNotes': '<script>never execute</script>'}
         for file, data in [(name, payload), (name + '.blockmap', block), ('release-1.2.51.json', json.dumps(release).encode())]:
             assert request('/admin/updates/upload/' + file, data)[0] == 200
+        too_big = {**release, 'files': [{**release['files'][0], 'size': 25 * 1024**2 + 1}]}
+        assert request('/admin/updates/upload/release-1.2.51.json', json.dumps(too_big).encode())[0] == 200
+        code, body, _ = request(endpoint, b'{"version":"1.2.51"}')
+        assert code == 400 and '25 MiB' in body.decode()
+        assert updates.current() is None
+        assert request('/admin/updates/upload/release-1.2.51.json', json.dumps(release).encode())[0] == 200
         (updates.ROOT / 'uploads' / name).write_bytes(payload + b'corrupt')
         assert request(endpoint, b'{"version":"1.2.51"}')[0] == 400
         assert updates.current() is None
@@ -86,6 +93,7 @@ with tempfile.TemporaryDirectory() as temporary:
         code, body, _ = request('/updates/windows/latest.yml', logged=False)
         info = json.loads(body)
         assert code == 200 and info['files'][0]['sha512'] == digest
+        assert info['updateType'] == 'application-patch' and info['minimumVersion'] == '1.2.51'
         assert info['releaseNotes'] == '用户可见更新说明'
         file_url = '/updates/windows/' + info['files'][0]['url']
         code, body, headers = request(file_url, logged=False, headers={'Range': 'bytes=3-15'})

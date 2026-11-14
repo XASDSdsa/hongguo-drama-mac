@@ -4,6 +4,10 @@ let token = '';
 let activeVersion = '';
 let uploadedVersion = '';
 let busy = false;
+function releaseLabel(release) {
+  const type = release.updateType === 'application-patch' ? '小包更新' : '完整安装包';
+  return 'v' + release.version + ' · ' + type + ' · ' + (Number(release.files?.[0]?.size || 0) / 1024 / 1024).toFixed(1) + ' MiB';
+}
 function message(text, error = false) { element('message').textContent = text; element('message').className = error ? 'error' : ''; }
 function lock(value) {
   busy = value;
@@ -25,12 +29,12 @@ async function refresh() {
   const state = await request('state');
   token = state.csrf;
   activeVersion = state.active?.version || '';
-  element('active').textContent = activeVersion ? 'Windows：v' + activeVersion : '当前没有发布更新';
+  element('active').textContent = activeVersion ? 'Windows：' + releaseLabel(state.active) : '当前没有发布更新';
   element('withdraw').hidden = !activeVersion;
   element('versions').replaceChildren();
   for (const release of state.versions) {
     const row = document.createElement('tr');
-    const version = document.createElement('td'); version.textContent = release.version;
+    const version = document.createElement('td'); version.textContent = releaseLabel(release);
     const notes = document.createElement('td'); notes.className = 'notes'; notes.textContent = release.releaseNotes || '—';
     const actions = document.createElement('td'); const button = document.createElement('button');
     button.textContent = release.version === activeVersion ? '已发布' : '发布此版本';
