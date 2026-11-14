@@ -64,11 +64,13 @@ async function main() {
   const injected = path.join(paths.payload, 'failure-test.ps1');
   fs.writeFileSync(injected, source.replace(checkpoint, "throw 'Injected mid-copy failure'"));
   runApply(injected, false, /Injected mid-copy failure/); assertBase();
+  console.log('PASS mid-copy failure restores the original EXE/ASAR pair');
   fs.writeFileSync(injected, source.replace(checkpoint, 'exit 7'));
   runApply(injected, false);
   assert.ok(fs.existsSync(path.join(install, '.app-update-transaction/pending.json')));
   runApply(script); // Journal restores the interrupted pair before applying again.
   assert.equal(sha(exe), manifest.exe.sha256); assert.equal(sha(archive), manifest.sha256['app.asar']);
+  console.log('PASS interrupted journal restores and retries successfully');
   resetBase();
   const bad = fs.readFileSync(exe); bad[2000] ^= 1; fs.writeFileSync(exe, bad);
   runApply(script, false, /runtime differs/); assert.equal(sha(exe), hash(bad));
@@ -78,6 +80,7 @@ async function main() {
   runApply(script, false, /checksum mismatch/); assertBase();
   fs.writeFileSync(path.join(paths.payload, 'app.asar'), goodAsar);
   fs.unlinkSync(injected);
+  console.log('PASS incompatible core and corrupt ASAR rejected without changing original files');
 
   const metadata = JSON.parse(fs.readFileSync(path.join(output, `release-${manifest.version}.json`)));
   let servedBytes = 0;
@@ -113,6 +116,7 @@ async function main() {
   assert.equal((await controller.check()).success, true);
   assert.equal((await controller.download()).success, true);
   assert.equal(controller.snapshot().status, 'ready');
+  console.log('PASS 1.2.51 actual updater downloaded and verified the small installer');
   busy = true; assert.equal((await controller.install()).success, false); assert.equal(requestedQuit, false);
   busy = false; assert.equal((await controller.install()).success, true);
   const deadline = Date.now() + 120000;

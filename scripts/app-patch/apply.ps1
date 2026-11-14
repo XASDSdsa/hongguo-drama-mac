@@ -99,7 +99,7 @@ try {
   [IO.File]::WriteAllText((Join-Path $backup 'pending.json'), $manifest.version)
   try {
     foreach ($name in $targets) {
-      [IO.File]::Replace((Join-Path $backup ('staged\' + $name)), (Join-Path $InstallDir $name), $null, $true)
+      [IO.File]::Replace((Join-Path $backup ('staged\' + $name)), (Join-Path $InstallDir $name), (Join-Path $backup ('original\' + $name)), $true)
       # Failure-injection tests replace this comment; production has no test switch.
     }
     if ((Hash-File $exe) -ne $manifest.exe.sha256) { throw 'Installed EXE checksum mismatch.' }

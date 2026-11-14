@@ -31,7 +31,11 @@ Section
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /r "${PAYLOAD}\*"
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\apply.ps1" -InstallDir "$INSTDIR"'
+  ; NSIS is 32-bit; use native 64-bit PowerShell to inspect the x64 app's processes.
+  StrCpy $2 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$2" +2 0
+  StrCpy $2 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  nsExec::ExecToStack '"$2" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\apply.ps1" -InstallDir "$INSTDIR"'
   Pop $0
   Pop $1
   ${If} $0 != "0"
