@@ -291,11 +291,11 @@
         "Contents/Resources/faster-whisper/transcribe-worker",
         "Contents/Resources/video-structure/worker/structure-worker",
         "Contents/Resources/video-structure/bin/sherpa-onnx-offline-source-separation",
-        "Contents/Resources/jianying/jianying-runtime",
-        "Contents/Resources/hongguo-player/runtime/Contents/Home/bin/java"
+        "Contents/Resources/jianying/jianying-runtime"
       ],
       "signIgnore": [
-        "/LibreOffice\\.app(?:/|$)"
+        "/LibreOffice\\.app(?:/|$)",
+        "/hongguo-player/runtime(?:/|$)"
       ]
     },
     "extraResources": [

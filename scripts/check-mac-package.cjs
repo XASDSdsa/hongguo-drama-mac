@@ -24,6 +24,7 @@ async function main() {
   for (const option of ['EnableEmbeddedAsarIntegrityValidation', 'OnlyLoadAppFromAsar']) assert.equal(wire[FuseV1Options[option]], 49);
   for (const option of ['RunAsNode', 'EnableNodeOptionsEnvironmentVariable', 'EnableNodeCliInspectArguments']) assert.equal(wire[FuseV1Options[option]], 48);
   const java = path.join(resources, 'hongguo-player/runtime/Contents/Home/bin/java');
+  execFileSync('codesign', ['--verify', '--strict', java], { stdio: 'inherit' });
   assert.match(execFileSync('file', [java], { encoding: 'utf8' }), /arm64/);
   execFileSync(java, ['-version'], { stdio: 'inherit' });
   const resolver = JSON.parse(execFileSync(java, ['-cp', [path.join(resources, 'hongguo-player/player.jar'), path.join(resources, 'hongguo-player/lib/*')].join(path.delimiter),
