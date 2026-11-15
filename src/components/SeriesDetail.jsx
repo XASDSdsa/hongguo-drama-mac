@@ -300,12 +300,17 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
+  const [templateOptions, setTemplateOptions] = useState(null);
+  const [templateError, setTemplateError] = useState('');
+  const [templateNotice, setTemplateNotice] = useState('');
+  const templateRevision = useRef(0);
+  const templatePickPending = useRef(false);
   const request = costRequest(settings);
-  const requestKey = JSON.stringify({ ...request, title: '' });
+  const requestKey = JSON.stringify({ ...request, title: '', templateId: '' });
 
   useEffect(() => {
     let alive = true;
+    const revision = templateRevision.current;
     const timer = setTimeout(() => {
       window.electronAPI
         .libraryCostReport?.({ dir, ...request })
@@ -313,6 +318,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
           if (!alive) return;
           if (result?.success) {
             setInfo(result);
+            if (revision === templateRevision.current) setTemplateOptions(result.templates || (result.template?.ready ? [result.template] : []));
             setSettings(current => current.templateId || !result.template?.ready ? current : { ...current, templateId: result.template.id });
             setError('');
           } else setError(result?.error || '算不出来');
@@ -324,23 +330,37 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dir, requestKey, refreshKey, reload]);
+  }, [dir, requestKey, refreshKey]);
 
   useDialogKeyboard(true, onClose, '.cost-dialog');
 
   const set = (key) => (e) => setSettings((value) => ({ ...value, [key]: e.target.value }));
   const pickTemplate = async () => {
-    setError('');
+    if (templatePickPending.current) return;
+    templatePickPending.current = true;
+    setTemplateError('');
+    setTemplateNotice('');
     setBusy('template');
-    const result = await window.electronAPI.costReportTemplatePick?.().catch(() => null);
-    setBusy('');
-    if (!result?.success) setError(result?.error || '模板没选上');
-    else if (!result.canceled && result.template?.id) setSettings(value => ({ ...value, templateId: result.template.id }));
-    setReload((value) => value + 1);
+    try {
+      if (typeof window.electronAPI?.costReportTemplatePick !== 'function') throw new Error('请更新软件后再添加 DOCX 模板');
+      const result = await window.electronAPI.costReportTemplatePick();
+      if (!result?.success) throw new Error(result?.error || '模板导入失败，请重新选择 DOCX 文件');
+      if (result.canceled) return;
+      if (!result.template?.id) throw new Error('没有添加任何模板，请重新选择 DOCX 文件');
+      templateRevision.current++;
+      setTemplateOptions(result.templates || result.added || [result.template]);
+      setSettings(value => ({ ...value, templateId: result.template.id }));
+      setTemplateNotice(`已添加 ${result.added?.length || 1} 份模板，已选中「${result.template.name || '新模板'}」`);
+    } catch (error) {
+      setTemplateError(error?.message || '模板导入失败，请重试');
+    } finally {
+      templatePickPending.current = false;
+      setBusy('');
+    }
   };
 
   const selectedTemplateId = settings.templateId || info?.template?.id || '';
-  const availableTemplates = info?.templates || (info?.template?.ready ? [info.template] : []);
+  const availableTemplates = templateOptions || info?.templates || (info?.template?.ready ? [info.template] : []);
   const cost = info?.cost;
   return (
     <div className="lib-mask lib-mask-top" onClick={onClose}>
@@ -493,6 +513,8 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
                 </button>
               </span>
               <span className="cost-sub">可添加多份 Word 模板，保存在本机；这部剧使用上面选中的一份。点「确定」保存选择。</span>
+              {templateError && <p className="sb-card-error" role="alert">{templateError}</p>}
+              {templateNotice && <p className="cost-sub" role="status">{templateNotice}</p>}
             </dd>
           </dl>
         )}

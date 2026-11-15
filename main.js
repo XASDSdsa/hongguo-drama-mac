@@ -5886,13 +5886,18 @@ ipcMain.handle('library-cost-report-export-png', async (_event, payload = {}) =>
 });
 
 /** 选报告模板（用户自己的 docx，有公章和签名）：核对能填，再复制到本机的用户数据目录。 */
-ipcMain.handle('cost-report-template-pick', async () => {
+ipcMain.handle('cost-report-template-pick', async (event) => {
   try {
-    const result = await dialog.showOpenDialog(mainWindow, {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const parent = senderWindow && !senderWindow.isDestroyed() ? senderWindow :
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const options = {
       title: '添加成本配置报告模板（可多选 Word 文件）',
       properties: ['openFile', 'multiSelections'],
       filters: [{ name: 'Word 文件', extensions: ['docx'] }],
-    });
+    };
+    if (parent) parent.focus();
+    const result = await (parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options));
     if (result.canceled || !result.filePaths.length) return { success: true, canceled: true, templates: costTemplates().list() };
     const added = await costTemplates().add(result.filePaths);
     return { success: true, templates: costTemplates().list(), added, template: added[0] };

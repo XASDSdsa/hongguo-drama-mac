@@ -14,6 +14,7 @@ const quote = value => value.replace(/'/g, "''");
 const ps = command => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true });
 let server;
 const focused = process.argv.includes('--focused');
+const focusedScope = process.env.UPDATE_CHECK_SCOPE || 'model-preset-and-update';
 
 async function main() {
   await app.whenReady();
@@ -39,12 +40,16 @@ async function main() {
   let harnessArchive = path.join(paths.base, 'app.asar');
   if (focused) {
     const previousDir = path.resolve(process.argv[process.argv.indexOf('--focused') + 1]);
-    const previous = path.join(previousDir, 'changeFileName-Setup-1.2.52.exe');
-    assert.equal(sha(previous), '7278aede27834c693d3db38c4c1759358bec5daa1ac389f82bd5b6556e1877a3');
+    const previousMetadata = fs.readdirSync(previousDir).find(name => /^release-\d+\.\d+\.\d+\.json$/.test(name));
+    assert.ok(previousMetadata);
+    const release = JSON.parse(fs.readFileSync(path.join(previousDir,previousMetadata)));
+    assert.match(release.version,/^\d+\.\d+\.\d+$/);
+    const previous = path.join(previousDir, 'changeFileName-Setup-' + release.version + '.exe');
+    assert.equal(require('node:crypto').createHash('sha512').update(fs.readFileSync(previous)).digest('base64'),release.files[0].sha512);
     execFileSync(previous, ['/S', '/D=' + install], { windowsVerbatimArguments: true, windowsHide: true, timeout: 90000 });
     harnessArchive = path.join(output, 'previous-app.asar');
     fs.copyFileSync(archive, harnessArchive);
-    fromVersion = '1.2.52';
+    fromVersion = release.version;
   }
   // Keep the harness's loaded ASAR outside the installation. Electron keeps
   // loaded archives open; the real updating app exits before replacement.
@@ -161,16 +166,20 @@ async function main() {
   assert.equal(ps(`(Get-Item -LiteralPath '${quote(exe)}').VersionInfo.ProductVersion`).trim(), manifest.version + '.0');
   if (!focused) { runApply(script); assert.equal(sha(exe), manifest.exe.sha256); }
   if (focused) {
-    const ai = require(archive + '/src/native/ai-config.js');
-    assert.equal(ai.arkVideoModel(), 'doubao-seed-2-1-turbo-260628');
-    assert.equal(ai.copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test' }).ai_text_model, 'doubao-seed-2-1-turbo-260628');
+    if (focusedScope === 'template-import-and-update') await require('./check-template-import.cjs').verifyTemplateImport(archive);
+    else {
+      const ai = require(archive + '/src/native/ai-config.js');
+      assert.equal(ai.arkVideoModel(), 'doubao-seed-2-1-turbo-260628');
+      assert.equal(ai.copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test' }).ai_text_model, 'doubao-seed-2-1-turbo-260628');
+    }
   }
   assert.ok(paths.bytes < 25 * 1024 * 1024 && servedBytes < 25 * 1024 * 1024);
   const evidence = { from: fromVersion, to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
     downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit,
     preservedUserData: true, runtimesUnchanged: true, rollback: !focused, interruptedRecovery: !focused, checksumRejected: !focused,
     runtimeMismatchRejected: !focused, restarted: true, startup,
-    ...(focused ? { scope: 'model-preset-and-update', modelPreset: 'doubao-seed-2-1-turbo-260628', engineRegressionRun: '43561340463' } : {}) };
+    ...(focused ? { scope: focusedScope, engineRegressionRun: '43561340463',
+      ...(focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
   console.log('PASS actual updater → small patch:', evidence);
 }

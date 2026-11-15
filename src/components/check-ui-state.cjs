@@ -879,6 +879,34 @@ function mount(file, api, props = {}, options = {}) {
     ui=await open('/series-a');assert.equal(select(ui).props.value,'second');ui.unmount();
     ui=await open('/series-b');assert.equal(select(ui).props.value,'legacy');ui.unmount();
   });
+  await test('cost report templates: import errors survive refresh and successful options appear immediately', async () => {
+    const legacy = {id:'legacy',name:'原模板.docx',ready:true};
+    const added = {id:'added',name:'新增模板.docx',ready:true};
+    let mode = 'invalid';
+    const api = {
+      libraryCostReport: async () => ({success:true, template:legacy, templates:[legacy], title:'测试',
+        cost:{episodes:0,tiers:[],draws:{min:1,max:1}},text:{},price:{},over:{}}),
+      costReportTemplatePick: async () => {
+        if (mode === 'invalid') return {success:false,error:'该文件没有可填写的报告表格'};
+        if (mode === 'rejected') throw new Error('文件读取失败');
+        return {success:true,template:added,templates:[legacy,added],added:[added]};
+      },
+    };
+    const ui = mount('SeriesDetail',api,{dir:'/series',refreshKey:0,onClose(){}},{component:'CostReportDialog'});
+    ui.advanceTimers(200);await ui.flush();ui.advanceTimers(200);await ui.flush();
+    await ui.button('添加模板').props.onClick();await ui.flush();
+    ui.advanceTimers(200);await ui.flush();
+    assert.ok(ui.text().includes('该文件没有可填写的报告表格'),'import error must remain visible');
+    mode='rejected';await ui.button('添加模板').props.onClick();await ui.flush();
+    assert.ok(ui.text().includes('文件读取失败'));
+    assert.equal(ui.button('添加模板').props.disabled,false);
+    mode='success';await ui.button('添加模板').props.onClick();await ui.flush();
+    const select=ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
+    assert.equal(select.props.value,'added');
+    assert.ok(ui.find(n=>n.type==='option' && n.props.value==='added'),'new option appears without a cost refresh');
+    assert.ok(ui.text().includes('已添加'));
+    ui.unmount();
+  });
   await test('in-app update UI: newer events win, duplicate clicks are ignored and busy install failures stay visible', async () => {
     const initial = deferred(); const download = deferred();
     let event; let off = false; let calls = 0; let installs = 0;

@@ -21,14 +21,14 @@ const textOf = (xml) => [...xml.matchAll(TEXT)].map((match) => unescapeXml(match
 
 /** 表格：找表头有「微短剧名称」的那张表，返回 { table, header, row, cells }（row 是表头下面第一行）。 */
 function findTable(xml) {
-  for (const match of xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)) {
+  for (const match of xml.matchAll(/<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g)) {
     const rows = [...match[0].matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].map((m) => m[0]);
-    const headerIndex = rows.findIndex((row) => textOf(row).includes('微短剧名称'));
+    const headerIndex = rows.findIndex((row) => textOf(row).replace(/\s/g, '').includes('微短剧名称'));
     if (headerIndex < 0 || headerIndex + 1 >= rows.length) continue;
     const header = rows[headerIndex];
     const row = rows[headerIndex + 1];
-    const cellsOf = (r) => [...r.matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].map((m) => m[0]);
-    const titles = cellsOf(header).map(textOf);
+    const cellsOf = (r) => [...r.matchAll(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g)].map((m) => m[0]);
+    const titles = cellsOf(header).map(cell => textOf(cell).replace(/\s/g, ''));
     const cells = cellsOf(row);
     const column = (word) => titles.findIndex((title) => title.includes(word));
     const columns = { name: column('名称'), episodes: column('集数'), total: column('投资'), share: column('片酬') };
@@ -95,7 +95,7 @@ function fillCostReport(template, fields) {
     [columns.share]: fields.share,
   };
   let index = 0;
-  const newRow = row.replace(/<w:tc>[\s\S]*?<\/w:tc>/g, (cell) => {
+  const newRow = row.replace(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g, (cell) => {
     const value = values[index++];
     return value == null ? cell : setCell(cell, value, fallbackStyle);
   });
