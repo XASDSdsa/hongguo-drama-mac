@@ -9,7 +9,7 @@ const ERRORS = {
   RATE_LIMITED: '请求太频繁，请稍后再试。',
 };
 
-function checkToken(token, config, identifier, now = Date.now() / 1000) {
+function tokenClaims(token, config, identifier, now = Date.now() / 1000) {
   const parts = typeof token === 'string' && token.length <= 16384 ? token.split('.') : [];
   if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9_-]+$/.test(part))) return false;
   try {
@@ -21,17 +21,20 @@ function checkToken(token, config, identifier, now = Date.now() / 1000) {
     });
     if (!verify(null, Buffer.from(payload), key, Buffer.from(signature, 'base64url'))) return false;
     const claims = JSON.parse(Buffer.from(payload, 'base64url'));
-    return claims.pid === config.productId && claims.did === identifier
+    const valid = claims.pid === config.productId && claims.did === identifier
       && ['active', 'trialing'].includes(claims.sts)
       && Number.isFinite(claims.exp) && claims.exp > now
       && (claims.vun == null || claims.vun === 0 || claims.vun > now);
+    return valid ? claims : false;
   } catch {
     return false;
   }
 }
 
-async function checkOnlineLicense(config, { key, identifier, activate = false, fetcher = fetch }) {
-  if (typeof key !== 'string' || !/^[a-zA-Z0-9_-]{8,160}$/.test(key)) return '请输入完整的激活码。';
+function checkToken(...args) { return Boolean(tokenClaims(...args)); }
+
+async function requestOnlineLicense(config, { key, identifier, activate = false, fetcher = fetch }) {
+  if (typeof key !== 'string' || !/^[a-zA-Z0-9_-]{8,160}$/.test(key)) return { ok: false, error: '请输入完整的激活码。' };
   const body = { license_key: key, identifier };
   if (activate) body.identifier_type = 'device';
   let response, result;
@@ -43,14 +46,25 @@ async function checkOnlineLicense(config, { key, identifier, activate = false, f
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(12000),
     });
-    result = await response.json();
   } catch {
-    return '暂时连不上授权服务器，请检查网络后重试。';
+    return { ok: false, retryable: true, error: '暂时连不上授权服务器，请检查网络后重试。' };
   }
+  // Only transport failures, throttling and server outages allow a short grace period.
+  if (response.status >= 500 || response.status === 429) return { ok: false, retryable: true,
+    error: response.status === 429 ? ERRORS.RATE_LIMITED : '授权服务器暂不可用，请稍后再试。' };
+  try { result = await response.json(); }
+  catch { return { ok: false, error: '授权服务器响应无效，请重新验证。' }; }
   if (!response.ok || result?.success !== true) {
-    return ERRORS[result?.error?.code] || (response.status >= 500 ? '授权服务器暂不可用，请稍后再试。' : '激活码无法使用，请联系管理员。');
+    return { ok: false, error: ERRORS[result?.error?.code] || '激活码无法使用，请联系管理员。' };
   }
-  return checkToken(result.data?.token, config, identifier) ? '' : '授权签名或设备信息不匹配。';
+  const claims = tokenClaims(result.data?.token, config, identifier);
+  return claims ? { ok: true, expiresAt: Math.min(claims.exp, claims.vun || Infinity) * 1000 } :
+    { ok: false, error: '授权签名或设备信息不匹配。' };
 }
 
-module.exports = { checkOnlineLicense, checkToken };
+async function checkOnlineLicense(...args) {
+  const result = await requestOnlineLicense(...args);
+  return result.ok ? '' : result.error;
+}
+
+module.exports = { checkOnlineLicense, checkToken, requestOnlineLicense };

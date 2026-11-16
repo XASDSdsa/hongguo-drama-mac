@@ -893,8 +893,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '修复成本报告 DOCX 模板添加后无反馈、导入错误消失和模板列表延迟更新，兼容常见 Word 表格属性。'
-      UPDATE_CHECK_SCOPE: template-import-and-update
+      UPDATE_RELEASE_NOTES: '加强授权保护：发布业务代码混淆、运行期间联网复核及关键任务授权检查；短时断网可恢复，保留已有数据和运行库。'
+      UPDATE_CHECK_SCOPE: license-protection-and-update
     steps:
       - uses: actions/checkout@v5
         with:
@@ -913,17 +913,21 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 43563918631
+          run-id: 43689734163
           github-token: ${{ github.token }}
           path: dist/previous-patch
-      - name: Build application code and template import fix only
+      - name: Build protected application code and check licensing
         shell: pwsh
         run: |
           git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
           if ($LASTEXITCODE -ne 0) { throw 'Fast release requires the already verified patch engine' }
-          node scripts/check-template-import.cjs
+          node scripts/check-license-protection.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node src/components/check-ui-state.cjs 'cost report templates'
+          node scripts/check-online-startup.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-device-license.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node src/components/check-ui-state.cjs 'license status UI'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build:react
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -931,7 +935,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check previous version upgrade and packaged template import only
+      - name: Check previous version upgrade and packaged license protection
         shell: pwsh
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch

@@ -6,6 +6,7 @@ import SettingsPage from './components/Settings';
 import Browse from './components/Browse';
 import SeriesLibrary from './components/SeriesLibrary';
 import AppUpdate from './components/AppUpdate';
+import LicenseStatus from './components/LicenseStatus';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
@@ -138,6 +139,7 @@ export default function App() {
           )}
           <span className="toolbar-caption">changeFileName</span>
         </header>
+        <LicenseStatus />
         {storageError && (
           <div className="app-storage-error" role="alert">
             <span>{storageError}</span>

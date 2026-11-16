@@ -11,6 +11,7 @@ const { verifyPlayerBundle } = require('./check-hongguo-player.cjs');
 const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
 const pkg = require('../package.json');
 const codeOnly = process.argv.includes('--code-only');
+const { prepareProtectedApp, verifyProtectedArchive } = require('./protect-app.cjs');
 
 const root = path.join(__dirname, '..');
 const baseVersions = ['1.2.39', '1.2.40', '1.2.41', '1.2.42', '1.2.43', '1.2.44', '1.2.45', '1.2.46', '1.2.47', '1.2.48', '1.2.49', '1.2.50', '1.2.51', '1.2.52'];
@@ -23,6 +24,7 @@ async function main() {
   const out = path.resolve(process.argv[2] || path.join(root, 'dist', 'quick'));
   fs.mkdirSync(out, { recursive: true });
   const work = fs.mkdtempSync(path.join(out, 'work-'));
+  const protectedApp = prepareProtectedApp();
   try {
     const config = structuredClone(pkg.build);
     delete config.beforePack;
@@ -30,6 +32,9 @@ async function main() {
     config.win.extraResources = codeOnly ? [] : [{ from: path.join(root, 'build/hongguo-player/win32-x64'), to: 'hongguo-player' }];
     config.win.extraFiles = [];
     config.directories.output = path.join(work, 'builder');
+    config.directories.app = protectedApp.directory;
+    config.files.push('protected-build.json');
+    config.files.push('!**/*.map');
     const configFile = path.join(work, 'builder.json');
     fs.writeFileSync(configFile, JSON.stringify(config));
     await build({ targets: Platform.WINDOWS.createTarget('dir', Arch.x64), config: configFile, publish: 'never' });
@@ -37,7 +42,8 @@ async function main() {
     const exe = path.join(unpacked, exeName);
     const asar = path.join(unpacked, 'resources', 'app.asar');
     assert.equal(JSON.parse(extractFile(asar, 'package.json').toString()).version, pkg.version);
-    for (const file of ['main.js', 'src/native/ai-config.js', 'src/native/ai-providers.json', 'src/native/app-source.js', 'src/native/native-player.js', 'src/native/hongguo.js', 'src/native/cost-report/templates.js', 'src/native/app-updates.js', 'dist-react/index.html', 'src/native/cost-report/page-look.js', 'src/native/cost-report/font-check.js', 'src/native/cost-report/wps.js']) {
+    verifyProtectedArchive(asar);
+    for (const file of ['src/native/ai-providers.json', 'dist-react/index.html']) {
       assert.deepEqual(extractFile(asar, path.normalize(file)), fs.readFileSync(path.join(root, file)), file);
     }
     const wire = await getCurrentFuseWire(exe);
@@ -91,6 +97,7 @@ async function main() {
     execFileSync('7z.exe', ['t', zip], { stdio: 'inherit' });
     console.log(`Quick update verified: ${zip}`);
   } finally {
+    protectedApp.dispose();
     fs.rmSync(work, { recursive: true, force: true, maxRetries: 3 });
   }
 }

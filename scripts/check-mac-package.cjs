@@ -11,9 +11,7 @@ async function main() {
   const resources = path.join(app, 'Contents/Resources');
   const archive = path.join(resources, 'app.asar');
   assert.equal(JSON.parse(extractFile(archive, 'package.json')).version, pkg.version);
-  for (const name of ['main.js', 'preload.js', 'src/native/ai-config.js', 'src/native/ai-providers.json', 'src/native/native-player.js']) {
-    assert.deepEqual(extractFile(archive, name), fs.readFileSync(path.join(__dirname, '..', name)), name);
-  }
+  require('./protect-app.cjs').verifyProtectedArchive(archive);
   const components = ['bin/ffmpeg', 'bin/ffprobe', 'bin/whisper-cli', 'models/ggml-tiny.bin',
     'faster-whisper/transcribe-worker', 'video-structure/worker/structure-worker', 'jianying/jianying-runtime',
     'LibreOffice.app/Contents/MacOS/soffice', 'title-fonts', 'hongguo-player/runtime/Contents/Home/bin/java', 'hongguo-player/player.jar'];

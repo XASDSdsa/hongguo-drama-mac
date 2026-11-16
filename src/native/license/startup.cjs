@@ -43,7 +43,7 @@ async function readLicense(file) {
 }
 
 /** 在创建主窗口之前校验。未授权时只打开系统授权对话框。 */
-async function authorizeStartup({ app, dialog, clipboard, getDeviceCode = readDeviceCode, onActivationReady }) {
+async function authorizeStartup({ app, dialog, clipboard, getDeviceCode = readDeviceCode, onActivationReady, onAuthorized, onLicenseChange }) {
   try {
     const online = await fs.readFile(path.join(__dirname, 'online-config.json'), 'utf8').catch((error) => {
       if (error.code === 'ENOENT') return null;
@@ -51,7 +51,7 @@ async function authorizeStartup({ app, dialog, clipboard, getDeviceCode = readDe
     });
     if (online !== null) {
       const { authorizeOnlineStartup } = require('./online-startup.cjs');
-      return await authorizeOnlineStartup({ app, config: JSON.parse(online), identifier: await getDeviceCode(), onActivationReady });
+      return await authorizeOnlineStartup({ app, config: JSON.parse(online), identifier: await getDeviceCode(), onActivationReady, onAuthorized, onLicenseChange });
     }
     const publicKey = await fs.readFile(path.join(__dirname, 'public-key.pem')).catch((error) => {
       // A source checkout without an issuer can still be used for development.

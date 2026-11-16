@@ -3,6 +3,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // 应用信息 / 官网链接
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+  licenseStatus: () => ipcRenderer.invoke('license-runtime-status'),
+  licenseRetry: () => ipcRenderer.invoke('license-runtime-retry'),
+  onLicenseState: cb => {
+    const listener = (_event, state) => cb(state);
+    ipcRenderer.on('license-runtime-state', listener);
+    return () => ipcRenderer.removeListener('license-runtime-state', listener);
+  },
   appUpdateStatus: () => ipcRenderer.invoke('app-update-status'),
   appUpdateCheck: () => ipcRenderer.invoke('app-update-check'),
   appUpdateDownload: () => ipcRenderer.invoke('app-update-download'),

@@ -30,6 +30,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { randomUUID, createHash } = require('node:crypto');
 const { authorizeStartup } = require('./src/native/license/startup.cjs');
+const { checkOperation, PROTECTED } = require('./src/native/license/operation-guard.cjs');
 
 const hongguo = require('./src/native/hongguo');
 const { decryptInWorker } = require('./src/native/decrypt-worker.cjs');
@@ -85,6 +86,7 @@ if (app.isPackaged) {
 
 let mainWindow = null;
 let launchAuthorized = false;
+let licenseSession = null;
 let appUpdates = null;
 let pendingIpcWork = 0;
 let activeCostReports = 0;
@@ -93,13 +95,24 @@ ipcMain.handle = (channel, listener) => registerIpc(channel, (event, ...args) =>
   if (appUpdates?.snapshot().status === 'installing' && !channel.startsWith('app-update-')) {
     return { success: false, error: '正在重启更新，请稍候' };
   }
-  const result = listener(event, ...args);
+  const invoke = () => listener(event, ...args);
+  const result = PROTECTED.has(channel) ? checkOperation(channel, {
+    authorized: launchAuthorized,
+    trusted: !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents && event.senderFrame === mainWindow.webContents.mainFrame,
+    session: licenseSession,
+  }).then(denied => denied || invoke()) : invoke();
   if (result?.then && !channel.startsWith('app-update-')) {
     pendingIpcWork++;
     return Promise.resolve(result).finally(() => { pendingIpcWork--; });
   }
   return result;
 });
+ipcMain.handle('license-runtime-status', () => licenseSession?.snapshot() || { allowed: false, error: '请先完成联网授权。' });
+ipcMain.handle('license-runtime-retry', async event => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return { allowed: false, error: '请从软件主窗口重新验证。' };
+  return licenseSession?.ensure({ force: true }) || { allowed: false, error: '请重新打开软件完成联网授权。' };
+});
+app.on('will-quit', () => licenseSession?.dispose());
 ipcMain.handle('app-update-status', () => appUpdates?.snapshot() || { status: 'unsupported' });
 for (const method of ['check', 'download', 'install']) {
   ipcMain.handle(`app-update-${method}`, event => {
@@ -1924,6 +1937,7 @@ async function refreshAllSeries() {
 // 导致并发数恒为 1（无论 max_concurrent 设为多少）。
 // 现在由 runTask 自行在结束时回调 pumpQueue，调度器只负责按并发上限派发。
 function pumpQueue() {
+  if (!licenseSession?.snapshot().allowed) return;
   downloadQueue = downloadQueue.filter((task) => task.status === 'pending');
   for (const task of downloadQueue) repairTaskDestination(task);
   while (activeDownloads < MAX_CONCURRENT_DOWNLOADS) {
@@ -9790,6 +9804,11 @@ app.whenReady().then(async () => {
     dialog,
     clipboard: require('electron').clipboard,
     onActivationReady: () => markStartup('activationLoaded'),
+    onAuthorized: session => { licenseSession = session; },
+    onLicenseChange: state => {
+      sendToRenderer('license-runtime-state', state);
+      if (state.allowed && launchAuthorized) pumpQueue();
+    },
   }))) {
     app.exit(0);
     return;

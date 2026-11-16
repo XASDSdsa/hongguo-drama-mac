@@ -907,6 +907,26 @@ function mount(file, api, props = {}, options = {}) {
     assert.ok(ui.text().includes('已添加'));
     ui.unmount();
   });
+  await test('license status UI: revoked events win over initial state and retry restores access', async () => {
+    const initial = deferred(), retry = deferred();
+    let event, off = false;
+    const ui = mount('LicenseStatus', {
+      licenseStatus: () => initial.promise,
+      onLicenseState: cb => { event = cb; return () => { off = true; }; },
+      licenseRetry: () => retry.promise,
+    });
+    event({ allowed: false, error: '授权已停用' }); await ui.flush();
+    initial.resolve({ allowed: true }); await ui.flush();
+    assert.ok(ui.text().includes('授权已停用'));
+    assert.ok(ui.text().includes('已有任务可继续完成'));
+    const action = ui.button('重新验证').props.onClick(); await ui.flush();
+    assert.equal(ui.button('正在验证').props.disabled, true);
+    retry.resolve({ allowed: true }); await action; await ui.flush();
+    assert.equal(ui.find(n => n.props.role === 'alert'), undefined);
+    event({ allowed: true, warning: '网络暂不可用' }); await ui.flush();
+    assert.ok(ui.text().includes('网络暂不可用'));
+    ui.unmount(); assert.equal(off, true);
+  });
   await test('in-app update UI: newer events win, duplicate clicks are ignored and busy install failures stay visible', async () => {
     const initial = deferred(); const download = deferred();
     let event; let off = false; let calls = 0; let installs = 0;

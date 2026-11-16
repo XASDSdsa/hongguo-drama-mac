@@ -166,7 +166,12 @@ async function main() {
   assert.equal(ps(`(Get-Item -LiteralPath '${quote(exe)}').VersionInfo.ProductVersion`).trim(), manifest.version + '.0');
   if (!focused) { runApply(script); assert.equal(sha(exe), manifest.exe.sha256); }
   if (focused) {
-    if (focusedScope === 'template-import-and-update') await require('./check-template-import.cjs').verifyTemplateImport(archive);
+    if (focusedScope === 'license-protection-and-update') {
+      require('./protect-app.cjs').verifyProtectedArchive(archive);
+      await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
+      await require('./check-online-startup.cjs').verifyOnlineStartup(archive);
+    }
+    else if (focusedScope === 'template-import-and-update') await require('./check-template-import.cjs').verifyTemplateImport(archive);
     else {
       const ai = require(archive + '/src/native/ai-config.js');
       assert.equal(ai.arkVideoModel(), 'doubao-seed-2-1-turbo-260628');
@@ -179,7 +184,7 @@ async function main() {
     preservedUserData: true, runtimesUnchanged: true, rollback: !focused, interruptedRecovery: !focused, checksumRejected: !focused,
     runtimeMismatchRejected: !focused, restarted: true, startup,
     ...(focused ? { scope: focusedScope, engineRegressionRun: '43561340463',
-      ...(focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
+      ...(focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
   console.log('PASS actual updater → small patch:', evidence);
 }
