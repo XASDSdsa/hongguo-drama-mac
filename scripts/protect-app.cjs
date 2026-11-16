@@ -56,7 +56,7 @@ function verifyProtectedArchive(archive) {
     assert.equal(sha(source), record.source, 'Source changed: ' + name);
     const output = record.obfuscated ? transform(source, name) : source;
     assert.equal(sha(output), record.output, 'Reproducible transform: ' + name);
-    assert.equal(sha(extractFile(archive, name)), record.output, 'Packaged bytes: ' + name);
+    assert.equal(sha(extractFile(archive, path.normalize(name))), record.output, 'Packaged bytes: ' + name);
   }
   for (const name of ['main.js', 'preload.js', 'src/native/license/keygate.cjs', 'src/native/license/runtime-session.cjs', 'src/native/license/operation-guard.cjs']) {
     assert.ok(manifest.files[name]?.obfuscated && manifest.files[name].source !== manifest.files[name].output, name);
