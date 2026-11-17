@@ -18,6 +18,9 @@ const focusedScope = process.env.UPDATE_CHECK_SCOPE || 'model-preset-and-update'
 
 async function main() {
   await app.whenReady();
+  // Electron's default runner may quit when the temporary PDF source window closes.
+  // Keep a hidden window until the harness writes its final acceptance record.
+  if (focusedScope === 'report-protection-and-update') new (require('electron').BrowserWindow)({show:false});
   const output = path.resolve(process.argv[2]);
   const paths = JSON.parse(fs.readFileSync(path.join(output, 'patch-paths.json')));
   const manifest = JSON.parse(fs.readFileSync(path.join(paths.payload, 'patch.json')));

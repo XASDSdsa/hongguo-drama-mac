@@ -950,6 +950,7 @@ jobs:
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path 'dist/app-patch/automatic-update-acceptance.json')) { throw 'Verification exited before writing final acceptance' }
       - uses: actions/upload-artifact@v7
         with:
           name: windows-in-app-update-release
