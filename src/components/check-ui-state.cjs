@@ -907,6 +907,21 @@ function mount(file, api, props = {}, options = {}) {
     assert.ok(ui.text().includes('已添加'));
     ui.unmount();
   });
+  await test('cost report templates: selection remains available when cost calculation fails', async () => {
+    const values=new Map();
+    const storage={getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)};
+    const api={libraryCostReport:async()=>({success:false,error:'统计暂不可用'}),
+      costReportTemplateList:async()=>({success:true,templates:[{id:'first',name:'第一份.docx'},{id:'second',name:'第二份.docx'}]})};
+    const ui=mount('SeriesDetail',api,{dir:'/series',refreshKey:0,onClose(){}},{component:'CostReportDialog',storage});
+    await ui.flush();ui.advanceTimers(200);await ui.flush();
+    assert.ok(ui.text().includes('统计暂不可用'));
+    const select=ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
+    assert.ok(select);assert.equal(select.props.disabled,false);
+    select.props.onChange({target:{value:'second'}});await ui.flush();
+    ui.button('确定').props.onClick();ui.unmount();
+    const reopened=mount('SeriesDetail',api,{dir:'/series',refreshKey:0,onClose(){}},{component:'CostReportDialog',storage});
+    await reopened.flush();assert.equal(reopened.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板').props.value,'second');reopened.unmount();
+  });
   await test('license status UI: revoked events win over initial state and retry restores access', async () => {
     const initial = deferred(), retry = deferred();
     let event, off = false;

@@ -7,6 +7,9 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const obfuscator = require('javascript-obfuscator');
 const root = path.join(__dirname, '..');
+// These functions are serialized into another JS realm; they must have no build-time closures.
+const SERIALIZED_REPORT_FILES = new Set(['src/native/cost-report/png.js', 'src/native/cost-report/page-look.js', 'src/native/cost-report/font-check.js']);
+const shouldObfuscate = name => !name.startsWith('dist-react/') && !SERIALIZED_REPORT_FILES.has(name);
 const sha = data => createHash('sha256').update(data).digest('hex');
 function transform(source, name) {
   return Buffer.from(obfuscator.obfuscate(source.toString(), {
@@ -36,9 +39,9 @@ function prepareProtectedApp() {
       if (!/\.(?:c?js)$/.test(name)) continue;
       const source = fs.readFileSync(file);
       // Vite output is already minified; keep browser compatibility and source maps disabled.
-      const output = name.startsWith('dist-react/') ? source : transform(source, name);
+      const output = shouldObfuscate(name) ? transform(source, name) : source;
       fs.writeFileSync(file, output);
-      records[name] = { source: sha(source), output: sha(output), obfuscated: !name.startsWith('dist-react/') };
+      records[name] = { source: sha(source), output: sha(output), obfuscated: shouldObfuscate(name) };
     }
     const manifest = { version: require('../package.json').version, tool: 'javascript-obfuscator@4.1.1', files: records };
     fs.writeFileSync(path.join(directory, 'protected-build.json'), JSON.stringify(manifest));

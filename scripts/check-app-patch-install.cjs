@@ -166,7 +166,12 @@ async function main() {
   assert.equal(ps(`(Get-Item -LiteralPath '${quote(exe)}').VersionInfo.ProductVersion`).trim(), manifest.version + '.0');
   if (!focused) { runApply(script); assert.equal(sha(exe), manifest.exe.sha256); }
   if (focused) {
-    if (focusedScope === 'download-v5-and-update') {
+    if (focusedScope === 'report-protection-and-update') {
+      require('./protect-app.cjs').verifyProtectedArchive(archive);
+      await require('./check-report-protection.cjs').verifyReportProtection(archive);
+      await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
+    }
+    else if (focusedScope === 'download-v5-and-update') {
       require('./protect-app.cjs').verifyProtectedArchive(archive);
       await require('./check-download-v5-live.cjs').verifyDownloadV5Live(archive);
       await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
@@ -189,7 +194,7 @@ async function main() {
     preservedUserData: true, runtimesUnchanged: true, rollback: !focused, interruptedRecovery: !focused, checksumRejected: !focused,
     runtimeMismatchRejected: !focused, restarted: true, startup,
     ...(focused ? { scope: focusedScope, engineRegressionRun: '43561340463',
-      ...(focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
+      ...(focusedScope === 'report-protection-and-update' ? {reportProtectionChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
   console.log('PASS actual updater → small patch:', evidence);
 }

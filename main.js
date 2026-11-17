@@ -5899,6 +5899,12 @@ ipcMain.handle('library-cost-report-export-png', async (_event, payload = {}) =>
   }
 });
 
+// Template management is independent of media probing and cost calculation.
+ipcMain.handle('cost-report-template-list', () => {
+  try { return { success: true, templates: costTemplates().list() }; }
+  catch (error) { return { success: false, error: error?.message || String(error) }; }
+});
+
 /** 选报告模板（用户自己的 docx，有公章和签名）：核对能填，再复制到本机的用户数据目录。 */
 ipcMain.handle('cost-report-template-pick', async (event) => {
   try {

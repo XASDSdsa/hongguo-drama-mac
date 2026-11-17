@@ -332,6 +332,21 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir, requestKey, refreshKey]);
 
+  useEffect(() => {
+    if (typeof window.electronAPI.costReportTemplateList !== 'function') return;
+    let alive = true;
+    const revision = templateRevision.current;
+    window.electronAPI.costReportTemplateList().then(result => {
+      if (!alive || revision !== templateRevision.current) return;
+      if (result?.success === false) { setTemplateError(result.error || '无法读取模板列表'); return; }
+      if (!Array.isArray(result?.templates)) return;
+      templateRevision.current++;
+      setTemplateOptions(result.templates);
+      setSettings(value => value.templateId || !result.templates.length ? value : { ...value, templateId: result.templates[0].id });
+    }).catch(error => { if (alive) setTemplateError(error?.message || '无法读取模板列表'); });
+    return () => { alive = false; };
+  }, [dir]);
+
   useDialogKeyboard(true, onClose, '.cost-dialog');
 
   const set = (key) => (e) => setSettings((value) => ({ ...value, [key]: e.target.value }));
@@ -488,6 +503,9 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
                 {info.over.share && ' 超过了报审要求的 40%'}
               </span>
             </dd>
+          </dl>
+        )}
+        <dl className="cost-grid">
             <dt>报告模板</dt>
             <dd>
               <span className="cost-inline">
@@ -516,8 +534,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
               {templateError && <p className="sb-card-error" role="alert">{templateError}</p>}
               {templateNotice && <p className="cost-sub" role="status">{templateNotice}</p>}
             </dd>
-          </dl>
-        )}
+        </dl>
         {info && (
           <p className="cost-note">
             价格：火山方舟官方「模型价格」{info.price.model}，{info.price.mode}（{info.price.checked} 查）；token = 时长
