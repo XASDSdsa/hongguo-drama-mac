@@ -13,6 +13,7 @@ const sha = file => hash(fs.readFileSync(file));
 const quote = value => value.replace(/'/g, "''");
 const ps = command => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true });
 let server;
+let reportKeepAlive;
 const focused = process.argv.includes('--focused');
 const focusedScope = process.env.UPDATE_CHECK_SCOPE || 'model-preset-and-update';
 
@@ -20,7 +21,7 @@ async function main() {
   await app.whenReady();
   // Electron's default runner may quit when the temporary PDF source window closes.
   // Keep a hidden window until the harness writes its final acceptance record.
-  if (focusedScope === 'report-protection-and-update') new (require('electron').BrowserWindow)({show:false});
+  if (focusedScope === 'report-protection-and-update') reportKeepAlive = new (require('electron').BrowserWindow)({show:false});
   const output = path.resolve(process.argv[2]);
   const paths = JSON.parse(fs.readFileSync(path.join(output, 'patch-paths.json')));
   const manifest = JSON.parse(fs.readFileSync(path.join(paths.payload, 'patch.json')));
@@ -201,4 +202,4 @@ async function main() {
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
   console.log('PASS actual updater → small patch:', evidence);
 }
-main().then(() => { server?.close(); app.exit(0); }).catch(error => { console.error(error); server?.close(); app.exit(1); });
+main().then(() => { server?.close(); reportKeepAlive?.destroy(); app.exit(0); }).catch(error => { console.error(error); server?.close(); app.exit(1); });
