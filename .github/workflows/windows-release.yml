@@ -893,8 +893,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '加强授权保护：发布业务代码混淆、运行期间联网复核及关键任务授权检查；短时断网可恢复，保留已有数据和运行库。'
-      UPDATE_CHECK_SCOPE: license-protection-and-update
+      UPDATE_RELEASE_NOTES: '修复红果下载失效：采用新版 v5 签名和播放器取源协议，保留高清校验、解密及授权保护。'
+      UPDATE_CHECK_SCOPE: download-v5-and-update
     steps:
       - uses: actions/checkout@v5
         with:
@@ -913,14 +913,30 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 43689734163
+          run-id: 43804421566
           github-token: ${{ github.token }}
           path: dist/previous-patch
-      - name: Build protected application code and check licensing
+      - name: Fetch accepted Windows FFmpeg for complete media verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ff"
+          gh release download v1.2.6 --repo "${{ github.repository }}" -p 'ffmpeg-*-win-x64.zip' -D "$RUNNER_TEMP/ff"
+          (cd "$RUNNER_TEMP/ff" && 7z x -y -bd ffmpeg-*-win-x64.zip > /dev/null)
+          ff=$(find "$RUNNER_TEMP/ff" -iname ffmpeg.exe | head -n 1)
+          echo "FFMPEG_PATH=$(cygpath -w "$ff")" >> "$GITHUB_ENV"
+          cygpath -w "$(dirname "$ff")" >> "$GITHUB_PATH"
+      - name: Build download protocol fix with existing protection
         shell: pwsh
         run: |
           git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
           if ($LASTEXITCODE -ne 0) { throw 'Fast release requires the already verified patch engine' }
+          node --test src/native/playback-v5.test.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-app-source.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-license-protection.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-online-startup.cjs
@@ -935,7 +951,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check previous version upgrade and packaged license protection
+      - name: Check previous version upgrade and actual complete downloads
         shell: pwsh
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch

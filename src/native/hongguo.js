@@ -456,14 +456,12 @@ const DOWNLOAD_MIN_DEFINITION = 720;
 async function fetchDownloadUrl(vid) {
   let appError;
   try {
-    return await require('./native-player').fetchNativePlayUrl(String(vid));
+    return await require('./app-source').fetchAppPlayUrl(String(vid));
   } catch (error) {
+    // An explicit upstream refusal must not fan out to another identity or interface.
+    if ([403, 429].includes(error.status) || error.code === 'BUSINESS_REJECTED' ||
+        ['HTTP_403', 'HTTP_429', 'BUSINESS_REJECTED'].includes(error.registrationFailure)) throw error;
     appError = error;
-  }
-  // Existing Mac packages keep their previous resolver until their native bundle is installed.
-  if (process.platform !== 'win32' && appError.code === 'PLAYER_COMPONENT_MISSING') {
-    try { return await require('./app-source').fetchAppPlayUrl(String(vid)); }
-    catch (error) { appError = error; }
   }
   try {
     const j = await apiCall('/novel/player/multi_video_model/preload/v1', {
