@@ -1,0 +1,12 @@
+Playback restoration in changeFileName 1.2.56:
+The pure JavaScript v5 playback signer and synthetic vectors are adapted from
+jackotom/hongguo-drama v7.5, src/native/playback-v5.js and associated tests,
+under GPL-3.0-only. That work credits N3urda/hongguoTV commit
+18c37c2afd0567520135abcae312352542f09083 (Signer.kt, AesV3.kt, V5Constants.kt),
+originally derived from drpys 22261ad. Original attribution is retained in the
+source. Local changes: explicit Unicode control-character validation, integration
+with changeFileName's bounded request/model validation and existing media pipeline.
+No captured sessions, external signing provider or new native runtime is included.
+
+Upstream source: https://github.com/jackotom/hongguo-drama/tree/v7.5
+License: GPL-3.0-only, see LICENSE.txt provided with the application.
