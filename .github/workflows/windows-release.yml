@@ -893,8 +893,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '修复成本报告混淆变量报错，模板选择不再依赖成本统计成功；保留新版下载取源和授权保护。'
-      UPDATE_CHECK_SCOPE: report-protection-and-update
+      UPDATE_RELEASE_NOTES: '修复红果下载空响应：接入同会话 v5 video_tab 备用取址，保留完整高清下载、授权与报告模板。'
+      UPDATE_CHECK_SCOPE: download-v5-and-update
     steps:
       - uses: actions/checkout@v5
         with:
@@ -913,23 +913,19 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 44010427898
+          run-id: 44041824047
           github-token: ${{ github.token }}
           path: dist/previous-patch
-      - name: Build report protection and independent template settings fix
+      - name: Build v5 download recovery application patch
         shell: pwsh
         run: |
           git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
           if ($LASTEXITCODE -ne 0) { throw 'Fast release requires the already verified patch engine' }
-          node scripts/check-report-protection.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-template-import.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node src/components/check-ui-state.cjs 'cost report templates'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test src/native/playback-v5.test.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-app-source.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-download-errors.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-license-protection.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -945,7 +941,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check previous version upgrade and report cross-realm rendering
+      - name: Check 1.2.57 upgrade and real complete downloads from the installed archive
         shell: pwsh
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch

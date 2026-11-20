@@ -719,10 +719,10 @@ function branchOf(url, body, khronos) {
 // a9d5431d0d (6.7/6.8). Keep recovery within the existing request deadline.
 // v5 player request adapted from jackotom/hongguo-drama v7.5 (GPL-3.0-only).
 // Sign the final query and the actual gzip bytes sent to the player endpoint.
-function signedVideoRequest(payload, identity, alternate = false) {
+function signedVideoRequest(payload, identity) {
   const body = gzipSync(Buffer.from(payload));
   const signed = signPlaybackV5({
-    base: `https://api5-normal-sinfonline${alternate ? 'a' : 'b'}.fqnovel.com/novel/player/multi_video_model/player/v1`,
+    base: 'https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1',
     values: { aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
       channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10', os_version: '12',
       update_version_code: '74332', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id },
@@ -731,6 +731,21 @@ function signedVideoRequest(payload, identity, alternate = false) {
   return { ...signed, body, method: 'POST', headers: { ...signed.headers,
     'User-Agent': 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)',
     Accept: 'application/json', 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip' } };
+}
+
+// Empty-response recovery adapted from sunnysky123/hongguo-web 17f7b865 (1.3.3).
+// This GET must also use v5; the legacy video_tab signer still returns empty data.
+function signedTabRequest(vid, identity) {
+  const version = '73932';
+  const signed = signPlaybackV5({ base: VIDEO_TAB_API,
+    values: { ...DEVICE, version_code: version, version_name: '7.3.9.32',
+      manifest_version_code: version, update_version_code: version, pv_player: version,
+      iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
+      video_id: vid, video_id_type: '0', device_level: '1', need_all_video_definition: '1',
+      need_mp4_align: '0', use_os_player: '0', video_platform: '1024', source: '0', from_video_id: '' },
+    body: null, now: Date.now() });
+  return { ...signed, method: 'GET', headers: { ...signed.headers,
+    'User-Agent': VIDEO_UA, 'Accept-Language': 'zh-CN,zh;q=0.9' } };
 }
 
 function parseFallback(value) {
@@ -842,6 +857,11 @@ async function requestJson(url, options, deadline, signal) {
       url = checkedUrl(new URL(response.headers.location, url).href, ['fqnovel.com', 'snssdk.com']);
       continue;
     }
+    if (response.headers?.['retry-after'] && (response.status === 503 ||
+        response.status === 200 && typeof response.data === 'string' && !response.data.trim())) {
+      throw Object.assign(new Error('App 播放服务要求稍后重试'), {
+        code: 'UPSTREAM_BACKOFF', status: response.status, backoff: true });
+    }
     if (response.status !== 200) {
       throw Object.assign(new Error(`App 片源请求失败（HTTP ${response.status}）`), { status: response.status });
     }
@@ -876,7 +896,7 @@ async function fetchAppPlayUrlFresh(vid) {
   const payload = JSON.stringify({
     biz_param: {
       detail_page_version: 0,
-      device_level: 3,
+      device_level: 1,
       disable_digg_stat: false,
       disable_video_relate_book: false,
       need_all_video_definition: true,
@@ -888,22 +908,33 @@ async function fetchAppPlayUrlFresh(vid) {
     mixed_video_id_map: { 1004: [vid] },
     dr_scene: 'player',
   });
-  let identity = await registerPlaybackDevice(requestJson);
+  const identity = await registerPlaybackDevice(requestJson);
   const deadline = Date.now() + 12000;
   const signal = AbortSignal.timeout(12000);
-  const requestModel = async (alternate = false) => {
-    const { url, headers, body, method } = signedVideoRequest(payload, identity, alternate);
-    if (alternate) headers.Connection = 'close';
+  const requestModel = async () => {
+    const { url, headers, body, method } = signedVideoRequest(payload, identity);
     return requestJson(url, { method, headers, data: body }, deadline, signal);
   };
   let response;
+  let modelUserAgent = PLAYBACK_UA;
   try {
     response = await requestModel();
   } catch (error) {
     if (error.code !== 'EMPTY_RESPONSE' || deadline - Date.now() < 1000) throw error;
-    if (deadline - Date.now() < 500) throw error;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    response = await requestModel(true);
+    const { url, headers, method } = signedTabRequest(vid, identity);
+    try { response = await requestJson(url, { method, headers }, deadline, signal); }
+    catch (fallbackError) {
+      if (['EMPTY_RESPONSE', 'INVALID_RESPONSE'].includes(fallbackError.code)) throw error;
+      throw fallbackError;
+    }
+    if (Number(response.Code || response.code || 0) !== 0) {
+      throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
+    }
+    const rows = response.data?.video_model_data ?? response.data;
+    const entry = rows?.[vid];
+    if (!entry || !(typeof entry.video_model === 'string' ? jsonBody(entry.video_model) : entry.video_model)) throw error;
+    response = { code: 0, data: { [vid]: entry } };
+    modelUserAgent = VIDEO_UA;
   }
   if (Number(response.Code || response.code || 0) !== 0) throw Object.assign(new Error('App 接口暂未提供本集播放信息'), {code: 'BUSINESS_REJECTED'});
   const entries = response.data?.['1004'] ?? response.data?.video_model_data ?? response.data;
@@ -923,7 +954,7 @@ async function fetchAppPlayUrlFresh(vid) {
     return parseAppPlayModel(await readFallback(), VIDEO_UA);
   }
   try {
-    return parseAppPlayModel(model, PLAYBACK_UA, true);
+    return parseAppPlayModel(model, modelUserAgent, true);
   } catch (error) {
     const duration = Number(model.video_duration);
     if (!error.minimumPixels || typeof model.video_id !== 'string' || !model.video_id.trim()

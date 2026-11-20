@@ -14,6 +14,7 @@ const quote = value => value.replace(/'/g, "''");
 const ps = command => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true });
 let server;
 let reportKeepAlive;
+let downloadedEpisodes;
 const focused = process.argv.includes('--focused');
 const focusedScope = process.env.UPDATE_CHECK_SCOPE || 'model-preset-and-update';
 
@@ -177,7 +178,7 @@ async function main() {
     }
     else if (focusedScope === 'download-v5-and-update') {
       require('./protect-app.cjs').verifyProtectedArchive(archive);
-      await require('./check-download-v5-live.cjs').verifyDownloadV5Live(archive);
+      downloadedEpisodes = await require('./check-download-v5-live.cjs').verifyDownloadV5Live(archive);
       await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
     }
     else if (focusedScope === 'license-protection-and-update') {
@@ -196,6 +197,7 @@ async function main() {
   const evidence = { from: fromVersion, to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
     downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit,
     preservedUserData: true, runtimesUnchanged: true, rollback: !focused, interruptedRecovery: !focused, checksumRejected: !focused,
+    ...(downloadedEpisodes ? { downloadV5RecoveryChecked: true, downloadedEpisodes } : {}),
     runtimeMismatchRejected: !focused, restarted: true, startup,
     ...(focused ? { scope: focusedScope, engineRegressionRun: '43561340463',
       ...(focusedScope === 'report-protection-and-update' ? {reportProtectionChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };

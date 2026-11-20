@@ -45,6 +45,7 @@ const MISSING_PATTERN =
 
 /** 这类失败值得程序自己换个新链接再试几次（磁盘、平台明确没有的不用）。 */
 function isAutoRetryable(input) {
+  if (input?.code === 'UPSTREAM_BACKOFF') return false;
   const { kind } = classifyDownloadError(input);
   return kind !== 'disk' && kind !== 'missing';
 }

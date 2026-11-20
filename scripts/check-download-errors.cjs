@@ -42,6 +42,8 @@ assert.equal(isAutoRetryable({ message: '网络失败 ECONNRESET' }), true);
 assert.equal(isAutoRetryable({ message: '未获取到有效播放地址' }), true);
 assert.equal(isAutoRetryable({ message: '第 8 集未开放' }), false);
 assert.equal(isAutoRetryable({ message: 'ENOSPC: no space left' }), false);
+assert.equal(isAutoRetryable({ code: 'UPSTREAM_BACKOFF', status: 200 }), false);
+assert.equal(isAutoRetryable({ code: 'UPSTREAM_BACKOFF', status: 503 }), false);
 assert.equal(classifyDownloadError({ code: 'ECONNRESET' }).label, '网络失败');
 assert.ok(classifyDownloadError({ message: 'a'.repeat(1000) }).detail.length <= 200);
 console.log(`PASS download error classification (${cases.length} cases)`);

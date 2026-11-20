@@ -312,7 +312,7 @@ test('strict inputs reject malformed URLs, imprecise identities, non-string quer
       { ...VALUES, cdid: '' }, { ...VALUES, version_name: '' }, { ...VALUES, aid: '1' },
       { ...VALUES, device_id: '9'.repeat(31) }, { ...VALUES, nested: {} }, { ...VALUES, bad: '\ud800' },
       { ...VALUES, empty: undefined }, { ...VALUES, x: 'a\nb' }].map(values => ({ ...valid, values })),
-    ...[undefined, null, '', Buffer.alloc(0), new Uint8Array(BODY), Buffer.from('{}'),
+    ...[undefined, '', Buffer.alloc(0), new Uint8Array(BODY), Buffer.from('{}'),
       BODY.subarray(0, 10), Buffer.concat([BODY.subarray(0, -1), Buffer.from([BODY.at(-1) ^ 1])])].map(body => ({ ...valid, body })),
     ...[null, '1800000000000', -1, NaN, Infinity, NOW + 0.1, Number.MAX_SAFE_INTEGER, 0x100000000 * 1000]
       .map(now => ({ ...valid, now })),
@@ -326,5 +326,19 @@ test('strict inputs reject malformed URLs, imprecise identities, non-string quer
     try { api.signPlaybackV5(input); } catch (caught) { error = caught; }
     assert.ok(error && /^(TypeError|RangeError)$/.test(error.name), `invalid input ${index}`);
     assert.ok(!error.message.includes(VALUES.device_id), 'errors must not contain identities');
+  }
+});
+
+test('bodyless GET binds a zero body digest and omits POST-only headers across timestamp classes', () => {
+  const api = load();
+  for (let i=0;i<32;i++) {
+    const now=NOW+i*1000;
+    const {signed,message}=messageFor(api,{body:null,now});
+    const query=signed.url.split('?')[1], ts=Math.floor(now/1000);
+    const time=Buffer.alloc(4);time.writeUInt32LE(ts);
+    assert.equal(ivFold(ivFold(ivFold(0x20230928,sm3(Buffer.from(query))),Buffer.alloc(16)),time)&15,12);
+    assert.ok(message.get(13).equals(api.__test.hashF13(sm3(Buffer.from(query)),Buffer.alloc(16),ts)));
+    assert.deepEqual(Object.keys(signed.headers).sort(),['x-helios','x-khronos','x-medusa']);
+    assert.equal(new URL(signed.url).searchParams.get('device_id'),VALUES.device_id);
   }
 });

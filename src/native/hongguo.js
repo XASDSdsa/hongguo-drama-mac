@@ -459,7 +459,7 @@ async function fetchDownloadUrl(vid) {
     return await require('./app-source').fetchAppPlayUrl(String(vid));
   } catch (error) {
     // An explicit upstream refusal must not fan out to another identity or interface.
-    if ([403, 429].includes(error.status) || error.code === 'BUSINESS_REJECTED' ||
+    if (error.backoff || [403, 429].includes(error.status) || error.code === 'BUSINESS_REJECTED' ||
         ['HTTP_403', 'HTTP_429', 'BUSINESS_REJECTED'].includes(error.registrationFailure)) throw error;
     appError = error;
   }
