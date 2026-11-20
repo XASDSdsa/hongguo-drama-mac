@@ -3,6 +3,22 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // 应用信息 / 官网链接
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+  licenseStatus: () => ipcRenderer.invoke('license-runtime-status'),
+  licenseRetry: () => ipcRenderer.invoke('license-runtime-retry'),
+  onLicenseState: cb => {
+    const listener = (_event, state) => cb(state);
+    ipcRenderer.on('license-runtime-state', listener);
+    return () => ipcRenderer.removeListener('license-runtime-state', listener);
+  },
+  appUpdateStatus: () => ipcRenderer.invoke('app-update-status'),
+  appUpdateCheck: () => ipcRenderer.invoke('app-update-check'),
+  appUpdateDownload: () => ipcRenderer.invoke('app-update-download'),
+  appUpdateInstall: () => ipcRenderer.invoke('app-update-install'),
+  onAppUpdate: cb => {
+    const listener = (_event, state) => cb(state);
+    ipcRenderer.on('app-update-state', listener);
+    return () => ipcRenderer.removeListener('app-update-state', listener);
+  },
   encoderCheck: () => ipcRenderer.invoke('encoder-check'),
   openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
@@ -148,6 +164,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryDedup: (payload) => ipcRenderer.invoke('library-dedup', payload),
   libraryEstimate: (payload) => ipcRenderer.invoke('library-estimate', payload),
   libraryDurations: (payload) => ipcRenderer.invoke('library-durations', payload),
+  costReportTemplateList: () => ipcRenderer.invoke('cost-report-template-list'),
   libraryCostReport: (payload) => ipcRenderer.invoke('library-cost-report', payload),
   libraryCostReportFile: (payload) => ipcRenderer.invoke('library-cost-report-file', payload),
   libraryCostReportOpen: (payload) => ipcRenderer.invoke('library-cost-report-open', payload),

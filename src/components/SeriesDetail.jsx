@@ -273,6 +273,7 @@ function readCostSettings(dir) {
   const stored = readJson(COST_KEY)[dir] || {};
   const settings = {
     title: String(stored.title ?? ''),
+    templateId: String(stored.templateId || ''),
     drawMin: String(stored.drawMin ?? 1),
     drawMax: String(stored.drawMax ?? 3),
     drawSeed: stored.drawSeed || newSeed(),
@@ -285,6 +286,7 @@ const saveCostSettings = (dir, settings) => writeJson(COST_KEY, { ...readJson(CO
 /** 发给主进程的：剧名、演员片酬占比、抽卡（范围 + 种子）。 */
 const costRequest = (settings) => ({
   title: settings.title.trim(),
+  templateId: settings.templateId || '',
   actorPercent: settings.actorPercent,
   draws: { min: Number(settings.drawMin) || 1, max: Number(settings.drawMax) || 1, seed: settings.drawSeed },
 });
@@ -298,12 +300,17 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
+  const [templateOptions, setTemplateOptions] = useState(null);
+  const [templateError, setTemplateError] = useState('');
+  const [templateNotice, setTemplateNotice] = useState('');
+  const templateRevision = useRef(0);
+  const templatePickPending = useRef(false);
   const request = costRequest(settings);
-  const requestKey = JSON.stringify({ ...request, title: '' });
+  const requestKey = JSON.stringify({ ...request, title: '', templateId: '' });
 
   useEffect(() => {
     let alive = true;
+    const revision = templateRevision.current;
     const timer = setTimeout(() => {
       window.electronAPI
         .libraryCostReport?.({ dir, ...request })
@@ -311,6 +318,8 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
           if (!alive) return;
           if (result?.success) {
             setInfo(result);
+            if (revision === templateRevision.current) setTemplateOptions(result.templates || (result.template?.ready ? [result.template] : []));
+            setSettings(current => current.templateId || !result.template?.ready ? current : { ...current, templateId: result.template.id });
             setError('');
           } else setError(result?.error || '算不出来');
         })
@@ -321,20 +330,52 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dir, requestKey, refreshKey, reload]);
+  }, [dir, requestKey, refreshKey]);
+
+  useEffect(() => {
+    if (typeof window.electronAPI.costReportTemplateList !== 'function') return;
+    let alive = true;
+    const revision = templateRevision.current;
+    window.electronAPI.costReportTemplateList().then(result => {
+      if (!alive || revision !== templateRevision.current) return;
+      if (result?.success === false) { setTemplateError(result.error || '无法读取模板列表'); return; }
+      if (!Array.isArray(result?.templates)) return;
+      templateRevision.current++;
+      setTemplateOptions(result.templates);
+      setSettings(value => value.templateId || !result.templates.length ? value : { ...value, templateId: result.templates[0].id });
+    }).catch(error => { if (alive) setTemplateError(error?.message || '无法读取模板列表'); });
+    return () => { alive = false; };
+  }, [dir]);
 
   useDialogKeyboard(true, onClose, '.cost-dialog');
 
   const set = (key) => (e) => setSettings((value) => ({ ...value, [key]: e.target.value }));
   const pickTemplate = async () => {
-    setError('');
+    if (templatePickPending.current) return;
+    templatePickPending.current = true;
+    setTemplateError('');
+    setTemplateNotice('');
     setBusy('template');
-    const result = await window.electronAPI.costReportTemplatePick?.().catch(() => null);
-    setBusy('');
-    if (!result?.success) setError(result?.error || '模板没选上');
-    setReload((value) => value + 1);
+    try {
+      if (typeof window.electronAPI?.costReportTemplatePick !== 'function') throw new Error('请更新软件后再添加 DOCX 模板');
+      const result = await window.electronAPI.costReportTemplatePick();
+      if (!result?.success) throw new Error(result?.error || '模板导入失败，请重新选择 DOCX 文件');
+      if (result.canceled) return;
+      if (!result.template?.id) throw new Error('没有添加任何模板，请重新选择 DOCX 文件');
+      templateRevision.current++;
+      setTemplateOptions(result.templates || result.added || [result.template]);
+      setSettings(value => ({ ...value, templateId: result.template.id }));
+      setTemplateNotice(`已添加 ${result.added?.length || 1} 份模板，已选中「${result.template.name || '新模板'}」`);
+    } catch (error) {
+      setTemplateError(error?.message || '模板导入失败，请重试');
+    } finally {
+      templatePickPending.current = false;
+      setBusy('');
+    }
   };
 
+  const selectedTemplateId = settings.templateId || info?.template?.id || '';
+  const availableTemplates = templateOptions || info?.templates || (info?.template?.ready ? [info.template] : []);
   const cost = info?.cost;
   return (
     <div className="lib-mask lib-mask-top" onClick={onClose}>
@@ -462,20 +503,38 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
                 {info.over.share && ' 超过了报审要求的 40%'}
               </span>
             </dd>
+          </dl>
+        )}
+        <dl className="cost-grid">
             <dt>报告模板</dt>
             <dd>
               <span className="cost-inline">
-                {info.template.ready ? info.template.name : '还没选'}
+                <select
+                  className="input-field"
+                  aria-label="选择报告模板"
+                  value={selectedTemplateId}
+                  onChange={set('templateId')}
+                  disabled={!!busy || !availableTemplates.length}
+                >
+                  {!selectedTemplateId && <option value="">请先添加模板</option>}
+                  {selectedTemplateId && !availableTemplates.some(item => item.id === selectedTemplateId) && (
+                    <option value={selectedTemplateId}>所选模板已不存在，请重新选择</option>
+                  )}
+                  {availableTemplates.map((item, index) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}{availableTemplates.filter(other => other.name === item.name).length > 1 ? `（${index + 1}）` : ''}
+                    </option>
+                  ))}
+                </select>
                 <button type="button" className="btn btn-sm" onClick={pickTemplate} disabled={!!busy}>
-                  {info.template.ready ? '换模板' : '选择模板'}
+                  {busy === 'template' ? '正在添加…' : '添加模板'}
                 </button>
               </span>
-              {!info.template.ready && (
-                <span className="cost-sub">选你那份 Word 模板（有公章和签名的），只存在这台电脑上</span>
-              )}
+              <span className="cost-sub">可添加多份 Word 模板，保存在本机；这部剧使用上面选中的一份。点「确定」保存选择。</span>
+              {templateError && <p className="sb-card-error" role="alert">{templateError}</p>}
+              {templateNotice && <p className="cost-sub" role="status">{templateNotice}</p>}
             </dd>
-          </dl>
-        )}
+        </dl>
         {info && (
           <p className="cost-note">
             价格：火山方舟官方「模型价格」{info.price.model}，{info.price.mode}（{info.price.checked} 查）；token = 时长

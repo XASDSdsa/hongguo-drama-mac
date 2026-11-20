@@ -1,0 +1,5 @@
+.app-update { margin: 12px 10px; padding: 12px; border: 1px solid var(--border-color, #dee2e8); border-radius: 10px; font-size: 12px; overflow-wrap: anywhere; }
+.app-update .btn { margin-top: 8px; width: 100%; }
+.app-update progress { width: 100%; margin-top: 8px; }
+.app-update-notes { max-height: 100px; overflow: auto; white-space: pre-wrap; margin: 6px 0; opacity: .8; }
+.app-update-error { margin: 6px 0; color: #c23d43; }

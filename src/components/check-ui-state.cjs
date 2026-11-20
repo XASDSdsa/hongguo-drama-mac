@@ -14,7 +14,7 @@ const episode = (n) => ({ vid: `vid${n}`, vid_index: n, status: 'missing' });
 const detail = (id) => ({ series_id: id, series_title: id, total: 2, episodes: [episode(1), episode(2)] });
 const ok = (data) => ({ success: true, data });
 
-function mount(file, api, props = {}) {
+function mount(file, api, props = {}, options = {}) {
   const slots = [],
     effects = [],
     cleanups = [];
@@ -59,11 +59,12 @@ function mount(file, api, props = {}) {
   };
   const fallback = () => Promise.resolve({});
   const window = {
+    localStorage: options.storage || {getItem: () => null, setItem() {}},
     electronAPI: new Proxy(api, { get: (obj, key) => obj[key] || (key.startsWith('on') ? () => () => {} : fallback) }),
     addEventListener() {},
     removeEventListener() {},
   };
-  const source = transformSync(fs.readFileSync(`${__dirname}/${file}.jsx`, 'utf8'), {
+  const source = transformSync(fs.readFileSync(`${__dirname}/${file}.jsx`, 'utf8') + (options.component ? `\nexport { ${options.component} };` : ''), {
     loader: 'jsx',
     format: 'cjs',
   }).code;
@@ -120,7 +121,7 @@ function mount(file, api, props = {}) {
   };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
-  Component = context.module.exports.default;
+  Component = context.module.exports[options.component || 'default'];
   const render = () => {
     cursor = 0;
     tree = Component(props);
@@ -847,6 +848,121 @@ function mount(file, api, props = {}) {
       assert.equal(ui.button('一键重下失败集').props.disabled, false);
       ui.unmount();
     }
+  });
+  await test('cost report templates: import choices, confirm/cancel and per-series persistence', async () => {
+    const values = new Map();
+    const storage = {getItem: key => values.get(key), setItem: (key,value) => values.set(key,value)};
+    let templates = [{id:'legacy',name:'原模板.docx',ready:true}];
+    let canceled = false;
+    const api = {
+      libraryCostReport: async request => ({success:true, template: templates.find(t=>t.id===request.templateId) || templates[0], templates,
+        title:'测试', cost:{episodes:0,tiers:[],draws:{min:1,max:1}}, text:{}, price:{}, over:{}}),
+      costReportTemplatePick: async () => canceled ? {success:true,canceled:true} : (() => {
+        const added = [{id:'first',name:'公司一.docx',ready:true},{id:'second',name:'公司二.docx',ready:true}];
+        templates=[...templates,...added];return {success:true,template:added[0],added,templates};
+      })(),
+    };
+    const open = async dir => {
+      const ui=mount('SeriesDetail',api,{dir,onClose(){}},{component:'CostReportDialog',storage});
+      ui.advanceTimers(200);await ui.flush();ui.advanceTimers(200);await ui.flush();return ui;
+    };
+    const select = ui => ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
+    let ui=await open('/series-a');
+    assert.equal(select(ui).props.value,'legacy');
+    await ui.button('添加模板').props.onClick();await ui.flush();ui.advanceTimers(200);await ui.flush();
+    assert.equal(select(ui).props.value,'first');
+    select(ui).props.onChange({target:{value:'second'}});await ui.flush();
+    ui.button('确定').props.onClick();ui.unmount();
+    ui=await open('/series-a');assert.equal(select(ui).props.value,'second');
+    canceled=true;await ui.button('添加模板').props.onClick();await ui.flush();assert.equal(select(ui).props.value,'second');
+    select(ui).props.onChange({target:{value:'first'}});await ui.flush();ui.button('取消').props.onClick();ui.unmount();
+    ui=await open('/series-a');assert.equal(select(ui).props.value,'second');ui.unmount();
+    ui=await open('/series-b');assert.equal(select(ui).props.value,'legacy');ui.unmount();
+  });
+  await test('cost report templates: import errors survive refresh and successful options appear immediately', async () => {
+    const legacy = {id:'legacy',name:'原模板.docx',ready:true};
+    const added = {id:'added',name:'新增模板.docx',ready:true};
+    let mode = 'invalid';
+    const api = {
+      libraryCostReport: async () => ({success:true, template:legacy, templates:[legacy], title:'测试',
+        cost:{episodes:0,tiers:[],draws:{min:1,max:1}},text:{},price:{},over:{}}),
+      costReportTemplatePick: async () => {
+        if (mode === 'invalid') return {success:false,error:'该文件没有可填写的报告表格'};
+        if (mode === 'rejected') throw new Error('文件读取失败');
+        return {success:true,template:added,templates:[legacy,added],added:[added]};
+      },
+    };
+    const ui = mount('SeriesDetail',api,{dir:'/series',refreshKey:0,onClose(){}},{component:'CostReportDialog'});
+    ui.advanceTimers(200);await ui.flush();ui.advanceTimers(200);await ui.flush();
+    await ui.button('添加模板').props.onClick();await ui.flush();
+    ui.advanceTimers(200);await ui.flush();
+    assert.ok(ui.text().includes('该文件没有可填写的报告表格'),'import error must remain visible');
+    mode='rejected';await ui.button('添加模板').props.onClick();await ui.flush();
+    assert.ok(ui.text().includes('文件读取失败'));
+    assert.equal(ui.button('添加模板').props.disabled,false);
+    mode='success';await ui.button('添加模板').props.onClick();await ui.flush();
+    const select=ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
+    assert.equal(select.props.value,'added');
+    assert.ok(ui.find(n=>n.type==='option' && n.props.value==='added'),'new option appears without a cost refresh');
+    assert.ok(ui.text().includes('已添加'));
+    ui.unmount();
+  });
+  await test('cost report templates: selection remains available when cost calculation fails', async () => {
+    const values=new Map();
+    const storage={getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)};
+    const api={libraryCostReport:async()=>({success:false,error:'统计暂不可用'}),
+      costReportTemplateList:async()=>({success:true,templates:[{id:'first',name:'第一份.docx'},{id:'second',name:'第二份.docx'}]})};
+    const ui=mount('SeriesDetail',api,{dir:'/series',refreshKey:0,onClose(){}},{component:'CostReportDialog',storage});
+    await ui.flush();ui.advanceTimers(200);await ui.flush();
+    assert.ok(ui.text().includes('统计暂不可用'));
+    const select=ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
+    assert.ok(select);assert.equal(select.props.disabled,false);
+    select.props.onChange({target:{value:'second'}});await ui.flush();
+    ui.button('确定').props.onClick();ui.unmount();
+    const reopened=mount('SeriesDetail',api,{dir:'/series',refreshKey:0,onClose(){}},{component:'CostReportDialog',storage});
+    await reopened.flush();assert.equal(reopened.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板').props.value,'second');reopened.unmount();
+  });
+  await test('license status UI: revoked events win over initial state and retry restores access', async () => {
+    const initial = deferred(), retry = deferred();
+    let event, off = false;
+    const ui = mount('LicenseStatus', {
+      licenseStatus: () => initial.promise,
+      onLicenseState: cb => { event = cb; return () => { off = true; }; },
+      licenseRetry: () => retry.promise,
+    });
+    event({ allowed: false, error: '授权已停用' }); await ui.flush();
+    initial.resolve({ allowed: true }); await ui.flush();
+    assert.ok(ui.text().includes('授权已停用'));
+    assert.ok(ui.text().includes('已有任务可继续完成'));
+    const action = ui.button('重新验证').props.onClick(); await ui.flush();
+    assert.equal(ui.button('正在验证').props.disabled, true);
+    retry.resolve({ allowed: true }); await action; await ui.flush();
+    assert.equal(ui.find(n => n.props.role === 'alert'), undefined);
+    event({ allowed: true, warning: '网络暂不可用' }); await ui.flush();
+    assert.ok(ui.text().includes('网络暂不可用'));
+    ui.unmount(); assert.equal(off, true);
+  });
+  await test('in-app update UI: newer events win, duplicate clicks are ignored and busy install failures stay visible', async () => {
+    const initial = deferred(); const download = deferred();
+    let event; let off = false; let calls = 0; let installs = 0;
+    const ui = mount('AppUpdate', {
+      appUpdateStatus: () => initial.promise,
+      onAppUpdate: cb => { event = cb; return () => { off = true; }; },
+      appUpdateDownload: () => { calls++; return download.promise; },
+      appUpdateInstall: async () => { installs++; return { success: false, error: '任务正在运行，请稍后重试' }; },
+    });
+    event({status:'available',version:'1.2.51',notes:'测试'}); await ui.flush();
+    initial.resolve({status:'idle'}); await ui.flush();
+    assert.ok(ui.text().includes('发现 v1.2.51'));
+    const button = ui.button('下载更新'); const pending = button.props.onClick(); button.props.onClick();
+    await ui.flush(); assert.equal(calls,1);
+    event({status:'downloading',version:'1.2.51',percent:37}); await ui.flush();
+    assert.ok(ui.text().includes('37%'));
+    event({status:'ready',version:'1.2.51',percent:100});
+    download.resolve({success:true,state:{status:'ready',version:'1.2.51',percent:100}}); await pending; await ui.flush();
+    await ui.button('重启并更新').props.onClick(); await ui.flush(); assert.equal(installs,1);
+    assert.ok(ui.text().includes('任务正在运行'));
+    ui.unmount(); assert.equal(off,true);
   });
   process.exitCode = failures ? 1 : 0;
 })();

@@ -322,15 +322,6 @@ export default function PublishPanel({ dir, onResult }) {
                   </button>
                 ))}
               </div>
-              <input
-                className="input-field pub-tagline"
-                value={taglineDraft}
-                maxLength={12}
-                placeholder="角标（可不填）"
-                disabled={frozen}
-                aria-label="角标"
-                onChange={(e) => setTaglineDraft(e.target.value)}
-              />
             </div>
           </>
         )}

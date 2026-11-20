@@ -34,6 +34,8 @@ function fixture({
   emptyResponses = 0,
   modelStatus = 200,
   fallbackModel = null,
+  retryAfter = '',
+  modelCode = 0,
 } = {}) {
   const calls = [];
   const registrations = [];
@@ -57,27 +59,37 @@ function fixture({
     assert.ok(config.signal);
     if (new URL(config.url).pathname.includes('multi_video_model')) {
       assert.ok(config.headers['x-medusa']);
-      assert.ok(config.headers['x-gorgon']);
+      assert.ok(config.headers['x-helios']);
       assert.equal(new URL(config.url).searchParams.get('device_id'), registrations.at(-1));
-      if (config.method === 'POST') {
-        assert.equal(config.headers['Content-Encoding'], 'gzip');
-        assert.deepEqual(JSON.parse(require('node:zlib').gunzipSync(config.data)).mixed_video_id_map, { 1004: ['11'] });
-        assert.equal(config.headers['x-ss-stub'], crypto.createHash('md5').update(config.data).digest('hex').toUpperCase());
-      } else {
-        assert.equal(config.method, 'GET');
-        assert.equal(config.data, null);
+      if (config.method === 'GET') {
+        const url = new URL(config.url);
+        assert.equal(url.pathname, '/reading/bookapi/video_tab/multi_video_model/v1/');
+        assert.equal(url.hostname, 'api5-normal-sinfonlineb.fqnovel.com');
+        assert.equal(url.searchParams.get('video_id'), '11');
+        assert.equal(url.searchParams.get('version_code'), '73932');
+        assert.equal(config.headers['x-gorgon'], undefined);
         assert.equal(config.headers['x-ss-stub'], undefined);
-        assert.equal(new URL(config.url).searchParams.get('video_id'), '11');
-        assert.equal(new URL(config.url).searchParams.get('version_code'), '73932');
+        assert.equal(config.headers['Content-Type'], undefined);
+        assert.equal(config.data, undefined);
+      } else {
+        assert.equal(new URL(config.url).pathname, '/novel/player/multi_video_model/player/v1');
+        assert.equal(new URL(config.url).hostname, 'api5-normal-sinfonlinea.fqnovel.com');
+        assert.equal(config.method, 'POST');
+        assert.equal(config.headers['Content-Encoding'], 'gzip');
+        const sent = JSON.parse(require('node:zlib').gunzipSync(config.data));
+        assert.deepEqual(sent.mixed_video_id_map, {1004:['11']});
+        assert.equal(sent.dr_scene, 'player');
+        assert.equal(sent.biz_param.device_level, 1);
+        assert.equal(sent.biz_param.need_all_video_definition, true);
+        assert.equal(config.headers['x-ss-stub'], crypto.createHash('md5').update(config.data).digest('hex').toUpperCase());
       }
-      if (calls.length <= emptyResponses) return { status: 200, headers: {}, data: '' };
+      if (calls.length <= emptyResponses) return { status: 200, headers: { 'retry-after': retryAfter }, data: '' };
       const model = { video_model: JSON.stringify(inline || { fallback_api: fallback }) };
+      const entries = {999:model,...(wrongVid ? {} : {11:model})};
       return {
         status: modelStatus,
         headers: {},
-        data: JSON.stringify({ code: 0, data: config.method === 'GET'
-          ? { video_model_data: { 999: model, ...(wrongVid ? {} : { 11: model }) } }
-          : { 999: model, ...(wrongVid ? {} : { 11: model }) } }),
+        data: JSON.stringify({ code: modelCode, data: config.method === 'GET' ? {video_model_data: entries} : {1004: entries} }),
       };
     }
     if (redirect) return { status: 302, headers: { location: redirect }, data: '' };
@@ -112,6 +124,7 @@ function fixture({
     require: (name) => {
       if (name === 'axios') return axios;
       if (name === 'node:zlib') return require(name);
+      if (name === './playback-v5') return require(path.join(nativeDir, 'playback-v5'));
       if (name === './sm3') return require(path.join(nativeDir, 'sm3'));
       if (name === './playback-device') return {
         registerPlaybackDevice: async () => {
@@ -153,14 +166,42 @@ const checks = [
     },
   ],
   [
-    'empty primary response switches to signed bodyless video_tab and reads its nested episode model',
+    'empty primary response recovers through bodyless v5 video_tab with the same identity and deadline',
     async () => {
       const { fetch, calls, registrations } = fixture({ emptyResponses: 1, inline: { video_list: [inlineRow] } });
       assert.equal((await fetch('11')).url, inlineRow.main_url);
       assert.equal(calls.length, 2);
-      assert.equal(new URL(calls[1].url).pathname, '/reading/bookapi/video_tab/multi_video_model/v1/');
+      assert.equal(calls[1].method, 'GET');
       assert.equal(calls[1].signal, calls[0].signal);
-      assert.equal(registrations.length, 2);
+      for (const key of ['device_id', 'iid', 'cdid']) {
+        assert.equal(new URL(calls[1].url).searchParams.get(key), new URL(calls[0].url).searchParams.get(key));
+      }
+      assert.equal(registrations.length, 1);
+    },
+  ],
+  [
+    'failed recovery preserves the empty error and never accepts another episode',
+    async () => {
+      for (const options of [{emptyResponses:2}, {emptyResponses:1,wrongVid:true}]) {
+        const {fetch,calls,registrations} = fixture(options);
+        await assert.rejects(fetch('11'), {code:'EMPTY_RESPONSE'});
+        assert.equal(calls.length,2);
+        assert.equal(registrations.length,1);
+      }
+    },
+  ],
+  [
+    'backoff and business refusal stop recovery immediately',
+    async () => {
+      const busy = fixture({emptyResponses:1,retryAfter:'30'});
+      await assert.rejects(busy.fetch('11'), {code:'UPSTREAM_BACKOFF',backoff:true});
+      assert.equal(busy.calls.length,1);
+      const rejected = fixture({modelCode:101113});
+      await assert.rejects(rejected.fetch('11'), {code:'BUSINESS_REJECTED'});
+      assert.equal(rejected.calls.length,1);
+      const tab = fixture({emptyResponses:1,modelCode:101113});
+      await assert.rejects(tab.fetch('11'), {code:'BUSINESS_REJECTED'});
+      assert.equal(tab.calls.length,2);
     },
   ],
   [

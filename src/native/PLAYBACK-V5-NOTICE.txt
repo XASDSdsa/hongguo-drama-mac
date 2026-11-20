@@ -1,0 +1,40 @@
+Playback restoration in changeFileName 1.2.56:
+The pure JavaScript v5 playback signer and synthetic vectors are adapted from
+jackotom/hongguo-drama v7.5, src/native/playback-v5.js and associated tests,
+under GPL-3.0-only. That work credits N3urda/hongguoTV commit
+18c37c2afd0567520135abcae312352542f09083 (Signer.kt, AesV3.kt, V5Constants.kt),
+originally derived from drpys 22261ad. Original attribution is retained in the
+source. Local changes: explicit Unicode control-character validation, integration
+with changeFileName's bounded request/model validation and existing media pipeline.
+No captured sessions, external signing provider or new native runtime is included.
+
+Upstream source: https://github.com/jackotom/hongguo-drama/tree/v7.5
+License: GPL-3.0-only, see LICENSE.txt provided with the application.
+
+Bodyless v5 video_tab recovery in changeFileName 1.2.58 is adapted from
+sunnysky123/hongguo-web 1.3.3, commit 17f7b86502353efdddaa2bf0f7d25c5e069dbc85.
+Changes: integrate the same-identity request with the existing deadline, exact
+episode validation and encrypted media pipeline; stop on upstream backoff.
+https://github.com/sunnysky123/hongguo-web/commit/17f7b86502353efdddaa2bf0f7d25c5e069dbc85
+
+MIT License
+
+Copyright (c) 2026 sunnysky123
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

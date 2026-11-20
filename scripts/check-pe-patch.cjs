@@ -1,0 +1,25 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { makePatch, hash, invariantHash } = require('./app-patch/pe-patch.cjs');
+const base = Buffer.alloc(8192, 7);
+base.write('MZ'); base.writeUInt32LE(128, 60); base.write('PE\0\0', 128);
+base.writeUInt16LE(1, 134); base.writeUInt16LE(240, 148); base.writeUInt32LE(1024, 212);
+const section = 128 + 24 + 240;
+base.fill(0, section, section + 8); base.write('.rsrc', section);
+base.writeUInt32LE(1024, section + 16); base.writeUInt32LE(4096, section + 20);
+const target = Buffer.from(base); target[200] = 8; target[4500] = 9;
+const patch = makePatch(base, target);
+const rebuilt = Buffer.from(base);
+for (const part of patch.parts) part.data.copy(rebuilt, part.offset);
+assert.equal(hash(rebuilt), hash(target));
+// An intermediate app version can have any old header/resource values.
+const intermediate = Buffer.from(base); intermediate[220] = 99; intermediate[4600] = 101;
+for (const part of patch.parts) part.data.copy(intermediate, part.offset);
+assert.equal(hash(intermediate), hash(target), 'No dependency on a single previous product version');
+const corrupt = Buffer.from(base); corrupt[2000] ^= 1;
+assert.notEqual(invariantHash(corrupt, patch.parts), patch.immutableSha256);
+assert.throws(() => makePatch(corrupt, target), /code\/fuses changed/);
+assert.throws(() => makePatch(base, Buffer.concat([target, Buffer.from([0])])), /Electron changed/);
+const resized = Buffer.from(target); resized.writeUInt32LE(2048, section + 16);
+assert.throws(() => makePatch(base, resized), /PE layout changed/);
+console.log('PASS PE patch: exact EXE reconstruction, intermediate versions, core tampering and incompatible runtime/layout rejection');

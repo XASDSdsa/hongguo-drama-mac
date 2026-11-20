@@ -8,6 +8,7 @@
 const crypto = require('node:crypto');
 const { gzipSync } = require('node:zlib');
 const sm3 = require('./sm3');
+const { signPlaybackV5 } = require('./playback-v5');
 const { registerPlaybackDevice } = require('./playback-device');
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
@@ -716,56 +717,37 @@ function branchOf(url, body, khronos) {
 }
 // Playback routes and bodyless GET signing adapted from jackotom/hongguo-drama
 // a9d5431d0d (6.7/6.8). Keep recovery within the existing request deadline.
-function signedVideoRequest(payload, identity, endpoint, videoId = '') {
-  const khronos = Math.floor(Date.now() / 1000);
-  const body = videoId ? null : gzipSync(Buffer.from(payload));
-  const version = videoId ? '73932' : '74332';
-  const device = { ...DEVICE, version_code: version,
-    version_name: videoId ? '7.3.9.32' : '7.4.3.32',
-    manifest_version_code: version, update_version_code: version, pv_player: version, ...identity };
-  const playbackValues = videoId ? { video_id: videoId, video_id_type: '0', device_level: '1',
-    need_all_video_definition: '1', need_mp4_align: '0', use_os_player: '0',
-    video_platform: '1024', source: '0', from_video_id: '' } : {};
-  const ticketBase = Date.now();
-  let requestTicket = ticketBase;
-  let query = '';
-  let url = '';
-  // Match the signing branch and playback profile used by the newer client.
-  for (let offset = 0; offset < 128; offset += 1) {
-    requestTicket = ticketBase + offset;
-    const values = { ...device, ...playbackValues, ts: String(khronos), _rticket: String(requestTicket) };
-    query = pythonUrlEncode(values);
-    url = `${endpoint}?${query}`;
-    if (branchOf(url, body, khronos) === 0) break;
-    if (offset === 127) throw new Error('无法生成播放请求签名');
-  }
-  const random = Math.floor(Math.random() * 65536);
-  const headers = {
-    'User-Agent': VIDEO_UA.replace(DEVICE.version_code, version),
-    Accept: 'application/json; charset=utf-8,application/x-protobuf',
-    'passport-sdk-version': videoId ? '50561' : '5051452',
-    'x-ss-dp': String(device.aid),
-    'x-xs-from-web': '0',
-    'x-ss-req-ticket': String(requestTicket),
-    'sdk-version': '2',
-    'x-gorgon': xGorgon(query, body, khronos, random),
-    'x-khronos': String(khronos),
-    'x-ladon': be32(khronos).toString('base64'),
-    'x-argus': le32(khronos).toString('base64'),
-    'x-helios': helios(khronos),
-    'x-medusa': buildMedusa(url, body, khronos, device),
-    'x-tt-dt': '',
-    'x-tt-store-region': 'cn',
-    'x-tt-store-region-src': 'did',
-  };
-  if (body) Object.assign(headers, {
-    'Content-Type': 'application/json; charset=UTF-8',
-    'Content-Encoding': 'gzip',
-    'x-ss-stub': crypto.createHash('md5').update(body).digest('hex').toUpperCase(),
+// v5 player request adapted from jackotom/hongguo-drama v7.5 (GPL-3.0-only).
+// Sign the final query and the actual gzip bytes sent to the player endpoint.
+function signedVideoRequest(payload, identity) {
+  const body = gzipSync(Buffer.from(payload));
+  const signed = signPlaybackV5({
+    base: 'https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1',
+    values: { aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
+      channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10', os_version: '12',
+      update_version_code: '74332', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id },
+    body, now: Date.now(),
   });
-  else headers['x-tt-request-tag'] = 't=0;n=0';
-  return { url, headers, body, method: videoId ? 'GET' : 'POST' };
+  return { ...signed, body, method: 'POST', headers: { ...signed.headers,
+    'User-Agent': 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)',
+    Accept: 'application/json', 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip' } };
 }
+
+// Empty-response recovery adapted from sunnysky123/hongguo-web 17f7b865 (1.3.3).
+// This GET must also use v5; the legacy video_tab signer still returns empty data.
+function signedTabRequest(vid, identity) {
+  const version = '73932';
+  const signed = signPlaybackV5({ base: VIDEO_TAB_API,
+    values: { ...DEVICE, version_code: version, version_name: '7.3.9.32',
+      manifest_version_code: version, update_version_code: version, pv_player: version,
+      iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
+      video_id: vid, video_id_type: '0', device_level: '1', need_all_video_definition: '1',
+      need_mp4_align: '0', use_os_player: '0', video_platform: '1024', source: '0', from_video_id: '' },
+    body: null, now: Date.now() });
+  return { ...signed, method: 'GET', headers: { ...signed.headers,
+    'User-Agent': VIDEO_UA, 'Accept-Language': 'zh-CN,zh;q=0.9' } };
+}
+
 function parseFallback(value) {
   if (typeof value === 'string') {
     const parsed = jsonBody(value);
@@ -875,6 +857,11 @@ async function requestJson(url, options, deadline, signal) {
       url = checkedUrl(new URL(response.headers.location, url).href, ['fqnovel.com', 'snssdk.com']);
       continue;
     }
+    if (response.headers?.['retry-after'] && (response.status === 503 ||
+        response.status === 200 && typeof response.data === 'string' && !response.data.trim())) {
+      throw Object.assign(new Error('App 播放服务要求稍后重试'), {
+        code: 'UPSTREAM_BACKOFF', status: response.status, backoff: true });
+    }
     if (response.status !== 200) {
       throw Object.assign(new Error(`App 片源请求失败（HTTP ${response.status}）`), { status: response.status });
     }
@@ -890,14 +877,28 @@ async function requestJson(url, options, deadline, signal) {
   throw new Error('App 片源跳转次数过多');
 }
 
-async function fetchAppPlayUrl(vid) {
+let playbackQueue = Promise.resolve();
+let playbackReadyAt = 0;
+function fetchAppPlayUrl(vid) {
+  if (!/^\d{1,30}$/.test(String(vid || ''))) return Promise.reject(new Error('分集编号无效'));
+  const pending = playbackQueue.then(async () => {
+    const wait = playbackReadyAt - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    try { return await fetchAppPlayUrlFresh(vid); }
+    finally { playbackReadyAt = Date.now() + 1000; }
+  });
+  playbackQueue = pending.catch(() => {});
+  return pending;
+}
+async function fetchAppPlayUrlFresh(vid) {
   vid = String(vid || '');
   if (!/^\d{1,30}$/.test(vid)) throw new Error('分集编号无效');
   const payload = JSON.stringify({
     biz_param: {
       detail_page_version: 0,
-      device_level: 3,
+      device_level: 1,
       disable_digg_stat: false,
+      disable_video_relate_book: false,
       need_all_video_definition: true,
       need_mp4_align: false,
       use_os_player: false,
@@ -905,33 +906,38 @@ async function fetchAppPlayUrl(vid) {
       video_platform: 1024,
     },
     mixed_video_id_map: { 1004: [vid] },
+    dr_scene: 'player',
   });
-  let identity = await registerPlaybackDevice(requestJson);
+  const identity = await registerPlaybackDevice(requestJson);
   const deadline = Date.now() + 12000;
   const signal = AbortSignal.timeout(12000);
-  const requestModel = async (endpoint, alternate = false) => {
-    const { url, headers, body, method } = signedVideoRequest(payload, identity, endpoint, alternate ? vid : '');
-    if (alternate) headers.Connection = 'close';
+  const requestModel = async () => {
+    const { url, headers, body, method } = signedVideoRequest(payload, identity);
     return requestJson(url, { method, headers, data: body }, deadline, signal);
   };
   let response;
+  let modelUserAgent = PLAYBACK_UA;
   try {
-    response = await requestModel(VIDEO_API);
+    response = await requestModel();
   } catch (error) {
     if (error.code !== 'EMPTY_RESPONSE' || deadline - Date.now() < 1000) throw error;
-    if (deadline - Date.now() >= 8000) {
-      try {
-        identity = await registerPlaybackDevice(requestJson);
-      } catch (_) {
-        // The alternate host can still try the previous registration.
-      }
+    const { url, headers, method } = signedTabRequest(vid, identity);
+    try { response = await requestJson(url, { method, headers }, deadline, signal); }
+    catch (fallbackError) {
+      if (['EMPTY_RESPONSE', 'INVALID_RESPONSE'].includes(fallbackError.code)) throw error;
+      throw fallbackError;
     }
-    if (deadline - Date.now() < 500) throw error;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    response = await requestModel(VIDEO_TAB_API, true);
+    if (Number(response.Code || response.code || 0) !== 0) {
+      throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
+    }
+    const rows = response.data?.video_model_data ?? response.data;
+    const entry = rows?.[vid];
+    if (!entry || !(typeof entry.video_model === 'string' ? jsonBody(entry.video_model) : entry.video_model)) throw error;
+    response = { code: 0, data: { [vid]: entry } };
+    modelUserAgent = VIDEO_UA;
   }
-  if (Number(response.Code || response.code || 0) !== 0) throw new Error('App 接口暂未提供本集播放信息');
-  const entries = response.data?.video_model_data ?? response.data;
+  if (Number(response.Code || response.code || 0) !== 0) throw Object.assign(new Error('App 接口暂未提供本集播放信息'), {code: 'BUSINESS_REJECTED'});
+  const entries = response.data?.['1004'] ?? response.data?.video_model_data ?? response.data;
   const entry = entries?.[vid];
   const model = typeof entry?.video_model === 'string' ? jsonBody(entry.video_model) : entry?.video_model;
   if (!model) throw new Error('App 接口未返回所选分集，已停止取址');
@@ -940,7 +946,7 @@ async function fetchAppPlayUrl(vid) {
     if (!fallback) throw new Error('App 接口未返回本集片源地址');
     const outer = await requestJson(fallback, { headers: { 'User-Agent': VIDEO_UA } }, deadline, signal);
     if ([outer, outer.video_info].some((value) => Number(value?.Code || value?.code || 0) !== 0)) {
-      throw new Error('App 接口暂未提供本集播放信息');
+      throw Object.assign(new Error('App 接口暂未提供本集播放信息'), {code: 'BUSINESS_REJECTED'});
     }
     return outer?.video_info?.data;
   };
@@ -948,7 +954,7 @@ async function fetchAppPlayUrl(vid) {
     return parseAppPlayModel(await readFallback(), VIDEO_UA);
   }
   try {
-    return parseAppPlayModel(model, PLAYBACK_UA, true);
+    return parseAppPlayModel(model, modelUserAgent, true);
   } catch (error) {
     const duration = Number(model.video_duration);
     if (!error.minimumPixels || typeof model.video_id !== 'string' || !model.video_id.trim()

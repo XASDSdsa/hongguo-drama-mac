@@ -81,10 +81,6 @@
   justify-content: space-between;
   gap: 10px 16px;
 }
-.pub-style-line .pub-tagline {
-  width: 180px;
-  flex: none;
-}
 .pub-synopsis {
   margin: 0;
   font-size: 13px;

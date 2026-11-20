@@ -1,0 +1,51 @@
+name: Verify new standalone update installer
+on:
+  workflow_dispatch:
+    inputs:
+      build_run:
+        description: Existing Windows installer artifact run
+        required: true
+      ref:
+        description: Matching source revision
+        required: true
+permissions:
+  actions: read
+  contents: read
+jobs:
+  verify-new-install:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          run-id: ${{ inputs.build_run }}
+          github-token: ${{ github.token }}
+          path: dist/new-installer
+      - name: Verify the newest full installer without an old installation
+        shell: pwsh
+        run: |
+          node scripts/check-app-updates.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./node_modules/.bin/electron.cmd scripts/check-in-app-update-install.cjs dist/new-installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-in-app-update-release
+          path: |
+            dist/new-installer/*-Setup-*.exe
+            dist/new-installer/*.blockmap
+            dist/new-installer/release-*.json
+            dist/new-installer/latest.yml
+            dist/new-installer/automatic-update-acceptance.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

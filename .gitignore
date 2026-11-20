@@ -84,3 +84,9 @@ build/title-fonts/
 *.docx
 
 !src/native/license/public-key.pem
+
+# Bundled native playback core and its reproducible build cache
+build/hongguo-player/
+scripts/hongguo-player/.gradle/
+scripts/hongguo-player/build/
+scripts/hongguo-player/.kotlin/

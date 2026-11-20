@@ -4,20 +4,36 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { BrowserWindow, ipcMain, net, safeStorage } = require('electron');
-const { checkOnlineLicense } = require('./keygate.cjs');
+const { requestOnlineLicense } = require('./keygate.cjs');
+const { createRuntimeSession } = require('./runtime-session.cjs');
 
-async function authorizeOnlineStartup({ app, config, identifier, onActivationReady }) {
+async function authorizeOnlineStartup({ app, config, identifier, onActivationReady, onAuthorized, onLicenseChange }) {
   if (!/^https:\/\//.test(config.endpoint) || !/^[0-9a-f]{64}$/.test(config.publicKey) || !config.productId) {
     throw new Error('联网授权配置无效');
   }
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储不可用，请用平时的系统账号重新打开软件。');
   const file = path.join(app.getPath('userData'), 'online-license.key');
   const saved = await fs.readFile(file).then((data) => safeStorage.decryptString(data)).catch(() => '');
-  const check = (key, activate) => checkOnlineLicense(config, {
-    key, identifier, activate, fetcher: (...args) => net.fetch(...args),
-  });
+  let session;
+  const check = async (key, activate) => {
+    session?.dispose();
+    let first = activate;
+    session = createRuntimeSession({
+      verify: async () => {
+        const result = await requestOnlineLicense(config, {
+          key, identifier, activate: first, fetcher: (...args) => net.fetch(...args),
+        });
+        if (result.ok) first = false;
+        return result;
+      },
+      onChange: state => onLicenseChange?.(state),
+    });
+    const state = await session.refresh();
+    if (!state.allowed) session.dispose();
+    return state.allowed ? '' : state.error;
+  };
   const message = saved ? await check(saved, false) : '';
-  if (saved && !message) return true;
+  if (saved && !message) { onAuthorized?.(session); return true; }
 
   const window = new BrowserWindow({
     title: '激活 changeFileName',
@@ -57,15 +73,18 @@ async function authorizeOnlineStartup({ app, config, identifier, onActivationRea
           }
         }
         authorized = true;
+        onAuthorized?.(session);
         setImmediate(() => { if (!window.isDestroyed()) window.destroy(); });
         return '';
       } catch {
+        session?.dispose();
         return '无法保存授权，请检查这台电脑的存储权限后重试。';
       } finally {
         checking = false;
       }
     });
     window.once('closed', () => {
+      if (!authorized) session?.dispose();
       ipcMain.removeHandler('online-license:activate');
       resolve(authorized);
     });
