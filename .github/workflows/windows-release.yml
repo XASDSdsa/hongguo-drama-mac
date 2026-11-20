@@ -941,6 +941,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare the accepted FFmpeg for download verification only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ffDir = Join-Path $env:RUNNER_TEMP 'download-verification-ffmpeg'
+          New-Item -ItemType Directory -Path $ffDir -Force | Out-Null
+          gh release download v1.2.6 --repo '${{ github.repository }}' --pattern 'ffmpeg-*-win-x64.zip' --dir $ffDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Get-ChildItem $ffDir -Filter '*.zip' | Select-Object -First 1
+          & 7z x -y -bd $zip.FullName "-o$ffDir" | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ff = Get-ChildItem $ffDir -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $probe = Get-ChildItem $ffDir -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if (!$ff -or !$probe) { throw 'The accepted FFmpeg archive must include both ffmpeg and ffprobe' }
+          "FFMPEG_PATH=$($ff.FullName)" >> $env:GITHUB_ENV
+          $ff.DirectoryName >> $env:GITHUB_PATH
+          $probe.DirectoryName >> $env:GITHUB_PATH
       - name: Check 1.2.57 upgrade and real complete downloads from the installed archive
         shell: pwsh
         run: |
