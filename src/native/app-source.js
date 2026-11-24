@@ -13,6 +13,10 @@ const { registerPlaybackDevice } = require('./playback-device');
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
 const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
+const PRELOAD_API = 'https://reading.snssdk.com/novel/player/multi_video_model/preload/v1';
+const PLAYER_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/player/v1';
+const MODEL_APIS = ['https://api5-normal-sinfonlinea.fqnovel.com/novel/player/video_model/v1/',
+  'https://api5-normal-sinfonlinec.fqnovel.com/novel/player/video_model/v1/'];
 const VIDEO_TAB_API = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/';
 const VIDEO_UA =
   'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
@@ -715,37 +719,86 @@ function branchOf(url, body, khronos) {
   const low = iv & 15;
   return low - ((low * 171) >> 9) * 3;
 }
-// Playback routes and bodyless GET signing adapted from jackotom/hongguo-drama
-// a9d5431d0d (6.7/6.8). Keep recovery within the existing request deadline.
-// v5 player request adapted from jackotom/hongguo-drama v7.5 (GPL-3.0-only).
-// Sign the final query and the actual gzip bytes sent to the player endpoint.
-function signedVideoRequest(payload, identity) {
-  const body = gzipSync(Buffer.from(payload));
-  const signed = signPlaybackV5({
-    base: 'https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1',
-    values: { aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
-      channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10', os_version: '12',
-      update_version_code: '74332', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id },
-    body, now: Date.now(),
-  });
-  return { ...signed, body, method: 'POST', headers: { ...signed.headers,
-    'User-Agent': 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)',
-    Accept: 'application/json', 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip' } };
+// Current-app official playback routes adapted from jackotom/hongguo-drama 8.2,
+// d3d4f985d24be3532725aa4d8f2ede164a79960e (GPL-3.0-only).
+function signedVideoRequest(payload, identity, alternate = false) {
+  // Sign the final query and actual gzip body.
+    const body = gzipSync(Buffer.from(payload));
+    const signed = signPlaybackV5({ base: alternate ? PLAYER_API.replace('sinfonlineb.', 'sinfonlinea.') : PLAYER_API,
+        values: { aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
+        channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10', os_version: '12',
+        update_version_code: '74332', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id },
+        body, now: Date.now() });
+    return { ...signed, body, method: 'POST', headers: { ...signed.headers,
+        'User-Agent': 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)',
+        Accept: 'application/json', 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip' } };
 }
 
-// Empty-response recovery adapted from sunnysky123/hongguo-web 17f7b865 (1.3.3).
-// This GET must also use v5; the legacy video_tab signer still returns empty data.
-function signedTabRequest(vid, identity) {
-  const version = '73932';
-  const signed = signPlaybackV5({ base: VIDEO_TAB_API,
-    values: { ...DEVICE, version_code: version, version_name: '7.3.9.32',
-      manifest_version_code: version, update_version_code: version, pv_player: version,
-      iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
-      video_id: vid, video_id_type: '0', device_level: '1', need_all_video_definition: '1',
-      need_mp4_align: '0', use_os_player: '0', video_platform: '1024', source: '0', from_video_id: '' },
-    body: null, now: Date.now() });
-  return { ...signed, method: 'GET', headers: { ...signed.headers,
-    'User-Agent': VIDEO_UA, 'Accept-Language': 'zh-CN,zh;q=0.9' } };
+function preloadRequest(identity, videoId, contentType = '1004') {
+    // Current-app profile from N3urda/hongguoTV ef328f3a: V5 preload + device_level=2.
+    const payload = JSON.stringify({
+        biz_param: { detail_page_version: 0, device_level: 2, disable_digg_stat: false,
+            disable_video_relate_book: false, need_all_video_definition: true, need_mp4_align: false,
+            use_os_player: false, use_server_dns: false, video_platform: 1024 },
+        mixed_video_id_map: { [contentType]: [String(videoId)] },
+        dr_scene: 'preload',
+    });
+    const body = gzipSync(Buffer.from(payload));
+    const signed = signPlaybackV5({
+        base: PRELOAD_API,
+        values: {
+            aid: '8662', app_name: 'novelread', version_code: '74532', version_name: '7.4.5.32',
+            update_version_code: '74532', manifest_version_code: '74532', os: 'android', ssmix: 'a',
+            channel: 'update_64', device_platform: 'android', device_type: '25053RT47C',
+            device_brand: 'Redmi', os_version: '16', os_api: '36', ac: 'wifi', language: 'zh',
+            host_abi: 'arm64-v8a', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
+        },
+        body, now: Date.now(), field21: 312,
+    });
+    return { ...signed, body, method: 'POST', headers: { ...signed.headers,
+        'User-Agent': 'okhttp/4.12.0', Accept: 'application/json',
+        'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip' } };
+}
+
+function videoTabRequest(identity, videoId) {
+    // video_tab belongs to the player family; generic Argus/Ladon signing is rejected with an empty body.
+    const signed = signPlaybackV5({
+        base: VIDEO_TAB_API,
+        values: {
+            aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
+            channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10',
+            os_version: '12', update_version_code: '74332',
+            iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
+            video_id: String(videoId), video_id_type: '0', device_level: '1',
+            need_all_video_definition: '1', need_mp4_align: '0', use_os_player: '0',
+            video_platform: '1024', source: '0', from_video_id: '',
+        },
+        body: null,
+        now: Date.now(),
+    });
+    return { url: signed.url, body: null, method: 'GET',
+        headers: { ...signed.headers, 'User-Agent': VIDEO_UA.replace(DEVICE.version_code, '73932'), Accept: 'application/json' } };
+}
+
+function playbackModelRequest(identity, videoId, base, contentType = '1004') {
+    const payload = JSON.stringify({
+        biz_param: { detail_page_version: 0, device_level: 3, disable_digg_stat: false, from_video_id: '',
+            need_all_video_definition: true, need_mp4_align: false, source: 9, use_os_player: false,
+            use_server_dns: false, video_platform: 3 },
+        content_type: Number(contentType),
+        video_id: String(videoId),
+    });
+    const body = gzipSync(Buffer.from(payload));
+    const signed = signPlaybackV5({
+        base,
+        values: { aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
+            channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10', os_version: '12',
+            update_version_code: '74332', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id },
+        body, now: Date.now(),
+    });
+    return { ...signed, body, method: 'POST', headers: { ...signed.headers,
+        'User-Agent': 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)',
+        Accept: 'application/json', 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip' } };
 }
 
 function parseFallback(value) {
@@ -879,6 +932,7 @@ async function requestJson(url, options, deadline, signal) {
 
 let playbackQueue = Promise.resolve();
 let playbackReadyAt = 0;
+let preferredPlaybackRoute = '';
 function fetchAppPlayUrl(vid) {
   if (!/^\d{1,30}$/.test(String(vid || ''))) return Promise.reject(new Error('分集编号无效'));
   const pending = playbackQueue.then(async () => {
@@ -911,36 +965,44 @@ async function fetchAppPlayUrlFresh(vid) {
   const identity = await registerPlaybackDevice(requestJson);
   const deadline = Date.now() + 12000;
   const signal = AbortSignal.timeout(12000);
-  const requestModel = async () => {
-    const { url, headers, body, method } = signedVideoRequest(payload, identity);
-    return requestJson(url, { method, headers, data: body }, deadline, signal);
-  };
-  let response;
+  const candidates = [
+    { id: 'preload_current', create: () => preloadRequest(identity, vid) },
+    { id: 'video_tab', create: () => videoTabRequest(identity, vid) },
+    { id: 'player_b', create: () => signedVideoRequest(payload, identity) },
+    { id: 'player_a', create: () => signedVideoRequest(payload, identity, true) },
+    ...MODEL_APIS.map((base, index) => ({ id: `model_${index}`,
+      create: () => playbackModelRequest(identity, vid, base) })),
+  ];
+  const preferred = candidates.find(route => route.id === preferredPlaybackRoute);
+  const routes = preferred ? [preferred, ...candidates.filter(route => route !== preferred)] : candidates;
+  let response, lastError, successfulRoute;
   let modelUserAgent = PLAYBACK_UA;
-  try {
-    response = await requestModel();
-  } catch (error) {
-    if (error.code !== 'EMPTY_RESPONSE' || deadline - Date.now() < 1000) throw error;
-    const { url, headers, method } = signedTabRequest(vid, identity);
-    try { response = await requestJson(url, { method, headers }, deadline, signal); }
-    catch (fallbackError) {
-      if (['EMPTY_RESPONSE', 'INVALID_RESPONSE'].includes(fallbackError.code)) throw error;
-      throw fallbackError;
+  for (const candidate of routes) {
+    if (deadline - Date.now() < 1000) break;
+    const route = candidate.create();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await requestJson(route.url, { method: route.method, headers: route.headers, data: route.body }, deadline, signal);
+        break;
+      } catch (error) {
+        if (error.code !== 'EMPTY_RESPONSE') throw error;
+        lastError = error;
+        if (attempt || deadline - Date.now() < 1000) break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
     }
-    if (Number(response.Code || response.code || 0) !== 0) {
-      throw Object.assign(new Error('App 接口暂未提供本集播放信息'), { code: 'BUSINESS_REJECTED' });
-    }
-    const rows = response.data?.video_model_data ?? response.data;
-    const entry = rows?.[vid];
-    if (!entry || !(typeof entry.video_model === 'string' ? jsonBody(entry.video_model) : entry.video_model)) throw error;
-    response = { code: 0, data: { [vid]: entry } };
-    modelUserAgent = VIDEO_UA;
+    if (!response) continue;
+    successfulRoute = candidate.id;
+    modelUserAgent = route.headers['User-Agent'];
+    break;
   }
+  if (!response) throw lastError || Object.assign(new Error('App 片源请求超时'), {code:'ETIMEDOUT'});
   if (Number(response.Code || response.code || 0) !== 0) throw Object.assign(new Error('App 接口暂未提供本集播放信息'), {code: 'BUSINESS_REJECTED'});
   const entries = response.data?.['1004'] ?? response.data?.video_model_data ?? response.data;
   const entry = entries?.[vid];
   const model = typeof entry?.video_model === 'string' ? jsonBody(entry.video_model) : entry?.video_model;
-  if (!model) throw new Error('App 接口未返回所选分集，已停止取址');
+  if (!model || typeof model !== 'object' || Array.isArray(model)) throw new Error('App 接口未返回所选分集，已停止取址');
+  const remember = result => { preferredPlaybackRoute = successfulRoute; return { ...result, sourceProvider: 'official', sourceRoute: successfulRoute }; };
   const readFallback = async () => {
     const fallback = parseFallback(model.fallback_api);
     if (!fallback) throw new Error('App 接口未返回本集片源地址');
@@ -951,10 +1013,10 @@ async function fetchAppPlayUrlFresh(vid) {
     return outer?.video_info?.data;
   };
   if (!model.video_list || typeof model.video_list !== 'object' || !Object.keys(model.video_list).length) {
-    return parseAppPlayModel(await readFallback(), VIDEO_UA);
+    return remember(parseAppPlayModel(await readFallback(), VIDEO_UA));
   }
   try {
-    return parseAppPlayModel(model, modelUserAgent, true);
+    return remember(parseAppPlayModel(model, modelUserAgent, true));
   } catch (error) {
     const duration = Number(model.video_duration);
     if (!error.minimumPixels || typeof model.video_id !== 'string' || !model.video_id.trim()
@@ -965,7 +1027,7 @@ async function fetchAppPlayUrlFresh(vid) {
       || Math.abs(fallbackDuration - duration) > 0.5) {
       throw new Error('备用片源编号或完整时长无法确认，已停止取址');
     }
-    return parseAppPlayModel(info, VIDEO_UA, true, error.minimumPixels);
+    return remember(parseAppPlayModel(info, VIDEO_UA, true, error.minimumPixels));
   }
 }
 

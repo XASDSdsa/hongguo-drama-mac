@@ -57,7 +57,7 @@ function fixture({
     assert.equal(config.maxRedirects, 0);
     assert.ok(config.timeout > 0 && config.timeout <= 12000);
     assert.ok(config.signal);
-    if (new URL(config.url).pathname.includes('multi_video_model')) {
+    if (new URL(config.url).pathname.includes('video_model')) {
       assert.ok(config.headers['x-medusa']);
       assert.ok(config.headers['x-helios']);
       assert.equal(new URL(config.url).searchParams.get('device_id'), registrations.at(-1));
@@ -66,20 +66,30 @@ function fixture({
         assert.equal(url.pathname, '/reading/bookapi/video_tab/multi_video_model/v1/');
         assert.equal(url.hostname, 'api5-normal-sinfonlineb.fqnovel.com');
         assert.equal(url.searchParams.get('video_id'), '11');
-        assert.equal(url.searchParams.get('version_code'), '73932');
+        assert.equal(url.searchParams.get('version_code'), '74332');
         assert.equal(config.headers['x-gorgon'], undefined);
         assert.equal(config.headers['x-ss-stub'], undefined);
         assert.equal(config.headers['Content-Type'], undefined);
-        assert.equal(config.data, undefined);
+        assert.equal(config.data, null);
       } else {
-        assert.equal(new URL(config.url).pathname, '/novel/player/multi_video_model/player/v1');
-        assert.equal(new URL(config.url).hostname, 'api5-normal-sinfonlinea.fqnovel.com');
+        const url = new URL(config.url);
+        const preload = url.pathname.endsWith('/preload/v1');
+        const single = url.pathname.includes('/player/video_model/');
+        assert.ok(preload || single || url.pathname.endsWith('/player/v1'));
+        if (preload) {
+          assert.equal(url.hostname, 'reading.snssdk.com');
+          assert.equal(url.searchParams.get('version_code'), '74532');
+          assert.equal(config.headers['User-Agent'], 'okhttp/4.12.0');
+        }
         assert.equal(config.method, 'POST');
         assert.equal(config.headers['Content-Encoding'], 'gzip');
         const sent = JSON.parse(require('node:zlib').gunzipSync(config.data));
-        assert.deepEqual(sent.mixed_video_id_map, {1004:['11']});
-        assert.equal(sent.dr_scene, 'player');
-        assert.equal(sent.biz_param.device_level, 1);
+        if (single) { assert.equal(sent.video_id, '11'); assert.equal(sent.content_type, 1004); }
+        else {
+          assert.deepEqual(sent.mixed_video_id_map, {1004:['11']});
+          assert.equal(sent.dr_scene, preload ? 'preload' : 'player');
+        }
+        assert.equal(sent.biz_param.device_level, preload ? 2 : single ? 3 : 1);
         assert.equal(sent.biz_param.need_all_video_definition, true);
         assert.equal(config.headers['x-ss-stub'], crypto.createHash('md5').update(config.data).digest('hex').toUpperCase());
       }
@@ -166,28 +176,33 @@ const checks = [
     },
   ],
   [
-    'empty primary response recovers through bodyless v5 video_tab with the same identity and deadline',
+    'empty current-app preload retries once then uses same-identity v5 video_tab and remembers success',
     async () => {
-      const { fetch, calls, registrations } = fixture({ emptyResponses: 1, inline: { video_list: [inlineRow] } });
+      const { fetch, calls, registrations } = fixture({ emptyResponses: 2, inline: { video_list: [inlineRow] } });
       assert.equal((await fetch('11')).url, inlineRow.main_url);
-      assert.equal(calls.length, 2);
-      assert.equal(calls[1].method, 'GET');
-      assert.equal(calls[1].signal, calls[0].signal);
+      assert.equal(calls.length, 3);
+      assert.equal(calls[2].method, 'GET');
+      assert.equal(calls[2].signal, calls[0].signal);
       for (const key of ['device_id', 'iid', 'cdid']) {
-        assert.equal(new URL(calls[1].url).searchParams.get(key), new URL(calls[0].url).searchParams.get(key));
+        assert.equal(new URL(calls[2].url).searchParams.get(key), new URL(calls[0].url).searchParams.get(key));
       }
       assert.equal(registrations.length, 1);
+      assert.equal((await fetch('11')).sourceRoute, 'video_tab');
+      assert.equal(calls.length, 4);
+      assert.equal(calls[3].method, 'GET');
     },
   ],
   [
     'failed recovery preserves the empty error and never accepts another episode',
     async () => {
-      for (const options of [{emptyResponses:2}, {emptyResponses:1,wrongVid:true}]) {
-        const {fetch,calls,registrations} = fixture(options);
-        await assert.rejects(fetch('11'), {code:'EMPTY_RESPONSE'});
-        assert.equal(calls.length,2);
-        assert.equal(registrations.length,1);
-      }
+      const empty = fixture({emptyResponses:12});
+      await assert.rejects(empty.fetch('11'), {code:'EMPTY_RESPONSE'});
+      assert.equal(empty.calls.length,12);
+      assert.equal(empty.registrations.length,1);
+      const wrong = fixture({emptyResponses:2,wrongVid:true});
+      await assert.rejects(wrong.fetch('11'), /未返回所选分集/);
+      assert.equal(wrong.calls.length,3);
+      assert.equal(wrong.registrations.length,1);
     },
   ],
   [
@@ -199,9 +214,9 @@ const checks = [
       const rejected = fixture({modelCode:101113});
       await assert.rejects(rejected.fetch('11'), {code:'BUSINESS_REJECTED'});
       assert.equal(rejected.calls.length,1);
-      const tab = fixture({emptyResponses:1,modelCode:101113});
+      const tab = fixture({emptyResponses:2,modelCode:101113});
       await assert.rejects(tab.fetch('11'), {code:'BUSINESS_REJECTED'});
-      assert.equal(tab.calls.length,2);
+      assert.equal(tab.calls.length,3);
     },
   ],
   [

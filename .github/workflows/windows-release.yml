@@ -893,7 +893,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '修复红果下载空响应：接入同会话 v5 video_tab 备用取址，保留完整高清下载、授权与报告模板。'
+      UPDATE_RELEASE_NOTES: '同步11月24日上游下载逻辑：优先当前App官方取源，更新签名与备用接口，保留授权、设置和报告模板。'
       UPDATE_CHECK_SCOPE: download-v5-and-update
     steps:
       - uses: actions/checkout@v5
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 44041824047
+          run-id: 44690061318
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Build v5 download recovery application patch
@@ -959,7 +959,7 @@ jobs:
           "FFMPEG_PATH=$($ff.FullName)" >> $env:GITHUB_ENV
           $ff.DirectoryName >> $env:GITHUB_PATH
           $probe.DirectoryName >> $env:GITHUB_PATH
-      - name: Check 1.2.57 upgrade and real complete downloads from the installed archive
+      - name: Check 1.2.58 upgrade and real complete downloads from the installed archive
         shell: pwsh
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch

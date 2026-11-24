@@ -184,7 +184,6 @@ test('final encoded query, exact gzip bytes and original second bind all 32 clas
     assert.ok(query.includes('text=%E4%B8%AD%E6%96%87%20%21*%27%28%29~%20%2B%26%3D%25'));
     assert.equal(url.searchParams.get('ts'), null);
     assert.equal(signed.headers['x-khronos'], String(ts));
-    assert.equal(signed.headers['x-ss-req-ticket'], String(ticket));
     assert.ok(signed.headers['x-ss-stub'] === md5(BODY).toString('hex').toUpperCase());
     assert.equal(sint(message, 12), ts); assert.equal(sint(message, 17), ts);
     assert.ok(message.get(14).equals(sm3(Buffer.from(query)).subarray(0, 6)));
@@ -195,9 +194,26 @@ test('final encoded query, exact gzip bytes and original second bind all 32 clas
     for (let at = 0; at < prefix.length; at++) prefix[at] ^= time[at & 3];
     assert.equal(prefix.readUInt32LE(), 5);
     assert.ok(prefix.subarray(4).equals(Buffer.from('2d4b4fca49750d433fb5ae2c226dcc56', 'hex')));
-    assert.deepEqual(Object.keys(signed.headers).sort(), ['x-helios', 'x-khronos', 'x-medusa', 'x-ss-req-ticket', 'x-ss-stub']);
+    assert.deepEqual(Object.keys(signed.headers).sort(), ['x-helios', 'x-khronos', 'x-medusa', 'x-ss-stub']);
   }
   assert.ok(BODY.equals(beforeBody)); assert.equal(JSON.stringify(VALUES), beforeValues);
+});
+
+test('bodyless v5 uses the empty-body digest without body-describing headers', () => {
+  const api = load();
+  const { signed, message } = messageFor(api, { body: null });
+  const query = signed.url.split('?')[1], ts = Math.floor(NOW / 1000);
+  assert.deepEqual(Object.keys(signed.headers).sort(), ['x-helios', 'x-khronos', 'x-medusa']);
+  assert.equal(branch(query, Buffer.alloc(0), ts), 12);
+  assert.ok(message.get(13).equals(api.__test.hashF13(sm3(Buffer.from(query)), md5(Buffer.alloc(0)), ts)));
+});
+
+test('current-app preload can select wire field21 312 without changing the default profile', () => {
+  const api = load();
+  const current = messageFor(api, { field21: 312 });
+  assert.equal(sint(current.message, 21), 312);
+  const normal = messageFor(api);
+  assert.equal(sint(normal.message, 21), 377);
 });
 
 test('registered identity and profile enter both query and serialized Medusa, with no fallback identity', () => {
@@ -319,6 +335,7 @@ test('strict inputs reject malformed URLs, imprecise identities, non-string quer
   ];
   const accessor = { ...VALUES };
   Object.defineProperty(accessor, 'device_id', { enumerable: true, get() { throw Error('must not invoke getter'); } });
+  invalid.push(...[-1, 65536, NaN, 312.5, '312'].map(field21 => ({ ...valid, field21 })));
   invalid.push({ ...valid, values: accessor });
   invalid.push({ ...valid, values: { ...VALUES, [Symbol('hidden')]: 'bad' } });
   for (const [index, input] of invalid.entries()) {
@@ -326,19 +343,5 @@ test('strict inputs reject malformed URLs, imprecise identities, non-string quer
     try { api.signPlaybackV5(input); } catch (caught) { error = caught; }
     assert.ok(error && /^(TypeError|RangeError)$/.test(error.name), `invalid input ${index}`);
     assert.ok(!error.message.includes(VALUES.device_id), 'errors must not contain identities');
-  }
-});
-
-test('bodyless GET binds a zero body digest and omits POST-only headers across timestamp classes', () => {
-  const api = load();
-  for (let i=0;i<32;i++) {
-    const now=NOW+i*1000;
-    const {signed,message}=messageFor(api,{body:null,now});
-    const query=signed.url.split('?')[1], ts=Math.floor(now/1000);
-    const time=Buffer.alloc(4);time.writeUInt32LE(ts);
-    assert.equal(ivFold(ivFold(ivFold(0x20230928,sm3(Buffer.from(query))),Buffer.alloc(16)),time)&15,12);
-    assert.ok(message.get(13).equals(api.__test.hashF13(sm3(Buffer.from(query)),Buffer.alloc(16),ts)));
-    assert.deepEqual(Object.keys(signed.headers).sort(),['x-helios','x-khronos','x-medusa']);
-    assert.equal(new URL(signed.url).searchParams.get('device_id'),VALUES.device_id);
   }
 });

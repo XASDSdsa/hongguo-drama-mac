@@ -38,3 +38,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Current-app official route ordering (preload 7.4.5.32 with field21=312,
+video_tab 7.4.3.32, player/model recovery), empty-body V5 digest and signature
+headers in changeFileName 1.2.59 are adapted from jackotom/hongguo-drama 8.2,
+commit d3d4f985d24be3532725aa4d8f2ede164a79960e (2026-11-24), GPL-3.0-only.
+Upstream: https://github.com/jackotom/hongguo-drama/tree/d3d4f985d24be3532725aa4d8f2ede164a79960e
+This application-code update uses official JS routes; it does not redistribute
+the upstream native SDK helper or change the installed runtime.
