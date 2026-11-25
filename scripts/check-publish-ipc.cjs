@@ -47,6 +47,7 @@ class FakeWindow {
       executeJavaScript: async (code) => {
         if (code.includes('loadFontCss')) return true;
         const spec = JSON.parse(code.slice(code.indexOf('(') + 1, code.lastIndexOf(')')));
+        assert.equal(spec.tagline, undefined);
         FakeWindow.rendered.push({ title: spec.title, style: spec.style.id, layout: spec.layout });
         return { dataUrl: spec.image, meta: { layout: 'bottom' } };
       },
@@ -198,7 +199,8 @@ const COPY = {
     ark_base_url: `${server.base}/api/v3`,
     ark_api_key: 'ark-key-456',
   };
-  const { handlers, events } = makeMain(root, path.join(tmp, 'userData'), settings);
+  const userData = path.join(tmp, 'userData');
+  const { context, handlers, events } = makeMain(root, userData, settings);
   const updates = () => events.filter(([name]) => name === 'publish-update').map(([, data]) => data);
 
   try {
@@ -314,6 +316,24 @@ const COPY = {
       assert.deepEqual(FakeWindow.rendered.at(-1), { title: '她撕了婚书转身就走', style: 'ink', layout: 'auto' });
       const bad = await handlers['publish-retitle']({}, { dir, styleId: 'nope' });
       assert.equal(bad.success, false);
+    });
+
+    await check('an old poster with a tagline can be refreshed using the saved artwork', async () => {
+      context.testSeries = dir;
+      const settings = path.join(vm.runInContext('publishWorkDir(testSeries)', context), 'state.json');
+      const old = JSON.parse(fs.readFileSync(settings, 'utf8'));
+      old.chosen.tagline = '开局即反转';
+      fs.writeFileSync(settings, JSON.stringify(old));
+      assert.equal((await handlers['publish-state']({}, dir)).result.hasLegacyTagline, true);
+      const artFile = path.join(path.dirname(settings), old.art.file);
+      const art = fs.readFileSync(artFile);
+      const calls = server.log.length;
+      const relayout = await handlers['publish-retitle']({}, { dir, styleId: old.chosen.style, tagline: '旧角标内容' });
+      assert.equal(relayout.success, true);
+      assert.equal(relayout.result.hasLegacyTagline, false);
+      assert.equal(relayout.result.title, old.chosen.title);
+      assert.equal(server.log.length, calls);
+      assert.deepEqual(fs.readFileSync(artFile), art);
     });
 
     await check('saved per-series poster prompt reaches the image model directly and can be cleared', async () => {

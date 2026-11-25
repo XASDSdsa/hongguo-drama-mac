@@ -107,7 +107,6 @@ const TITLES = {
           image: backgrounds.night,
           title,
           styleId: style.id,
-          tagline: '全集已更新',
         });
         const { meta } = out;
         assert.equal(meta.width, 1024);
@@ -122,6 +121,13 @@ const TITLES = {
       });
     }
     await check('the eight styles produce eight different images', () => assert.equal(hashes.size, 8));
+
+    await check('legacy tagline inputs leave the title-only image unchanged', async () => {
+      const params = { image: backgrounds.night, title: '午夜来电', styleId: 'frost' };
+      const only = await renderer.render(params);
+      const legacy = await renderer.render({ ...params, tagline: '开局即反转' });
+      assert.deepEqual(legacy.buffer, only.buffer);
+    });
 
     await check(
       'layout: empty lower area of a busy poster is used; a face at the bottom pushes the title up',
@@ -193,7 +199,7 @@ const TITLES = {
         ['bright', 'candy', '闪婚后他宠我上天'],
         ['bright', 'urban', '我在大厂当牛马'],
       ]) {
-        const out = await renderer.render({ image: backgrounds[bg], title, styleId: id, tagline: '全集已更新' });
+        const out = await renderer.render({ image: backgrounds[bg], title, styleId: id });
         sheet.push({ buffer: out.buffer, label: bg + id });
       }
       const dataUrls = sheet.map((item) => 'data:image/jpeg;base64,' + item.buffer.toString('base64'));

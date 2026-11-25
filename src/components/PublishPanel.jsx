@@ -38,7 +38,6 @@ export default function PublishPanel({ dir, onResult }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
-  const [taglineDraft, setTaglineDraft] = useState('');
   const [styleDraft, setStyleDraft] = useState('');
   const [synopsisDraft, setSynopsisDraft] = useState('');
   const [posterSettingsOpen, setPosterSettingsOpen] = useState(false);
@@ -46,13 +45,12 @@ export default function PublishPanel({ dir, onResult }) {
   const dirRef = useRef(dir);
   dirRef.current = dir;
   // 上一次从磁盘读到的已保存值：编辑框和它一样就是“没动过”，可以安全地刷新；动过的不能被覆盖。
-  const baseRef = useRef({ title: '', tagline: '', style: '', synopsis: '', proposal: '', posterPrompt: '' });
+  const baseRef = useRef({ title: '', style: '', synopsis: '', proposal: '', posterPrompt: '' });
 
   const apply = useCallback((res) => {
     const result = res.result || {};
     const next = {
       title: result.title || '',
-      tagline: result.tagline || '',
       style: result.styleId || '',
       synopsis: result.synopsis || '',
       proposal: result.proposedSynopsis || '',
@@ -61,7 +59,6 @@ export default function PublishPanel({ dir, onResult }) {
     const prev = baseRef.current;
     // 没改过的编辑框跟着已保存的值走；改过的保留用户写的内容。
     setTitleDraft((cur) => (cur === prev.title ? next.title : cur));
-    setTaglineDraft((cur) => (cur === prev.tagline ? next.tagline : cur));
     setStyleDraft((cur) => (cur === prev.style ? next.style : cur));
     setPromptDraft((cur) => (cur === prev.posterPrompt ? next.posterPrompt : cur));
     // AI 新写了简介：用户刚点了“改写”，直接放进编辑框（未保存）；其余情况同上。
@@ -81,9 +78,8 @@ export default function PublishPanel({ dir, onResult }) {
         return;
       }
       if (fresh) {
-        baseRef.current = { title: '', tagline: '', style: '', synopsis: '', proposal: '', posterPrompt: '' };
+        baseRef.current = { title: '', style: '', synopsis: '', proposal: '', posterPrompt: '' };
         setTitleDraft('');
-        setTaglineDraft('');
         setStyleDraft('');
         setSynopsisDraft('');
         setPromptDraft('');
@@ -149,13 +145,12 @@ export default function PublishPanel({ dir, onResult }) {
   const running = !!job;
   const frozen = busy || running;
   const savedTitle = result.title || '';
-  const savedTagline = result.tagline || '';
   const savedStyle = result.styleId || '';
   const savedSynopsis = result.synopsis || '';
 
   const cleanTitle = titleDraft.trim();
   const titleDirty = cleanTitle !== savedTitle;
-  const posterDirty = styleDraft !== savedStyle || taglineDraft.trim() !== savedTagline;
+  const posterDirty = styleDraft !== savedStyle;
   const savedPrompt = state.posterPrompt || '';
   const promptDirty = promptDraft.trim() !== savedPrompt;
   const synopsisDirty = synopsisDraft.trim() !== savedSynopsis;
@@ -307,14 +302,19 @@ export default function PublishPanel({ dir, onResult }) {
                 dirty={posterDirty}
                 busy={frozen}
                 label="保存样式"
-                onRevert={() => {
-                  setStyleDraft(savedStyle);
-                  setTaglineDraft(savedTagline);
-                }}
-                onSave={() =>
-                  save(() => window.electronAPI.publishRetitle({ dir, styleId: styleDraft, tagline: taglineDraft }))
-                }
+                onRevert={() => setStyleDraft(savedStyle)}
+                onSave={() => save(() => window.electronAPI.publishRetitle({ dir, styleId: styleDraft }))}
               />
+            )}
+            {result.hasLegacyTagline && !posterDirty && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={frozen}
+                onClick={() => save(() => window.electronAPI.publishRetitle({ dir, styleId: savedStyle }))}
+              >
+                去掉小字
+              </button>
             )}
           </span>
         </div>

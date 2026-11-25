@@ -181,8 +181,8 @@ async function main() {
       downloadedEpisodes = await require('./check-download-v5-live.cjs').verifyDownloadV5Live(archive);
       await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
     }
-    else if (focusedScope === 'poster-dedup-and-update') {
-      assert.equal(fromVersion, '1.2.60');
+    else if (focusedScope === 'poster-title-and-update') {
+      assert.equal(fromVersion, '1.2.61');
       require('./protect-app.cjs').verifyProtectedArchive(archive);
       await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
       const poster = require(archive + '/src/native/publish-materials.js');
@@ -194,6 +194,21 @@ async function main() {
       const { DEFAULTS } = require(archive + '/src/native/quchong.js');
       assert.equal(DEFAULTS.shot_reframe, true);
       assert.equal(DEFAULTS.drop_duplicate_frames, true);
+      const { createTitleRenderer } = require(archive + '/src/native/poster-title.js');
+      const driver = {
+        open: async () => {},
+        close: async () => {},
+        evaluate: async (statement) => {
+          if (statement.includes('loadFontCss')) return;
+          const spec = JSON.parse(statement.slice(statement.indexOf('(') + 1, -1));
+          assert.equal(spec.title, '主剧名');
+          assert.equal(spec.tagline, undefined);
+          return { dataUrl: 'data:image/png;base64,AA==' };
+        },
+      };
+      const titleRenderer = createTitleRenderer({ fontsDir: folder, driver });
+      await titleRenderer.render({ image: Buffer.from([0]), title: '主剧名', tagline: '旧小字' });
+      await titleRenderer.close();
     }
     else if (focusedScope === 'license-protection-and-update') {
       require('./protect-app.cjs').verifyProtectedArchive(archive);
@@ -207,7 +222,7 @@ async function main() {
       assert.equal(ai.copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test' }).ai_text_model, 'doubao-seed-2-1-turbo-260628');
     }
   }
-  const limitBytes = (['1.2.60', '1.2.61'].includes(manifest.version) ? 40 : 25) * 1024 * 1024;
+  const limitBytes = (['1.2.60', '1.2.61', '1.2.62'].includes(manifest.version) ? 40 : 25) * 1024 * 1024;
   assert.ok(paths.bytes < limitBytes && servedBytes < limitBytes);
   const evidence = { from: fromVersion, to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
     downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit,
@@ -215,7 +230,7 @@ async function main() {
     ...(downloadedEpisodes ? { downloadV5RecoveryChecked: true, downloadedEpisodes } : {}),
     runtimeMismatchRejected: !focused, restarted: true, startup,
     ...(focused ? { scope: focusedScope, engineRegressionRun: '43561340463',
-      ...(focusedScope === 'report-protection-and-update' ? {reportProtectionChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'poster-dedup-and-update' ? {posterPromptChecked:true,dedupChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
+      ...(focusedScope === 'report-protection-and-update' ? {reportProtectionChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'poster-title-and-update' ? {posterTitleOnlyChecked:true,posterPromptChecked:true,dedupChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
   console.log('PASS actual updater → small patch:', evidence);
 }

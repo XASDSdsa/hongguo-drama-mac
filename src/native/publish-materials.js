@@ -126,7 +126,7 @@ function originalInfo({ title, synopsis, source }) {
 
 const JSON_ONLY = '只输出一个 JSON 对象，不要任何解释或 Markdown。字段：';
 
-/** 改写剧名：候选剧名 + 题材 + 标题样式 + 角标。 */
+/** 改写剧名：候选剧名、题材和标题样式。 */
 function buildTitleMessages({ title, synopsis, source }) {
   const system = [
     '你是短剧发布运营，负责把短剧的剧名改写得更吸引人，同时不改变剧情事实。',
@@ -138,7 +138,6 @@ function buildTitleMessages({ title, synopsis, source }) {
       '，用同义的不同说法表达。',
     '- genre：题材，一两个词（如 霸总、重生逆袭、古风、悬疑、甜宠、复仇、玄幻、都市）。',
     `- style：从下面的标题样式里选一个最贴合题材的 id：\n${describeStyles()}`,
-    '- tagline：海报角标短句，4–10 个字，有钩子（如“开局即巅峰”“全集已更新”），不要标点。',
   ].join('\n');
   return [
     { role: 'system', content: system },
@@ -220,7 +219,7 @@ function normalizeTitles(raw, { title, synopsis }) {
   if (!ranked.length) throw new Error('模型没有给出合格的剧名，请重试');
   const genre = clip(raw?.genre, 20);
   const style = STYLE_IDS.includes(raw?.style) ? raw.style : pickStyleByGenre(genre, title, synopsis, '');
-  return { titles: ranked, genre, style, tagline: cleanTitle(clip(raw?.tagline, 12)) };
+  return { titles: ranked, genre, style };
 }
 
 function normalizeSynopsis(raw) {
@@ -374,14 +373,13 @@ function outputPaths(outputDir) {
 const savedTitle = (paths) => seriesLayout.readNewInfo(paths.dir).title;
 const savedSynopsis = (paths) => seriesLayout.readNewInfo(paths.dir).synopsis;
 
-async function renderPoster({ renderer, state, workDir, outputDir, title, styleId, tagline, layout, signal }) {
+async function renderPoster({ renderer, state, workDir, outputDir, title, styleId, layout, signal }) {
   signal?.throwIfAborted?.();
   const art = fs.readFileSync(path.join(workDir, state.art.file));
   const out = await renderer.render({
     image: art,
     contentType: state.art.contentType,
     title,
-    tagline,
     styleId,
     layout: layout || 'auto',
     faces: state.art.faces || [],
@@ -394,7 +392,7 @@ async function renderPoster({ renderer, state, workDir, outputDir, title, styleI
 function emptyState(originalTitle) {
   return {
     originalTitle,
-    copy: { synopsis: '', titles: [], genre: '', style: '', tagline: '', scene: '' },
+    copy: { synopsis: '', titles: [], genre: '', style: '', scene: '' },
     chosen: null,
     createdAt: Date.now(),
   };
@@ -576,9 +574,12 @@ async function makePoster({
     outputDir,
     title: chosen.title,
     styleId: chosen.style,
-    tagline: chosen.tagline,
     signal,
   });
+  if (Object.hasOwn(chosen, 'tagline')) {
+    delete chosen.tagline;
+    writeState(workDir, state);
+  }
   return summarize(state, paths, meta);
 }
 
@@ -592,9 +593,9 @@ function generate({ task, ...options }) {
 }
 
 /**
- * 选定 / 修改剧名、标题样式、角标：不调用模型。已有海报就顺手重新排版，还没有海报就只记下来（画海报之前必须先选定剧名）。
+ * 保存剧名和标题样式。已有底图时直接用它重新排版。
  */
-async function retitle({ outputDir, workDir, renderer, title, styleId, tagline, layout, signal }) {
+async function retitle({ outputDir, workDir, renderer, title, styleId, layout, signal }) {
   const state = loadState(workDir, String(title || ''));
   const current = state.chosen || {};
   const nextTitle = cleanTitle(title ?? current.title ?? '');
@@ -602,7 +603,6 @@ async function retitle({ outputDir, workDir, renderer, title, styleId, tagline, 
   if (length < 1 || length > 16) throw new Error('标题需要 1–16 个字');
   const style = styleId == null ? current.style || state.copy.style || STYLE_IDS[0] : styleId;
   if (!STYLE_IDS.includes(style)) throw new Error('未知的标题样式');
-  const nextTagline = tagline == null ? (current.tagline ?? state.copy.tagline ?? '') : cleanTitle(clip(tagline, 12));
   const paths = outputPaths(outputDir);
   let meta = null;
   if (state.art?.file) {
@@ -613,12 +613,11 @@ async function retitle({ outputDir, workDir, renderer, title, styleId, tagline, 
       outputDir,
       title: nextTitle,
       styleId: style,
-      tagline: nextTagline,
       layout,
       signal,
     });
   }
-  state.chosen = { title: nextTitle, style, tagline: nextTagline };
+  state.chosen = { title: nextTitle, style };
   seriesLayout.updateNewInfo(outputDir, { title: nextTitle });
   writeState(workDir, state);
   return summarize(state, paths, meta);
@@ -631,7 +630,6 @@ function summarize(state, paths, meta) {
   return {
     title: chosen.title || '',
     styleId: chosen.style || state.copy?.style || STYLE_IDS[0],
-    tagline: chosen.tagline ?? state.copy?.tagline ?? '',
     candidates: state.copy?.titles || [],
     genre: state.copy?.genre || '',
     synopsis: saved,
@@ -651,7 +649,8 @@ function readResult({ outputDir, workDir }) {
   // 新剧集海报.jpg；还没挪的以前的 发布海报.jpg 也认
   const poster = seriesLayout.findNewPoster(outputDir);
   const base = summarize(state, { ...paths, poster: poster || '' }, null);
-  return { ...base, hasPoster: !!poster, title: savedTitle(paths) || base.title };
+  const hasLegacyTagline = Boolean(poster && state.chosen?.tagline && state.art?.file && fs.existsSync(path.join(workDir, state.art.file)));
+  return { ...base, hasPoster: !!poster, hasLegacyTagline, title: savedTitle(paths) || base.title };
 }
 
 module.exports = {

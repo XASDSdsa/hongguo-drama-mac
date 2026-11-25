@@ -32,7 +32,6 @@ const STYLES = [
     sheen: 0.45,
     letterSpacing: 0.02,
     rotate: -2,
-    tagline: { bg: '#2a1400', color: '#ffe27a', border: '#f0a81c' },
   },
   {
     id: 'fire',
@@ -50,7 +49,6 @@ const STYLES = [
     sheen: 0.4,
     letterSpacing: 0,
     rotate: -4,
-    tagline: { bg: '#d4160a', color: '#ffffff', border: '#ffdb2e' },
   },
   {
     id: 'ink',
@@ -66,7 +64,6 @@ const STYLES = [
     sheen: 0.18,
     letterSpacing: 0.04,
     rotate: 0,
-    tagline: { bg: '#a3201a', color: '#fff4dc', border: '#fff4dc' },
   },
   {
     id: 'frost',
@@ -80,7 +77,6 @@ const STYLES = [
     sheen: 0.3,
     letterSpacing: 0.08,
     rotate: 0,
-    tagline: { bg: '#05182b', color: '#cfe8ff', border: '#3fa0ff' },
   },
   {
     id: 'candy',
@@ -96,7 +92,6 @@ const STYLES = [
     sheen: 0.35,
     letterSpacing: 0.02,
     rotate: -3,
-    tagline: { bg: '#ff5fa2', color: '#ffffff', border: '#ffffff' },
   },
   {
     id: 'blood',
@@ -113,7 +108,6 @@ const STYLES = [
     sheen: 0.2,
     letterSpacing: 0.01,
     rotate: -3,
-    tagline: { bg: '#120000', color: '#ff8a7a', border: '#d10f0f' },
   },
   {
     id: 'royal',
@@ -131,7 +125,6 @@ const STYLES = [
     sheen: 0.35,
     letterSpacing: 0.05,
     rotate: 0,
-    tagline: { bg: '#1c0a40', color: '#f6d77a', border: '#a566ff' },
   },
   {
     id: 'urban',
@@ -145,7 +138,6 @@ const STYLES = [
     sheen: 0.22,
     letterSpacing: 0.03,
     rotate: 0,
-    tagline: { bg: '#ff3b5c', color: '#ffffff', border: null },
   },
 ];
 

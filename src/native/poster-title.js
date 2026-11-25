@@ -62,12 +62,11 @@ function createTitleRenderer({ fontsDir, driver }) {
 
   return {
     /** @returns {Promise<{buffer: Buffer, contentType: string, meta: object}>} */
-    async render({ image, contentType, title, tagline = '', styleId, layout = 'auto', faces = [], format = 'jpeg' }) {
+    async render({ image, contentType, title, styleId, layout = 'auto', faces = [], format = 'jpeg' }) {
       await start();
       const spec = {
         image: imageToDataUrl(image, contentType),
         title,
-        tagline,
         style: resolveStyle(styleId),
         layout,
         faces: (faces || []).filter((f) => f && [f.x, f.y, f.w, f.h].every(Number.isFinite)),

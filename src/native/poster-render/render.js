@@ -4,7 +4,6 @@
  * window.PosterTitle.render(spec) -> { dataUrl, meta }
  *   spec.image    背景图（data URL，必须是不带文字的画面）
  *   spec.title    标题（1–2 行，自动换行）
- *   spec.tagline  可选，一句短钩子
  *   spec.style    poster-styles.js 里 resolveStyle() 的结果
  *   spec.layout   'auto' | 'bottom' | 'top' | 'middle'
  *   spec.faces    可选，视觉模型给出的人脸框 [{x,y,w,h}]（0–1，相对整图）
@@ -211,16 +210,6 @@
     ctx.drawImage(fillCanvas, -fw / 2, -fh / 2);
   }
 
-  function roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  }
-
   /** 底图 + 沿字所在一侧铺的渐变暗角（强度由底图亮度决定）。 */
   function paintBackground(ctx, img, W, H, layoutName, scrim) {
     ctx.clearRect(0, 0, W, H);
@@ -250,21 +239,19 @@
 
   /** 标题块的几何：行高、总高、起始 y（整块向安全区内收，不贴边）。 */
   function blockGeometry(W, H, plan) {
-    const { style, lines, fs, layoutName, tagline } = plan;
+    const { style, lines, fs, layoutName } = plan;
     const band = BANDS[layoutName];
     const lineH = fs * 1.12;
     const blockH = lineH * lines.length;
-    const tagH = tagline ? plan.tagFs * 1.9 : 0;
-    const gap = tagline ? fs * 0.22 : 0;
     const bar = style.accentBar ? fs * 0.3 : 0;
-    const total = blockH + bar + (tagline ? tagH + gap : 0);
+    const total = blockH + bar;
     const bandMid = ((band.y0 + band.y1) / 2) * H;
     const startY = clamp(bandMid - total / 2, H * 0.035, H * 0.965 - total);
-    return { lineH, blockH, tagH, gap, bar, total, startY, bbox: { x: W * 0.04, y: startY, w: W * 0.92, h: total } };
+    return { lineH, blockH, startY, bbox: { x: W * 0.04, y: startY, w: W * 0.92, h: total } };
   }
 
-  function paintText(ctx, W, H, plan, geo) {
-    const { style, lines, fs, tagline } = plan;
+  function paintText(ctx, W, plan, geo) {
+    const { style, lines, fs } = plan;
     ctx.save();
     ctx.translate(W / 2, geo.startY + geo.blockH / 2);
     ctx.rotate(((style.rotate || 0) * Math.PI) / 180);
@@ -277,36 +264,10 @@
     });
     ctx.restore();
 
-    let cursorY = geo.startY + geo.blockH;
     if (style.accentBar) {
       const barW = Math.min(plan.maxWidth, W * 0.3);
       ctx.fillStyle = style.accentBar;
-      ctx.fillRect(W / 2 - barW / 2, cursorY + fs * 0.06, barW, Math.max(4, fs * 0.07));
-      cursorY += geo.bar;
-    }
-    if (tagline) {
-      const ts = style.tagline || {};
-      const tFs = plan.tagFs;
-      ctx.font = `900 ${tFs}px "Noto Sans SC", "PingFang SC", sans-serif`;
-      if ('letterSpacing' in ctx) ctx.letterSpacing = `${tFs * 0.12}px`;
-      const tw = ctx.measureText(tagline).width;
-      const bw = tw + tFs * 1.8;
-      const bh = geo.tagH;
-      const bx = W / 2 - bw / 2;
-      const by = cursorY + geo.gap;
-      roundRect(ctx, bx, by, bw, bh, bh / 2);
-      ctx.fillStyle = ts.bg || '#000';
-      ctx.fill();
-      if (ts.border) {
-        ctx.lineWidth = Math.max(2, tFs * 0.08);
-        ctx.strokeStyle = ts.border;
-        ctx.stroke();
-      }
-      ctx.fillStyle = ts.color || '#fff';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(tagline, W / 2 + tFs * 0.06, by + bh / 2 + tFs * 0.04);
-      if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+      ctx.fillRect(W / 2 - barW / 2, geo.startY + geo.blockH + fs * 0.06, barW, Math.max(4, fs * 0.07));
     }
   }
 
@@ -326,9 +287,9 @@
     return sum / Math.max(1, n);
   }
 
-  async function ensureFonts(style, texts) {
+  async function ensureFonts(style, title) {
     if (!document.fonts || !document.fonts.load) return;
-    const sample = Array.from(new Set(texts.join('')))
+    const sample = Array.from(new Set(title))
       .join('')
       .slice(0, 60);
     const jobs = [
@@ -343,15 +304,12 @@
     if (!style) throw new Error('缺少标题样式');
     const title = String(spec.title || '').trim();
     if (!title) throw new Error('缺少标题');
-    const tagline = String(spec.tagline || '')
-      .trim()
-      .slice(0, 16);
     const img = await loadImage(spec.image);
     const W = img.naturalWidth;
     const H = img.naturalHeight;
     if (W < 200 || H < 200) throw new Error('底图太小');
 
-    await ensureFonts(style, [title, tagline]);
+    await ensureFonts(style, title);
     const missing =
       document.fonts && document.fonts.check
         ? !document.fonts.check(`${style.fontWeight} 40px "${style.fontFamily}"`, title)
@@ -379,7 +337,7 @@
     const strokePad = Math.max(0, ...(style.strokes || []).map((s) => s.width)) + 0.1;
     let fs = Math.min(maxWidth / (widest + strokePad), W * (lines.length === 1 ? 0.21 : 0.17));
     const bandH = (band.y1 - band.y0) * H;
-    const extra = (tagline ? 0.8 : 0) + (style.accentBar ? 0.3 : 0);
+    const extra = style.accentBar ? 0.3 : 0;
     fs = Math.min(fs, bandH / (lines.length * 1.12 + extra + 0.1));
     fs = Math.floor(fs);
     const widths = lines.map((text) => {
@@ -387,13 +345,12 @@
       if ('letterSpacing' in measure) measure.letterSpacing = `${(style.letterSpacing || 0) * fs}px`;
       return measure.measureText(text).width;
     });
-    const tagFs = Math.round(fs * 0.3);
 
     // 暗角强度：底图越亮越重；画完再测一次，对比度不够就加重，最多三轮。
     const fillRgb = hexToRgb(style.fill[Math.floor(style.fill.length / 2)][1]);
     const fillLuma = luminance(...fillRgb);
     let scrim = clamp(0.2 + (costs[layoutName].luma - 0.35) * 1.1, 0.18, 0.62);
-    const plan = { style, lines, fs, layoutName, tagline, tagFs, widths, maxWidth };
+    const plan = { style, lines, fs, layoutName, widths, maxWidth };
     const geo = blockGeometry(W, H, plan);
     let contrast = 0;
     for (let round = 0; round < 3; round += 1) {
@@ -404,7 +361,7 @@
       scrim = Math.min(0.72, scrim + 0.14);
     }
     paintBackground(ctx, img, W, H, layoutName, scrim);
-    paintText(ctx, W, H, plan, geo);
+    paintText(ctx, W, plan, geo);
     const bbox = geo.bbox;
 
     return {

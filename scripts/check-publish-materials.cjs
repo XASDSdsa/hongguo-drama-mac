@@ -228,7 +228,8 @@ const isInspect = (entry) => JSON.stringify(entry.json?.messages || []).includes
       assert.equal(new Set(result.candidates).size, result.candidates.length);
       assert.equal(result.title, result.candidates[0]);
       assert.equal(result.styleId, 'fire');
-      assert.equal(result.tagline, '开局即反转');
+      assert.equal(result.tagline, undefined);
+      assert.doesNotMatch(publish.buildTitleMessages({ title: '退婚之后' })[0].content, /tagline|角标/);
       const ranked = publish.rankTitles(['退婚之后', '退婚之后的我', '她回来了', '重生后我撕了婚书'], '退婚之后');
       assert.deepEqual(ranked[0], '重生后我撕了婚书');
       assert.ok(!ranked.includes('退婚之后'));

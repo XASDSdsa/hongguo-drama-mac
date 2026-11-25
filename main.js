@@ -4418,7 +4418,7 @@ ipcMain.handle('publish-save-poster-prompt', (_event, payload = {}) => {
   }
 });
 
-/** 换标题 / 样式 / 版式 / 角标：只重新排版，不再调用模型，几乎是即时的。 */
+/** 换标题、样式或版式时用现有底图重新排版。 */
 ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
   try {
     const context = publishContext(payload.dir);
@@ -4430,7 +4430,6 @@ ipcMain.handle('publish-retitle', async (_event, payload = {}) => {
         renderer,
         title: payload.title,
         styleId: payload.styleId,
-        tagline: payload.tagline,
         layout: payload.layout,
       }),
     );
