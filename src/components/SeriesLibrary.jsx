@@ -5,6 +5,7 @@ import Pager from './Pager';
 import SeriesDetail from './SeriesDetail';
 import TaskOverview, { overviewBusy } from './TaskOverview';
 import useLiveData from './useLiveData';
+import useDialogKeyboard from './useDialogKeyboard';
 import { clampPage, slicePage } from './pagination';
 import { processedText } from './processed-time.mjs';
 
@@ -45,6 +46,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
   const [error, setError] = useState('');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [importFailure, setImportFailure] = useState(null);
   const [importWarnings, setImportWarnings] = useState([]);
   const importRequest = useRef(false);
   const folderRevision = useRef(0);
@@ -109,6 +111,8 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
 
   // 打开了某部剧：窗口顶栏左边显示「返回剧集列表」。
   const closeDetail = useCallback(() => setCurrent(null), []);
+  const closeImportFailure = () => setImportFailure(null);
+  useDialogKeyboard(active && !!importFailure, closeImportFailure, '.lib-import-dialog');
   useEffect(() => {
     onBackChange?.(current ? closeDetail : null);
   }, [current, closeDetail, onBackChange]);
@@ -169,23 +173,33 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
     if (importRequest.current) return;
     importRequest.current = true;
     setImporting(true);
-    setError('');
+    setImportFailure(null);
     try {
       const result = await window.electronAPI.libraryImport();
       if (result?.canceled) return;
-      setImportWarnings(result?.warnings || []);
-      if (!result?.success) throw new Error(result?.error || '导入失败');
-      if (!result.folder) throw new Error('未找到导入的剧集');
+      if (!result?.success || !result.folder) {
+        setImportResult(null);
+        setImportWarnings([]);
+        setImportFailure({
+          path: result?.dir,
+          message: result?.error || '无法读取所选文件夹。',
+          errors: result?.errors || [],
+          warnings: result?.warnings || [],
+        });
+        return;
+      }
       const { folder, alreadyImported } = result;
       folderRevision.current++;
       setFolders((items) => [folder, ...items.filter((item) => item.path !== folder.path)]);
       setImportResult({ folder, alreadyImported });
+      setImportWarnings(result.warnings || []);
       setQuery('');
       setPage(1);
       load({ quiet: true });
     } catch (error) {
       setImportResult(null);
-      setError(error?.message || '导入失败');
+      setImportWarnings([]);
+      setImportFailure({ message: error?.message || '无法读取所选文件夹。', errors: [], warnings: [] });
     } finally {
       importRequest.current = false;
       setImporting(false);
@@ -242,6 +256,27 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
       </header>
 
       {error && <p className="lib-error" role="alert">{error}</p>}
+      {importFailure && (
+        <div className="lib-mask lib-mask-top">
+          <div className="lib-confirm lib-import-dialog" role="alertdialog" aria-modal="true" aria-label="导入失败">
+            <h3>导入失败</h3>
+            <p>{importFailure.message}</p>
+            {importFailure.path && <p className="lib-root">{importFailure.path}</p>}
+            {!!importFailure.errors.length && (
+              <ul className="lib-confirm-list">{importFailure.errors.map((issue) => <li key={issue}>{issue}</li>)}</ul>
+            )}
+            {!!importFailure.warnings.length && (
+              <div className="lib-import-warnings">
+                <p>其他检查</p>
+                <ul>{importFailure.warnings.map((issue) => <li key={issue}>{issue}</li>)}</ul>
+              </div>
+            )}
+            <div className="lib-confirm-actions">
+              <button type="button" className="btn btn-primary" onClick={closeImportFailure}>知道了</button>
+            </div>
+          </div>
+        </div>
+      )}
       {importResult && (
         <div className="lib-import-result">
           <div role="status">
@@ -280,7 +315,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
 
       {!loading && !folders.length && !error && (
         <div className="lib-empty">
-          还没有剧。在「发现短剧」里下载一部，或者点右上角「导入已有剧」选一个放着视频的文件夹。
+          还没有剧。在「发现短剧」里下载一部，或者点「导入已有剧」选择含有各集视频、海报和简介.txt 的文件夹。
         </div>
       )}
       {folders.length > 0 && !shown.length && <div className="lib-empty">没有名字里带「{query.trim()}」的剧。</div>}

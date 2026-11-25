@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const seriesInfo = require('./series-info');
+const { inspectOriginalSynopsis } = require('./series-layout');
 
 const VIDEO_EXT = /\.(mp4|mov|mkv|m4v|avi|flv|ts|webm)$/i;
 // 去重成品的命名；放在子文件夹里不会被扫到，但用户自己拷进来的也要排除。
@@ -106,9 +107,10 @@ function describeFolder(dir, imported = false) {
   };
 }
 
-function importDetails(dir, folder) {
+function importDetails(dir, folder, canDecodeImage) {
   const videos = scanVideos(seriesInfo.originalDir(dir));
   const total = seriesInfo.readEpisodeCount(dir);
+  const errors = [];
   const warnings = [];
   const seen = new Set();
   const duplicates = new Set();
@@ -120,8 +122,33 @@ function importDetails(dir, folder) {
     else if (seen.has(video.index)) duplicates.add(video.index);
     else seen.add(video.index);
   }
-  if (!folder?.coverPath) warnings.push('缺少海报。可以把海报.jpg 或海报.png 放进同一个文件夹。');
-  if (!folder?.hasSynopsis) warnings.push('未读到简介。请检查同一文件夹下有没有简介.txt，以及文件里有没有内容。');
+  const names = fs.readdirSync(dir);
+  const fileHint = (stem) => {
+    const candidate = names.find((name) => name.startsWith(stem));
+    return candidate ? ` 找到「${candidate}」，请检查文件名和扩展名。` : '';
+  };
+  const cover = folder?.coverPath;
+  if (!cover) {
+    errors.push(`缺少海报。请将海报图片命名为海报.jpg 或海报.png，和视频放在同一个文件夹。${fileHint('海报')}`);
+  } else {
+    const name = path.relative(dir, cover);
+    try {
+      const bytes = fs.readFileSync(cover);
+      const format = seriesInfo.sniffImageExtension(bytes);
+      const ext = path.extname(cover).toLowerCase().replace(/^\.jpeg$/, '.jpg');
+      if (!format) errors.push(`「${name}」不是有效的 JPG、PNG 或 WebP 图片。请重新保存海报。`);
+      else if (format !== ext) errors.push(`「${name}」的实际图片格式是 ${format.slice(1).toUpperCase()}，与扩展名不符。请按实际格式保存。`);
+      else if (format === '.webp'
+        ? bytes.length < 20 || bytes.readUInt32LE(4) + 8 !== bytes.length || !/^VP8[ LX]$/.test(bytes.toString('ascii', 12, 16))
+        : !canDecodeImage(bytes)) {
+        errors.push(`「${name}」图片无法打开。请重新保存或更换海报。`);
+      }
+    } catch (_) {
+      errors.push(`无法读取海报「${name}」。请检查文件是否可以打开。`);
+    }
+  }
+  const synopsis = inspectOriginalSynopsis(dir);
+  if (!synopsis.text) errors.push(synopsis.issue || `缺少简介。请在同一个文件夹放入简介.txt，并填写简介内容。${fileHint('简介')}`);
   if (!total) {
     warnings.push(fs.existsSync(path.join(dir, '集数.txt'))
       ? '集数.txt 没有有效的总集数。可写成「49」或「49集」。'
@@ -143,7 +170,7 @@ function importDetails(dir, folder) {
   if (duplicates.size) warnings.push(`文件名中的集号重复：${[...duplicates].join('、')}。`);
   if (withoutNumber.length) warnings.push(`${withoutNumber.length} 个视频未识别出集号：${withoutNumber.join('、')}。`);
   if (empty.length) warnings.push(`${empty.length} 个视频是空文件：${empty.join('、')}。`);
-  return warnings;
+  return { errors, warnings };
 }
 
 /** 下载目录下的一级子文件夹，加上用户导入的文件夹；导入的排在前面，其余按最近更新排序。 */

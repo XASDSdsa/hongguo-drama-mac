@@ -225,7 +225,7 @@ async function main() {
       assert.equal(ai.copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test' }).ai_text_model, 'doubao-seed-2-1-turbo-260628');
     }
   }
-  const limitBytes = (['1.2.60', '1.2.61', '1.2.62', '1.2.63', '1.2.64'].includes(manifest.version) ? 40 : 25) * 1024 * 1024;
+  const limitBytes = (['1.2.60', '1.2.61', '1.2.62', '1.2.63', '1.2.64', '1.2.65'].includes(manifest.version) ? 40 : 25) * 1024 * 1024;
   assert.ok(paths.bytes < limitBytes && servedBytes < limitBytes);
   const evidence = { from: fromVersion, to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
     downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit,

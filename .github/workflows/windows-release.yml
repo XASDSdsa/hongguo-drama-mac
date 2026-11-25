@@ -893,7 +893,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '剧集管理将最近导入的剧集排在前面，并详细提示缺失的文件或集数。成本配置报告模板支持命名与查看，生成前确认所用模板。'
+      UPDATE_RELEASE_NOTES: '导入已有剧集时须提供有效海报和简介。缺少文件、名称错误、格式不符、简介为空时会弹窗列明原因。'
       UPDATE_CHECK_SCOPE: license-protection-and-update
     steps:
       - uses: actions/checkout@v5
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 45649521737
+          run-id: 45655731251
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Extract the hash-pinned upstream SDK component only
@@ -972,7 +972,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check imports, report templates and upgrade from 1.2.63
+      - name: Check imports, report templates and upgrade from 1.2.64
         shell: pwsh
         run: |
           node scripts/check-series-library.cjs 'flat MP4'

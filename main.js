@@ -20,6 +20,7 @@ const {
   powerSaveBlocker,
   powerMonitor,
   net,
+  nativeImage,
 } = require('electron');
 const path = require('path');
 const os = require('node:os');
@@ -4005,8 +4006,9 @@ ipcMain.handle('library-import', async () => {
     const linked = linkedSeriesEntries();
     const imported = !!known || quchongPathKey(path.dirname(dir)) !== quchongPathKey(downloadRoot()) || !linked.has(path.basename(dir).toLowerCase());
     const info = seriesLibrary.describeFolder(dir, imported);
-    const warnings = seriesLibrary.importDetails(dir, info);
-    if (!info?.videoCount) return { success: false, warnings, error: `导入失败：${dir} 里没有可导入的视频，请选各集 MP4 所在的文件夹。` };
+    const { errors, warnings } = seriesLibrary.importDetails(dir, info, (data) => !nativeImage.createFromBuffer(data).isEmpty());
+    if (!info?.videoCount) errors.unshift('没有可导入的视频。请选择存放各集 MP4 的文件夹。');
+    if (errors.length) return { success: false, dir, errors, warnings, error: '请补齐或修正以下文件后再导入。' };
     const alreadyImported = !!known || !imported;
     if (imported) list.add(dir);
     folderRecordsCache = null;

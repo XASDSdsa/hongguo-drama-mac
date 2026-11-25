@@ -817,15 +817,37 @@ function mount(file, api, props = {}, options = {}) {
     ui.render();
     assert.equal(ui.button('正在导入…').props.disabled, true);
     folders = [original, current];
-    pending.resolve({ success: true, folder: current, warnings: ['缺少海报。', '按文件名未找到以下集号：2。'] });
+    pending.resolve({ success: true, folder: current, warnings: ['缺少集数.txt。', '按文件名未找到以下集号：2。'] });
     await submitted;
     await ui.flush();
     assert.equal(ui.find((node) => node.props.className === 'lib-card').props.title, current.path);
     assert.equal(ui.find((node) => node.props['aria-label'] === '按剧名搜索').props.value, '');
-    for (const segment of ['已导入', current.path, '缺少海报', '集号：2']) assert.ok(ui.text().includes(segment));
+    for (const segment of ['已导入', current.path, '缺少集数.txt', '集号：2']) assert.ok(ui.text().includes(segment));
     ui.button('打开这部剧').props.onClick();
     await ui.flush();
     assert.ok(ui.find((node) => node.props.folder?.path === current.path));
+    ui.unmount();
+  });
+  await test('recent imports alert when the poster and synopsis are missing or invalid', async () => {
+    const ui = mount('SeriesLibrary', {
+      libraryList: async () => ({ success: true, folders: [], root: '/library' }),
+      libraryImport: async () => ({
+        success: false, dir: '/import/成品目录', error: '请补齐或修正以下文件后再导入。',
+        errors: ['海报.jpg 的实际图片格式是 PNG。', '简介.txt 没有填写简介。'],
+        warnings: ['缺少集数.txt。'],
+      }),
+    });
+    await ui.flush();
+    await ui.button('导入已有剧').props.onClick();
+    await ui.flush();
+    assert.ok(ui.find((node) => node.props.role === 'alertdialog'));
+    for (const segment of ['导入失败', '/import/成品目录', '实际图片格式是 PNG', '没有填写简介', '缺少集数.txt']) {
+      assert.ok(ui.text().includes(segment));
+    }
+    assert.doesNotMatch(ui.text(), /已导入/);
+    ui.button('知道了').props.onClick();
+    await ui.flush();
+    assert.ok(!ui.find((node) => node.props.role === 'alertdialog'));
     ui.unmount();
   });
   await test('one-click retry submits only failed downloads and blocks duplicate clicks', async () => {

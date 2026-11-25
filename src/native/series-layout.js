@@ -20,6 +20,7 @@
 // 打开管理剧集时自动挪成上面这样（视频一个都不动）；挪之前、挪不成时，旧位置照样认得。
 const fs = require('node:fs');
 const path = require('node:path');
+const { TextDecoder } = require('node:util');
 
 const ORIGINAL_DIR = '原剧';
 const ORIGINAL_INFO = '原剧集信息.txt';
@@ -131,15 +132,38 @@ function newInfoFile(dir) {
   return path.join(dir, NEW_INFO);
 }
 
+function inspectOriginalSynopsis(dir) {
+  let issue = '';
+  for (const file of [originalInfoFile(dir), path.join(dir, ORIGINAL_DIR, LEGACY.synopsis), path.join(dir, LEGACY.synopsis)]) {
+    const name = path.relative(dir, file);
+    let bytes;
+    try {
+      bytes = fs.readFileSync(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') issue ||= `无法读取「${name}」。请确认它是可读的 TXT 文件。`;
+      continue;
+    }
+    let content;
+    try {
+      const bom = bytes.subarray(0, 2).toString('hex');
+      content = new TextDecoder(bom === 'fffe' ? 'utf-16le' : bom === 'feff' ? 'utf-16be' : 'utf-8', { fatal: true }).decode(bytes);
+      if (/[\x00-\x08\x0b\x0c\x0e-\x1f]|^%PDF-/.test(content)) throw new Error('invalid text');
+    } catch (_) {
+      issue ||= `「${name}」不是可读取的纯文本。请用记事本另存为 UTF-8 编码的简介.txt。`;
+      continue;
+    }
+    const text = file === originalInfoFile(dir)
+      ? parseInfo(content).synopsis
+      : content.trim().replace(/^简介\s*[：:]\s*/, '');
+    if (text && !PLACEHOLDER.test(text) && !/^(暂无(简介)?|无|未填写)$/.test(text)) return { text, issue: '' };
+    issue ||= `「${name}」没有填写简介。请写入实际简介内容。`;
+  }
+  return { text: '', issue };
+}
+
 /** 原剧的简介：原剧集信息.txt 里的；没有就看以前的 简介.txt（「原剧」里或外层）。 */
 function readOriginalSynopsis(dir) {
-  const own = parseInfo(readText(originalInfoFile(dir))).synopsis;
-  if (own) return own;
-  for (const base of [path.join(dir, ORIGINAL_DIR), dir]) {
-    const text = readText(path.join(base, LEGACY.synopsis)).trim();
-    if (text) return text;
-  }
-  return '';
+  return inspectOriginalSynopsis(dir).text;
 }
 
 function readOriginalTitle(dir) {
@@ -412,6 +436,7 @@ module.exports = {
   originalInfoFile,
   newInfoFile,
   readOriginalSynopsis,
+  inspectOriginalSynopsis,
   readOriginalTitle,
   readNewInfo,
   updateOriginalInfo,

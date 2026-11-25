@@ -8,6 +8,7 @@ const { EventEmitter } = require('node:events'),
   { createRequire } = require('node:module');
 const lib = require('../src/native/series-library');
 const { execFileSync } = require('node:child_process');
+const { PNG } = require('pngjs');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'series-lib-'));
 const touch = (file, size = 2048) => {
@@ -32,6 +33,11 @@ function makeMain(root, userData, registry, pickFolder = () => null) {
     app,
     ipcMain: { handle: (name, fn) => (handlers[name] = fn) },
     protocol: { registerSchemesAsPrivileged() {} },
+    nativeImage: { createFromBuffer: (data) => ({
+      isEmpty() {
+        try { PNG.sync.read(data); return false; } catch (_) { return true; }
+      },
+    }) },
     dialog: { showOpenDialog: async () => {
       const folder = pickFolder();
       return { canceled: !folder, filePaths: folder ? [folder] : [] };
@@ -218,16 +224,47 @@ async function check(name, fn) {
     touch(path.join(packageDir, first));
     touch(path.join(packageDir, third));
     touch(path.join(packageDir, `${show}-第2集.mp4`), 0);
-    touch(path.join(packageDir, '海报.jpg'));
+    const poster = PNG.sync.write(new PNG({ width: 2, height: 2 }));
+    fs.writeFileSync(path.join(packageDir, '海报.png'), poster);
     fs.writeFileSync(path.join(packageDir, '集数.txt'), '3集\r\n');
     fs.writeFileSync(path.join(packageDir, '简介.txt'), '这里是用户自己的简介。');
     touch(path.join(another, '1.mp4'));
     touch(path.join(empty, '1.mp4'), 0);
     let selected = another;
     const { handlers } = makeMain(root, userData, [], () => selected);
-    const other = await handlers['library-import']({});
+    const attempt = () => handlers['library-import']({});
+    const missing = await attempt();
+    assert.equal(missing.success, false);
+    assert.ok(missing.errors.some((message) => message.includes('缺少海报')));
+    assert.ok(missing.errors.some((message) => message.includes('缺少简介')));
+    assert.equal((await handlers['library-list']({})).folders.length, 0);
+
+    fs.writeFileSync(path.join(another, '海报.jpg.jpg'), poster);
+    fs.writeFileSync(path.join(another, '简介.txt.txt'), '示例简介');
+    const wrongNames = await attempt();
+    assert.equal(wrongNames.success, false);
+    assert.ok(wrongNames.errors.some((message) => message.includes('海报.jpg.jpg')));
+    assert.ok(wrongNames.errors.some((message) => message.includes('简介.txt.txt')));
+    fs.renameSync(path.join(another, '海报.jpg.jpg'), path.join(another, '海报.jpg'));
+    fs.writeFileSync(path.join(another, '简介.txt'), '  \r\n ');
+    const wrongFormat = await attempt();
+    assert.equal(wrongFormat.success, false);
+    assert.ok(wrongFormat.errors.some((message) => message.includes('实际图片格式是 PNG')));
+    assert.ok(wrongFormat.errors.some((message) => message.includes('没有填写简介')));
+
+    fs.renameSync(path.join(another, '海报.jpg'), path.join(another, '海报.png'));
+    fs.writeFileSync(path.join(another, '海报.png'), poster.subarray(0, 24));
+    fs.writeFileSync(path.join(another, '简介.txt'), Buffer.from([0xff, 0xef, 0xf5]));
+    const unreadable = await attempt();
+    assert.equal(unreadable.success, false);
+    assert.ok(unreadable.errors.some((message) => message.includes('图片无法打开')));
+    assert.ok(unreadable.errors.some((message) => message.includes('另存为 UTF-8')));
+    fs.writeFileSync(path.join(another, '海报.png'), poster);
+    fs.writeFileSync(path.join(another, '简介.txt'), '\ufeff修正后的内容。', 'utf16le');
+    const other = await attempt();
     assert.equal(other.success, true);
-    assert.equal(other.warnings.length, 3);
+    assert.ok(other.warnings.some((message) => message.includes('缺少集数.txt')));
+    assert.equal((await handlers['library-episodes']({}, another)).synopsis, '修正后的内容。');
     selected = packageDir;
     const imported = await handlers['library-import']({});
     assert.equal(imported.success, true);
@@ -243,14 +280,14 @@ async function check(name, fn) {
     assert.equal(opened.synopsis, '这里是用户自己的简介。');
     deq(opened.episodes.map((item) => item.name), [first, third]);
     assert.ok(fs.existsSync(path.join(packageDir, '简介.txt')));
-    assert.ok(fs.existsSync(path.join(packageDir, '海报.jpg')));
+    assert.ok(fs.existsSync(path.join(packageDir, '海报.png')));
     selected = another;
     assert.equal((await handlers['library-import']({})).alreadyImported, true);
     assert.equal((await handlers['library-list']({})).folders[0].path, another);
     selected = empty;
     const failed = await handlers['library-import']({});
     assert.equal(failed.success, false);
-    assert.match(failed.error, /没有可导入的视频/);
+    assert.ok(failed.errors.some((message) => message.includes('没有可导入的视频')));
     assert.ok(failed.warnings.some((warning) => warning.includes('空文件')));
     selected = null;
     assert.equal((await handlers['library-import']({})).canceled, true);
