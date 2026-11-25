@@ -33,7 +33,7 @@ function isVideoFile(entry) {
 
 /** 剧的原集：「原剧」子文件夹里的视频（导入的文件夹没有它时是顶层视频），按集号再按名称排序。 */
 function scanEpisodes(dir) {
-  return scanVideos(seriesInfo.originalDir(dir));
+  return scanVideos(seriesInfo.originalDir(dir)).filter((video) => video.size > 0);
 }
 
 /** 某个文件夹里（不含子文件夹）的视频，按集号（认不出的排最后）再按名称排序。 */
@@ -60,12 +60,23 @@ function scanVideos(dir) {
   });
 }
 
+function importedSeriesName(dir, episodes) {
+  const names = new Set();
+  for (const episode of episodes) {
+    const match = /^(.+?)\s*[-_—– ]*\s*第\s*\d{1,4}\s*集(?:_\d+)?\.[^.]+$/u.exec(episode.name);
+    const title = match?.[1].trim();
+    if (title) names.add(title);
+  }
+  return names.size === 1 ? names.values().next().value : path.basename(dir);
+}
+
 /** 一个文件夹的概况；既没有视频也没有封面的空文件夹返回 null（不当成一部剧）。 */
-function describeFolder(dir) {
+function describeFolder(dir, imported = false) {
+  const episodes = scanEpisodes(dir);
   let videos = 0;
   let totalSize = 0;
   let newest = 0;
-  for (const episode of scanEpisodes(dir)) {
+  for (const episode of episodes) {
     videos++;
     totalSize += episode.size;
     newest = Math.max(newest, episode.mtime);
@@ -85,7 +96,7 @@ function describeFolder(dir) {
     } catch (_) {}
   }
   return {
-    name: path.basename(dir),
+    name: imported ? importedSeriesName(dir, episodes) : path.basename(dir),
     path: dir,
     coverPath: cover,
     hasSynopsis: !!seriesInfo.readSynopsis(dir),
@@ -93,6 +104,46 @@ function describeFolder(dir) {
     totalSize,
     updatedAt: newest,
   };
+}
+
+function importDetails(dir, folder) {
+  const videos = scanVideos(seriesInfo.originalDir(dir));
+  const total = seriesInfo.readEpisodeCount(dir);
+  const warnings = [];
+  const seen = new Set();
+  const duplicates = new Set();
+  const withoutNumber = [];
+  const empty = [];
+  for (const video of videos) {
+    if (!video.size) empty.push(video.name);
+    else if (video.index == null) withoutNumber.push(video.name);
+    else if (seen.has(video.index)) duplicates.add(video.index);
+    else seen.add(video.index);
+  }
+  if (!folder?.coverPath) warnings.push('缺少海报。可以把海报.jpg 或海报.png 放进同一个文件夹。');
+  if (!folder?.hasSynopsis) warnings.push('未读到简介。请检查同一文件夹下有没有简介.txt，以及文件里有没有内容。');
+  if (!total) {
+    warnings.push(fs.existsSync(path.join(dir, '集数.txt'))
+      ? '集数.txt 没有有效的总集数。可写成「49」或「49集」。'
+      : '缺少集数.txt，无法核对声明的总集数。');
+  } else if (total !== folder?.videoCount) {
+    warnings.push(`集数.txt 标注 ${total} 集，实际识别到 ${folder?.videoCount || 0} 个非空视频。`);
+  }
+  if (seen.size) {
+    const last = Math.max(total, ...seen);
+    const missing = [];
+    for (let index = 1; index <= last; index++) {
+      if (seen.has(index)) continue;
+      const start = index;
+      while (index < last && !seen.has(index + 1)) index++;
+      missing.push(index === start ? String(start) : `${start}–${index}`);
+    }
+    if (missing.length) warnings.push(`按文件名未找到以下集号：${missing.join('、')}。`);
+  }
+  if (duplicates.size) warnings.push(`文件名中的集号重复：${[...duplicates].join('、')}。`);
+  if (withoutNumber.length) warnings.push(`${withoutNumber.length} 个视频未识别出集号：${withoutNumber.join('、')}。`);
+  if (empty.length) warnings.push(`${empty.length} 个视频是空文件：${empty.join('、')}。`);
+  return warnings;
 }
 
 /** 下载目录下的一级子文件夹，加上用户导入的文件夹；导入的排在前面，其余按最近更新排序。 */
@@ -105,7 +156,7 @@ function scanLibrary(root, imported = []) {
     let exists = false;
     try {
       exists = fs.statSync(key).isDirectory();
-      if (exists) info = describeFolder(key);
+      if (exists) info = describeFolder(key, isImported);
     } catch (_) {}
     // 导入的文件夹还在、只是暂时没有视频时保留在列表里；文件夹已经不存在就不显示（记录仍留着，盘接回来就恢复）。
     if (!info && isImported && exists)
@@ -120,13 +171,17 @@ function scanLibrary(root, imported = []) {
       };
     if (info) found.set(key, { ...info, imported: isImported });
   };
-  for (const dir of imported) add(dir, true);
+  for (const dir of [...imported].reverse()) add(dir, true);
   try {
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (entry.isDirectory() && !entry.name.startsWith('.')) add(path.join(root, entry.name), false);
     }
   } catch (_) {}
-  return [...found.values()].sort((a, b) => b.updatedAt - a.updatedAt || collator.compare(a.name, b.name));
+  return [...found.values()].sort((a, b) => {
+    if (a.imported !== b.imported) return a.imported ? -1 : 1;
+    if (a.imported) return 0;
+    return b.updatedAt - a.updatedAt || collator.compare(a.name, b.name);
+  });
 }
 
 /** 记录用户导入过哪些文件夹的小文件；只记路径，从不改动或删除这些文件夹里的东西。 */
@@ -148,7 +203,7 @@ function createFolderList(file) {
     add(dir) {
       const resolved = path.resolve(String(dir));
       const list = read();
-      if (!list.includes(resolved)) write([...list, resolved]);
+      if (list.at(-1) !== resolved) write([...list.filter((item) => item !== resolved), resolved]);
       return resolved;
     },
     remove(dir) {
@@ -196,6 +251,8 @@ module.exports = {
   parseEpisodeIndex,
   scanEpisodes,
   scanVideos,
+  importedSeriesName,
+  importDetails,
   describeFolder,
   scanLibrary,
   createFolderList,

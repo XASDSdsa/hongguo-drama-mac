@@ -3766,27 +3766,28 @@ function libraryFolderRecords() {
 
 function scanLibraryFolderRecords() {
   const linked = linkedSeriesEntries();
-  return seriesLibrary.scanLibrary(downloadRoot(), libraryFolders().list()).map((folder) => {
-    const entry = !folder.imported ? linked.get(folder.name.toLowerCase()) : null;
-    const { coverPath, ...rest } = folder;
-    return {
-      ...rest,
-      coverUrl: coverPath ? localAssetUrl(coverPath) : entry?.cover || '',
-      source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
-      seriesId: entry ? String(entry.series_id) : '',
-      totalEpisodes: entry ? Number(entry.total) || 0 : 0,
-      linked: !!entry,
-      // 最后处理时间：成品 / 分镜工程图 / 新海报 / 成本报告里最新的，和最近一次去重记录比，取晚的
-      processedAt: Math.max(seriesLayout.lastProcessedAt(folder.path), Number(libraryDedupRecord(folder.path)?.at) || 0),
-    };
-  });
+  return seriesLibrary.scanLibrary(downloadRoot(), libraryFolders().list()).map((folder) => libraryFolderRecord(folder, linked));
+}
+
+function libraryFolderRecord(folder, linked) {
+  const entry = !folder.imported ? linked.get(folder.name.toLowerCase()) : null;
+  const { coverPath, ...rest } = folder;
+  return {
+    ...rest,
+    coverUrl: coverPath ? localAssetUrl(coverPath) : entry?.cover || '',
+    source: entry ? seriesInfo.sourceLabel(entry.series_id) : '',
+    seriesId: entry ? String(entry.series_id) : '',
+    totalEpisodes: entry ? Number(entry.total) || 0 : folder.imported ? seriesInfo.readEpisodeCount(folder.path) : 0,
+    linked: !!entry,
+    processedAt: Math.max(seriesLayout.lastProcessedAt(folder.path), Number(libraryDedupRecord(folder.path)?.at) || 0),
+  };
 }
 
 ipcMain.handle('library-list', () => {
   try {
     let folders = libraryFolderRecords();
     // 打开管理剧集：每部剧整理成新结构、更新两个信息文件；挪了海报的重新扫一遍（海报位置变了）
-    if (folders.map((folder) => refreshSeriesFiles(folder.path)).some(Boolean)) folders = libraryFolderRecords();
+    if (folders.map((folder) => !folder.imported && refreshSeriesFiles(folder.path)).some(Boolean)) folders = libraryFolderRecords();
     return { success: true, root: downloadRoot(), folders };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
@@ -3911,8 +3912,10 @@ function libraryEpisodeDetail(dir) {
   if (!seriesLibrary.isLibraryFolder(dir, root, imported)) return { success: false, error: '这不是剧文件夹' };
   const folder = path.resolve(String(dir));
   const isImported = imported.some((item) => path.resolve(item) === folder);
-  if (!isImported) migrateSeriesOriginals(folder);
-  refreshSeriesFiles(folder);
+  if (!isImported) {
+    migrateSeriesOriginals(folder);
+    refreshSeriesFiles(folder);
+  }
   const entry = isImported ? null : linkedSeriesEntries().get(path.basename(folder).toLowerCase());
   const remote = new Map((entry?.episodes || []).map((episode) => [Number(episode.vid_index), episode]));
   const cover = seriesInfo.findCover(folder);
@@ -3924,19 +3927,20 @@ function libraryEpisodeDetail(dir) {
     cover: remote.get(episode.index)?.cover || '',
   }));
   const onDisk = new Set(episodes.map((episode) => episode.index).filter((index) => index !== null));
+  const declaredCount = isImported ? seriesInfo.readEpisodeCount(folder) : 0;
   const taskInfo = entry ? libraryTaskInfo(entry.series_id) : new Map();
   const missing = seriesGaps.classifyMissing({
     onDisk,
     remote: entry ? entry.episodes || [] : null,
     tasks: new Map([...taskInfo].map(([index, item]) => [index, item.state])),
     // 排队中、下载中、失败的集即使排在已下载的最后一集之后，也要在列表里看得到。
-    upTo: Math.max(0, ...onDisk, ...taskInfo.keys()),
+    upTo: Math.max(declaredCount, ...onDisk, ...taskInfo.keys()),
   });
   const confirmed = libraryGapNotes().get(folder);
   return {
     success: true,
     dir: folder,
-    name: path.basename(folder),
+    name: isImported ? seriesLibrary.importedSeriesName(folder, episodes) : path.basename(folder),
     imported: isImported,
     linked: !!entry,
     seriesId: entry ? String(entry.series_id) : '',
@@ -3991,10 +3995,22 @@ ipcMain.handle('library-refresh-remote', async (_event, dir) => {
 
 ipcMain.handle('library-import', async () => {
   try {
-    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-    if (result.canceled || !result.filePaths[0]) return { success: true, dir: null };
+    const result = await dialog.showOpenDialog(mainWindow, { title: '导入已有剧', properties: ['openDirectory'] });
+    if (result.canceled || !result.filePaths[0]) return { success: true, canceled: true };
+    const selected = path.resolve(result.filePaths[0]);
+    const candidate = path.basename(selected) === seriesInfo.ORIGINAL_DIR ? path.dirname(selected) : selected;
+    const list = libraryFolders();
+    const known = list.list().find((item) => quchongPathKey(item) === quchongPathKey(candidate));
+    const dir = known || candidate;
+    const linked = linkedSeriesEntries();
+    const imported = !!known || quchongPathKey(path.dirname(dir)) !== quchongPathKey(downloadRoot()) || !linked.has(path.basename(dir).toLowerCase());
+    const info = seriesLibrary.describeFolder(dir, imported);
+    const warnings = seriesLibrary.importDetails(dir, info);
+    if (!info?.videoCount) return { success: false, warnings, error: `导入失败：${dir} 里没有可导入的视频，请选各集 MP4 所在的文件夹。` };
+    const alreadyImported = !!known || !imported;
+    if (imported) list.add(dir);
     folderRecordsCache = null;
-    return { success: true, dir: libraryFolders().add(result.filePaths[0]) };
+    return { success: true, dir, folder: libraryFolderRecord({ ...info, imported }, linked), alreadyImported, warnings };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }
@@ -4603,7 +4619,12 @@ function normalizeSideTasks(value) {
       scope: normalizeDraftScope(draft.scope),
       prompts: draft.prompts === true,
     };
-  if (cost?.enabled) tasks.costReport = { enabled: true, ...normalizeCostRequest(cost) };
+  if (cost?.enabled) {
+    const request = normalizeCostRequest(cost);
+    const error = costTemplateError(request.templateId);
+    if (error) throw new Error(error);
+    tasks.costReport = { enabled: true, ...request };
+  }
   return Object.keys(tasks).length ? tasks : null;
 }
 
@@ -5847,7 +5868,7 @@ ipcMain.handle('library-cost-report', async (_event, payload = {}) => {
     return {
       success: true,
       title: seriesLayout.readNewInfo(dir).title || '',
-      template: costTemplateInfo(payload.templateId),
+      template: payload.templateId ? costTemplateInfo(payload.templateId) : { ready: false, id: '' },
       templates: costTemplates().list(),
       report: stat ? { name: seriesLayout.COST_REPORT, updatedAt: Math.round(stat.mtimeMs) } : null,
       price: { model, mode, checked, source, fps },
@@ -5917,6 +5938,27 @@ ipcMain.handle('cost-report-template-list', () => {
   catch (error) { return { success: false, error: error?.message || String(error) }; }
 });
 
+ipcMain.handle('cost-report-template-rename', async (_event, payload = {}) => {
+  try {
+    const templates = costTemplates();
+    await templates.rename(String(payload.id || ''), payload.name);
+    return { success: true, templates: templates.list() };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('cost-report-template-open', async (_event, id) => {
+  try {
+    const error = costTemplateError(id);
+    if (error) return { success: false, error };
+    const opened = await shell.openPath(costTemplateFile(id));
+    return opened ? { success: false, error: '无法打开模板。请检查系统是否安装了能查看 DOCX 的应用。' } : { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
 /** 选报告模板（用户自己的 docx，有公章和签名）：核对能填，再复制到本机的用户数据目录。 */
 ipcMain.handle('cost-report-template-pick', async (event) => {
   try {
@@ -5944,16 +5986,22 @@ function normalizeCostRequest(value = {}) {
     title: String(value.title || '')
       .trim()
       .slice(0, 200),
-    templateId: String(value.templateId || costTemplateInfo().id || ''),
+    templateId: String(value.templateId || '').trim(),
     actorPercent: costPricing.normalizeActorPercent(value.actorPercent),
     draws: costPricing.normalizeDraws(value.draws || costPricing.DEFAULT_DRAWS),
   };
 }
 
+function costTemplateError(id) {
+  if (!id) return '请先在「报告设置」中选择成本配置报告模板';
+  return costTemplateInfo(id).ready ? '' : '所选报告模板不存在，请在「报告设置」中重新选择';
+}
+
 /** 生成报告：放在剧文件夹根目录，已经有就换成新的。 */
 async function makeCostReport(dir, request = {}) {
   const payload = normalizeCostRequest(request);
-  if (!costTemplateInfo(payload.templateId).ready) return { success: false, error: '所选报告模板不存在，请在「报告设置」中选择模板' };
+  const templateError = costTemplateError(payload.templateId);
+  if (templateError) return { success: false, error: templateError };
   // Capture the submitted template before any asynchronous media analysis.
   const templateBuffer = await fsp.readFile(costTemplateFile(payload.templateId));
   const title = payload.title || seriesLayout.readNewInfo(dir).title;
@@ -5996,8 +6044,11 @@ async function runCostReportTask(dir, task) {
         'side',
       );
     else libLog(dir, 'error', `成本配置报告：没有生成：${made.error}`, 'side');
+    return made;
   } catch (error) {
-    libLog(dir, 'error', `成本配置报告：没有生成：${error?.message || error}`, 'side');
+    const message = error?.message || String(error);
+    libLog(dir, 'error', `成本配置报告：没有生成：${message}`, 'side');
+    return { success: false, error: message };
   } finally {
     activeCostReports--;
   }
@@ -6076,8 +6127,8 @@ ipcMain.handle('library-dedup', async (_event, payload = {}) => {
       const side = normalizeSideTasks(payload.sideTasks);
       const draft = side?.jianyingDraft;
       if (!draft && !side?.costReport) return { success: false, error: '请至少勾选一项要做的事' };
-      if (side?.costReport) await runCostReportTask(dir, side.costReport);
-      if (!draft) return { success: true, costOnly: true };
+      const report = side?.costReport ? await runCostReportTask(dir, side.costReport) : null;
+      if (!draft) return report?.success ? { success: true, costOnly: true } : report;
       const started = await startLibraryDrafts({
         dir,
         files: libraryDedupOutputs(dir),

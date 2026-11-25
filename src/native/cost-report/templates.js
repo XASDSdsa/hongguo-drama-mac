@@ -58,6 +58,23 @@ function createTemplateStore(userData, checkTemplate) {
     }
     return prepared.map(({ buffer, ...item }) => ({ ...item, ready: true }));
   }
-  return { list, info, file, add };
+  async function rename(id, value) {
+    if (!id) throw new Error('请先选择要改名的报告模板');
+    const target = `${file(id)}.json`;
+    const current = info(id);
+    const name = typeof value === 'string' ? value.trim() : '';
+    if (!name || name.length > 80 || /[\u0000-\u001f\\/]/.test(name)) {
+      throw new Error('请输入 1–80 字的模板名称，名称里不能有斜杠或换行');
+    }
+    const pending = `${target}.${randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(pending, JSON.stringify({ name, importedAt: current.importedAt }), { flag: 'wx' });
+      await fsp.rename(pending, target);
+    } finally {
+      await fsp.rm(pending, { force: true }).catch(() => {});
+    }
+    return { ...current, name };
+  }
+  return { list, info, file, add, rename };
 }
 module.exports = { createTemplateStore };

@@ -309,7 +309,7 @@ const template = writeZip([
   assert.ok(storyboard > 0 && item > storyboard, '成本配置报告在分镜工程图下面');
   const pageItem = detail.slice(item - 600, detail.indexOf('{costOpen && (', item));
   assert.match(pageItem, /<input\s+type="checkbox"\s+checked=\{costOn\}/, '一个勾选框');
-  assert.match(pageItem, /onClick=\{\(\) => setCostOpen\(true\)\}>\s*报告设置/, '旁边点「报告设置」弹窗');
+  assert.match(pageItem, /onClick=\{\(\) => setCostOpen\('settings'\)\}>\s*报告设置/, '旁边点「报告设置」弹窗');
   assert.match(pageItem, /onClick=\{openCostReport\}\s*disabled=\{!costFile\?\.exists\}[\s\S]*查看报告/, '旁边一个「查看报告」，生成过才能点');
   assert.match(detail, /libraryCostReportFile\?\.\(\{ dir: detail\.dir \}\)/, '打开这部剧、日志有新内容时看报告在不在');
   assert.match(detail, /const costRefresh = `\$\{detail\?\.dir \|\| ''\}\|\$\{activity\?\.logs\?\.length \|\| 0\}/);
@@ -345,14 +345,14 @@ const template = writeZip([
   assert.match(main, /name: path\.basename\(files\[index\]\)/, '抽卡次数按文件名定');
   assert.match(
     main,
-    /if \(cost\?\.enabled\) tasks\.costReport = \{ enabled: true, \.\.\.normalizeCostRequest\(cost\) \};/,
+    /if \(cost\?\.enabled\) \{[\s\S]*?costTemplateError\(request\.templateId\);[\s\S]*?if \(error\) throw new Error\(error\);[\s\S]*?tasks\.costReport = \{ enabled: true, \.\.\.request \};/,
   );
   assert.match(
     main,
     /if \(costTask\?\.enabled && batch\.libraryDir && !batch\.cancelled\) \{[\s\S]{0,400}runCostReportTask\(batch\.libraryDir, costTask\);/,
   );
   assert.match(main, /报告按「去重」里现有的成品算/, '这一批有没做成的集要提醒');
-  assert.match(main, /if \(side\?\.costReport\) await runCostReportTask\(dir, side\.costReport\);/);
+  assert.match(main, /const report = side\?\.costReport \? await runCostReportTask\(dir, side\.costReport\) : null;/);
   assert.match(main, /成本配置报告：已生成/);
   console.log('PASS cost report wiring: template stays on this computer, IPC + UI under the storyboard section');
 }
@@ -378,6 +378,11 @@ const template = writeZip([
     assert.ok(fs.readFileSync(store.file(added[1].id)).equals(different));
     const reopened = createTemplateStore(path.join(dir, 'userdata'), checkTemplate);
     assert.equal(reopened.info(added[1].id).name, '模板二.docx');
+    await reopened.rename(added[1].id, '   公司乙 · 送审版  ');
+    assert.equal(store.info(added[1].id).name, '公司乙 · 送审版');
+    assert.ok(fs.readFileSync(store.file(added[1].id)).equals(different));
+    await assert.rejects(() => store.rename('', '不会改到第一份'), /先选择/);
+    await assert.rejects(() => store.rename(added[1].id, ' '), /请输入/);
     const bad = path.join(dir, '无效.docx'); fs.writeFileSync(bad, 'not a template');
     await assert.rejects(() => store.add([first, bad]));
     assert.equal(store.list().length, 2, 'invalid batch must not import partial templates');
@@ -394,10 +399,12 @@ const template = writeZip([
     const context = { fs, fsp: fs.promises, costTemplateInfo: id => store.info(id || activeId), costTemplateFile: id => store.file(id),
       costPricing: pricing, costDocx: {fillCostReport}, seriesLayout: { readNewInfo: () => ({title:'多模板测试'}), COST_REPORT:'report.docx'},
       costSummary: async () => { activeId = added[1].id; return summary; }, costReportFile: () => generated };
-    const make = vm.runInNewContext(extract('normalizeCostRequest')+'\n'+extract('makeCostReport')+'\nmakeCostReport', context);
+    const make = vm.runInNewContext(extract('normalizeCostRequest')+'\n'+extract('costTemplateError')+'\n'+extract('makeCostReport')+'\nmakeCostReport', context);
     const queued = vm.runInNewContext(extract('normalizeCostRequest')+'\nnormalizeCostRequest', context)({});
-    assert.equal(queued.templateId, added[0].id);
-    for (const [id, expected] of [[queued.templateId, seal], [added[1].id, Buffer.from('second-template-seal')]]) {
+    assert.equal(queued.templateId, '');
+    assert.match((await make(dir, { title: '多模板测试' })).error, /先.*选择/);
+    assert.ok(!fs.existsSync(generated));
+    for (const [id, expected] of [[added[0].id, seal], [added[1].id, Buffer.from('second-template-seal')]]) {
       assert.equal((await make(dir, {templateId:id,title:'多模板测试'})).success, true);
       assert.ok(readZip(fs.readFileSync(generated)).find(item => item.name === 'word/media/image2.png').data.equals(expected), 'report must use the submitted template assets');
     }

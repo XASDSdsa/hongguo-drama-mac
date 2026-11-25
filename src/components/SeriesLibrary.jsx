@@ -43,6 +43,11 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
   const [root, setRoot] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [importWarnings, setImportWarnings] = useState([]);
+  const importRequest = useRef(false);
+  const folderRevision = useRef(0);
   const [retryingDownloads, setRetryingDownloads] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState('');
   const retryRequest = useRef(false);
@@ -55,16 +60,20 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
 
   // quiet：后台自动刷新时不转圈、不清掉错误提示，免得列表一闪一闪。
   const load = useCallback(async ({ quiet = false } = {}) => {
+    const revision = folderRevision.current;
     if (!quiet) {
       setLoading(true);
       setError('');
     }
     try {
       const result = await window.electronAPI.libraryList();
+      if (revision !== folderRevision.current) return;
       if (result?.success) {
         setFolders(result.folders);
         setRoot(result.root);
       } else if (!quiet) setError(result?.error || '读取失败');
+    } catch (error) {
+      if (!quiet && revision === folderRevision.current) setError(error?.message || '读取失败');
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -157,19 +166,46 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
   };
 
   const importFolder = async () => {
-    const result = await window.electronAPI.libraryImport();
-    if (!result?.success) return setError(result?.error || '导入失败');
-    if (result.dir) load();
+    if (importRequest.current) return;
+    importRequest.current = true;
+    setImporting(true);
+    setError('');
+    try {
+      const result = await window.electronAPI.libraryImport();
+      if (result?.canceled) return;
+      setImportWarnings(result?.warnings || []);
+      if (!result?.success) throw new Error(result?.error || '导入失败');
+      if (!result.folder) throw new Error('未找到导入的剧集');
+      const { folder, alreadyImported } = result;
+      folderRevision.current++;
+      setFolders((items) => [folder, ...items.filter((item) => item.path !== folder.path)]);
+      setImportResult({ folder, alreadyImported });
+      setQuery('');
+      setPage(1);
+      load({ quiet: true });
+    } catch (error) {
+      setImportResult(null);
+      setError(error?.message || '导入失败');
+    } finally {
+      importRequest.current = false;
+      setImporting(false);
+    }
   };
   const removeImported = async (folder, event) => {
     event.stopPropagation();
     await window.electronAPI.libraryRemoveImport(folder.path);
+    if (importResult?.folder.path === folder.path) {
+      setImportResult(null);
+      setImportWarnings([]);
+    }
     load();
   };
   const shown = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    return keyword ? folders.filter((folder) => folder.name.toLowerCase().includes(keyword)) : folders;
-  }, [folders, query]);
+    const matches = keyword ? folders.filter((folder) => folder.name.toLowerCase().includes(keyword)) : folders;
+    const first = matches.find((item) => item.path === importResult?.folder.path);
+    return first ? [first, ...matches.filter((item) => item !== first)] : matches;
+  }, [folders, query, importResult]);
   const currentPage = clampPage(page, shown.length, pageSize);
   const visible = slicePage(shown, currentPage, pageSize);
   useEffect(() => {
@@ -195,8 +231,9 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
             <RefreshCw size={14} className={retryingDownloads ? 'spin' : ''} />
             {retryingDownloads ? '正在提交…' : '一键重下失败集'}
           </button>
-          <button className="btn" onClick={importFolder}>
-            <FolderPlus size={14} /> 导入已有剧
+          <button className="btn" onClick={importFolder} disabled={importing}>
+            {importing ? <RefreshCw size={14} className="spin" /> : <FolderPlus size={14} />}
+            {importing ? '正在导入…' : '导入已有剧'}
           </button>
           <button className="btn" onClick={() => load()} disabled={loading}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} /> 刷新
@@ -204,7 +241,22 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
         </div>
       </header>
 
-      {error && <p className="lib-error">{error}</p>}
+      {error && <p className="lib-error" role="alert">{error}</p>}
+      {importResult && (
+        <div className="lib-import-result">
+          <div role="status">
+            <strong>{importResult.alreadyImported ? '已在剧集管理中' : '已导入'} · {importResult.folder.name}（{importResult.folder.videoCount} 集）</strong>
+            <p className="lib-root">{importResult.folder.path}</p>
+          </div>
+          <button className="btn btn-sm" onClick={() => setCurrent(importResult.folder)}>打开这部剧</button>
+        </div>
+      )}
+      {importWarnings.length > 0 && (
+        <div className="lib-import-warnings" role="status">
+          <strong>导入检查</strong>
+          <ul>{importWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+        </div>
+      )}
       {downloadNotice && <p role="status">{downloadNotice}</p>}
 
       <TaskOverview data={overview} onOpen={openByDir} onDismissJob={dismissJob} />
@@ -271,7 +323,7 @@ export default function SeriesLibrary({ active = true, onNavigate, target = null
             <div className="lib-title">{folder.name}</div>
             <div className="lib-sub">
               {folder.imported ? '导入的文件夹' : folder.source || '下载目录'}
-              {folder.totalEpisodes > 0 && ` · 已下 ${folder.videoCount}/${folder.totalEpisodes}`}
+              {folder.totalEpisodes > 0 && ` · ${folder.imported ? '现有' : '已下'} ${folder.videoCount}/${folder.totalEpisodes}`}
               {folder.hasSynopsis && ' · 有简介'}
             </div>
             <div

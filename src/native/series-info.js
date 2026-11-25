@@ -57,12 +57,30 @@ function seriesDirOf(file) {
 
 /** 剧文件夹里已有的原剧海报（原剧集海报.*；以前的 封面.* 也认），没有返回 null。 */
 function findCover(dir) {
-  return layout.findOriginalPoster(dir);
+  const original = layout.findOriginalPoster(dir);
+  if (original) return original;
+  for (const ext of COVER_EXTENSIONS) {
+    const file = path.join(dir, `海报${ext}`);
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch (_) {}
+  }
+  return null;
 }
 
 /** 读原剧简介（原剧集信息.txt 里的；以前的 简介.txt 也认）；没有返回空字符串。 */
 function readSynopsis(dir) {
   return layout.readOriginalSynopsis(dir);
+}
+
+function readEpisodeCount(dir) {
+  try {
+    const text = fs.readFileSync(path.join(dir, '集数.txt'), 'utf8').trim();
+    const match = /^(?:(?:总?集数)\s*[：:]\s*|共\s*)?(\d{1,4})\s*集?$/.exec(text);
+    return match ? Number(match[1]) : 0;
+  } catch (_) {
+    return 0;
+  }
 }
 
 /** 先写临时文件，再用“不覆盖”的方式放到目标位置；中途失败不会留下半截文件。 */
@@ -154,6 +172,7 @@ module.exports = {
   sniffImageExtension,
   findCover,
   readSynopsis,
+  readEpisodeCount,
   saveSeriesInfo,
   pickFolderName,
 };

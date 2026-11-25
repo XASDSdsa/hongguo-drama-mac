@@ -893,8 +893,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '视频去重固定最高档，成品画面时长至少 60 秒。重新拆分会合并短尾段，素材不足时提示补充。'
-      UPDATE_CHECK_SCOPE: dedup-delivery-and-update
+      UPDATE_RELEASE_NOTES: '剧集管理将最近导入的剧集排在前面，并详细提示缺失的文件或集数。成本配置报告模板支持命名与查看，生成前确认所用模板。'
+      UPDATE_CHECK_SCOPE: license-protection-and-update
     steps:
       - uses: actions/checkout@v5
         with:
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 45635422573
+          run-id: 45649521737
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Extract the hash-pinned upstream SDK component only
@@ -941,7 +941,7 @@ jobs:
           $sha = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLower()
           @{sha256=$sha;upstream='jackotom/hongguo-drama v8.3';license='GPL-3.0-only'} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM src/native/sdk-bin/win32-x64.bin.json
           Write-Output "Verified SDK component: $($helper.Length) bytes, SHA256 $sha"
-      - name: Build strongest-tier dedup application patch
+      - name: Build the verified application patch
         shell: pwsh
         run: |
           git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
@@ -972,35 +972,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Prepare the accepted Windows FFmpeg for dedup verification
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ffDir = Join-Path $env:RUNNER_TEMP 'download-verification-ffmpeg'
-          New-Item -ItemType Directory -Path $ffDir -Force | Out-Null
-          gh release download v1.2.6 --repo '${{ github.repository }}' --pattern 'ffmpeg-*-win-x64.zip' --dir $ffDir
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $zip = Get-ChildItem $ffDir -Filter '*.zip' | Select-Object -First 1
-          & 7z x -y -bd $zip.FullName "-o$ffDir" | Out-Null
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $ff = Get-ChildItem $ffDir -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          $probe = Get-ChildItem $ffDir -Recurse -Filter ffprobe.exe | Select-Object -First 1
-          if (!$ff -or !$probe) { throw 'The accepted FFmpeg archive must include both ffmpeg and ffprobe' }
-          "FFMPEG_PATH=$($ff.FullName)" >> $env:GITHUB_ENV
-          "FFPROBE_PATH=$($probe.FullName)" >> $env:GITHUB_ENV
-          $ff.DirectoryName >> $env:GITHUB_PATH
-          $probe.DirectoryName >> $env:GITHUB_PATH
-      - name: Check 60-second Windows delivery and upgrade from 1.2.62
+      - name: Check imports, report templates and upgrade from 1.2.63
         shell: pwsh
         run: |
-          node scripts/check-dedup-defaults.cjs
+          node scripts/check-series-library.cjs 'flat MP4'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-dedup-timestamps.cjs
+          node scripts/check-cost-report.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-resplit.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-dedup-delivery.cjs
+          node src/components/check-ui-state.cjs 'recent imports|cost report templates'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

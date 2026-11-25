@@ -26,6 +26,31 @@
   color: var(--primary);
   margin-bottom: 12px;
 }
+.lib-import-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+.lib-import-result .lib-root {
+  display: block;
+  margin-bottom: 0;
+}
+.lib-import-warnings {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.lib-import-warnings ul {
+  margin: 5px 0 0;
+  padding-left: 22px;
+}
 .lib-empty {
   color: var(--text-secondary);
   padding: 28px 0;

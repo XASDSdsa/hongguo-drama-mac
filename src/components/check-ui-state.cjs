@@ -802,6 +802,32 @@ function mount(file, api, props = {}, options = {}) {
     const detailSource = fs.readFileSync(`${__dirname}/SeriesDetail.jsx`, 'utf8');
     assert.ok(!detailSource.includes('/> 返回剧集列表') && !/onBack/.test(detailSource), 'no back button inside the page');
   });
+  await test('recent imports lead the list and report success and missing files', async () => {
+    const original = { path: '/library/其他剧', name: '其他剧', videoCount: 10 };
+    const current = { path: '/import/成品目录', name: '新导入的短剧', imported: true, videoCount: 2, totalEpisodes: 3 };
+    let folders = [original];
+    const pending = deferred();
+    const ui = mount('SeriesLibrary', {
+      libraryList: async () => ({ success: true, folders, root: '/library' }),
+      libraryImport: () => pending.promise,
+    });
+    await ui.flush();
+    ui.find((node) => node.props['aria-label'] === '按剧名搜索').props.onChange({ target: { value: '其他剧' } });
+    const submitted = ui.button('导入已有剧').props.onClick();
+    ui.render();
+    assert.equal(ui.button('正在导入…').props.disabled, true);
+    folders = [original, current];
+    pending.resolve({ success: true, folder: current, warnings: ['缺少海报。', '按文件名未找到以下集号：2。'] });
+    await submitted;
+    await ui.flush();
+    assert.equal(ui.find((node) => node.props.className === 'lib-card').props.title, current.path);
+    assert.equal(ui.find((node) => node.props['aria-label'] === '按剧名搜索').props.value, '');
+    for (const segment of ['已导入', current.path, '缺少海报', '集号：2']) assert.ok(ui.text().includes(segment));
+    ui.button('打开这部剧').props.onClick();
+    await ui.flush();
+    assert.ok(ui.find((node) => node.props.folder?.path === current.path));
+    ui.unmount();
+  });
   await test('one-click retry submits only failed downloads and blocks duplicate clicks', async () => {
     const pending = deferred();
     const calls = [];
@@ -868,16 +894,16 @@ function mount(file, api, props = {}, options = {}) {
     };
     const select = ui => ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
     let ui=await open('/series-a');
-    assert.equal(select(ui).props.value,'legacy');
+    assert.equal(select(ui).props.value,'');
     await ui.button('添加模板').props.onClick();await ui.flush();ui.advanceTimers(200);await ui.flush();
-    assert.equal(select(ui).props.value,'first');
+    assert.equal(select(ui).props.value,'');
     select(ui).props.onChange({target:{value:'second'}});await ui.flush();
     ui.button('确定').props.onClick();ui.unmount();
     ui=await open('/series-a');assert.equal(select(ui).props.value,'second');
     canceled=true;await ui.button('添加模板').props.onClick();await ui.flush();assert.equal(select(ui).props.value,'second');
     select(ui).props.onChange({target:{value:'first'}});await ui.flush();ui.button('取消').props.onClick();ui.unmount();
     ui=await open('/series-a');assert.equal(select(ui).props.value,'second');ui.unmount();
-    ui=await open('/series-b');assert.equal(select(ui).props.value,'legacy');ui.unmount();
+    ui=await open('/series-b');assert.equal(select(ui).props.value,'');ui.unmount();
   });
   await test('cost report templates: import errors survive refresh and successful options appear immediately', async () => {
     const legacy = {id:'legacy',name:'原模板.docx',ready:true};
@@ -902,9 +928,45 @@ function mount(file, api, props = {}, options = {}) {
     assert.equal(ui.button('添加模板').props.disabled,false);
     mode='success';await ui.button('添加模板').props.onClick();await ui.flush();
     const select=ui.find(n=>n.type==='select' && n.props['aria-label']==='选择报告模板');
-    assert.equal(select.props.value,'added');
+    assert.equal(select.props.value,'');
     assert.ok(ui.find(n=>n.type==='option' && n.props.value==='added'),'new option appears without a cost refresh');
     assert.ok(ui.text().includes('已添加'));
+    ui.unmount();
+  });
+  await test('cost report templates: explicit choice, name and view before generating', async () => {
+    const values = new Map();
+    const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+    let templates = [{ id: 'first', name: '原始模板.docx', ready: true }];
+    let opened = '';
+    let confirmed = 0;
+    const api = {
+      libraryCostReport: async () => ({ success: false, error: '统计暂不可用' }),
+      costReportTemplateList: async () => ({ success: true, templates }),
+      costReportTemplateOpen: async (id) => { opened = id; return { success: true }; },
+      costReportTemplateRename: async ({ id, name }) => {
+        templates = templates.map((item) => item.id === id ? { ...item, name } : item);
+        return { success: true, templates };
+      },
+    };
+    const ui = mount('SeriesDetail', api, { dir: '/series', onClose() {}, onConfirm() { confirmed++; } }, { component: 'CostReportDialog', storage });
+    await ui.flush();
+    assert.equal(ui.button('确定并继续').props.disabled, true);
+    assert.equal(ui.button('查看模板').props.disabled, true);
+    ui.find((node) => node.props['aria-label'] === '选择报告模板').props.onChange({ target: { value: 'first' } });
+    await ui.flush();
+    await ui.button('查看模板').props.onClick();
+    assert.equal(opened, 'first');
+    ui.button('重命名').props.onClick();
+    await ui.flush();
+    ui.find((node) => node.props['aria-label'] === '模板名称').props.onChange({ target: { value: '本剧送审版' } });
+    await ui.flush();
+    await ui.button('保存名称').props.onClick();
+    await ui.flush();
+    assert.ok(ui.text().includes('本剧送审版'));
+    assert.equal(ui.button('确定并继续').props.disabled, false);
+    ui.button('确定并继续').props.onClick();
+    assert.equal(confirmed, 1);
+    assert.equal(JSON.parse(values.get('cost-report-v1'))['/series'].templateId, 'first');
     ui.unmount();
   });
   await test('cost report templates: selection remains available when cost calculation fails', async () => {

@@ -15,7 +15,7 @@ const touch = (file, size = 2048) => {
   fs.writeFileSync(file, Buffer.alloc(size, 1));
 };
 
-function makeMain(root, userData, registry) {
+function makeMain(root, userData, registry, pickFolder = () => null) {
   fs.mkdirSync(userData, { recursive: true });
   const file = path.resolve(__dirname, '../main.js'),
     req = createRequire(file),
@@ -32,7 +32,10 @@ function makeMain(root, userData, registry) {
     app,
     ipcMain: { handle: (name, fn) => (handlers[name] = fn) },
     protocol: { registerSchemesAsPrivileged() {} },
-    dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+    dialog: { showOpenDialog: async () => {
+      const folder = pickFolder();
+      return { canceled: !folder, filePaths: folder ? [folder] : [] };
+    } },
   };
   const context = vm.createContext({
     require: (n) =>
@@ -95,6 +98,7 @@ const realEpisode = (file) =>
 const deq = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
 let failures = 0;
 async function check(name, fn) {
+  if (process.argv[2] && !new RegExp(process.argv[2]).test(name)) return;
   try {
     await fn();
     console.log('PASS ' + name);
@@ -202,6 +206,54 @@ async function check(name, fn) {
     assert.equal(lib.isLibraryFolder(path.join(root, '剧甲', '去重'), root, imported), false);
     assert.equal(lib.isLibraryFolder(path.join(tmp, 'elsewhere'), root, imported), false);
     assert.equal(lib.isLibraryFolder('', root, imported), false);
+  });
+
+  await check('flat MP4 import reports exact metadata and keeps the newest import first', async () => {
+    const root = path.join(tmp, 'downloads-import'), userData = path.join(tmp, 'import-data');
+    const packageDir = path.join(tmp, '成品目录');
+    const another = path.join(tmp, '别的一部');
+    const empty = path.join(tmp, '空成品');
+    const show = '单亲妈妈身边的搬运工竟是董事长';
+    const first = `${show}-第1集.mp4`, third = `${show}-第3集.mp4`;
+    touch(path.join(packageDir, first));
+    touch(path.join(packageDir, third));
+    touch(path.join(packageDir, `${show}-第2集.mp4`), 0);
+    touch(path.join(packageDir, '海报.jpg'));
+    fs.writeFileSync(path.join(packageDir, '集数.txt'), '3集\r\n');
+    fs.writeFileSync(path.join(packageDir, '简介.txt'), '这里是用户自己的简介。');
+    touch(path.join(another, '1.mp4'));
+    touch(path.join(empty, '1.mp4'), 0);
+    let selected = another;
+    const { handlers } = makeMain(root, userData, [], () => selected);
+    const other = await handlers['library-import']({});
+    assert.equal(other.success, true);
+    assert.equal(other.warnings.length, 3);
+    selected = packageDir;
+    const imported = await handlers['library-import']({});
+    assert.equal(imported.success, true);
+    assert.equal(imported.folder.name, show);
+    assert.equal(imported.folder.videoCount, 2);
+    assert.equal(imported.folder.totalEpisodes, 3);
+    assert.ok(imported.folder.coverUrl);
+    assert.ok(imported.warnings.some((warning) => warning.includes('实际识别到 2')));
+    assert.ok(imported.warnings.some((warning) => warning.includes('集号：2')));
+    assert.ok(imported.warnings.some((warning) => warning.includes('空文件')));
+    assert.equal((await handlers['library-list']({})).folders[0].path, packageDir);
+    const opened = await handlers['library-episodes']({}, packageDir);
+    assert.equal(opened.synopsis, '这里是用户自己的简介。');
+    deq(opened.episodes.map((item) => item.name), [first, third]);
+    assert.ok(fs.existsSync(path.join(packageDir, '简介.txt')));
+    assert.ok(fs.existsSync(path.join(packageDir, '海报.jpg')));
+    selected = another;
+    assert.equal((await handlers['library-import']({})).alreadyImported, true);
+    assert.equal((await handlers['library-list']({})).folders[0].path, another);
+    selected = empty;
+    const failed = await handlers['library-import']({});
+    assert.equal(failed.success, false);
+    assert.match(failed.error, /没有可导入的视频/);
+    assert.ok(failed.warnings.some((warning) => warning.includes('空文件')));
+    selected = null;
+    assert.equal((await handlers['library-import']({})).canceled, true);
   });
 
   await check('main: list, episodes and dedup go through the real IPC handlers', async () => {

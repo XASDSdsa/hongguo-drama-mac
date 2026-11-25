@@ -300,7 +300,7 @@ const costRequest = (settings) => ({
  * 「报告设置」弹窗：只管设置——剧名、抽卡次数、演员片酬占比、报告模板；下面按现在「去重」里的成品估一下数，方便对照。
  * 报告不在这里生成：勾上「成本配置报告」后点「开始处理」，处理完自动生成。改的东西点「确定」才记住，「取消」/ Esc 不改。
  */
-function CostReportDialog({ dir, refreshKey, onClose }) {
+function CostReportDialog({ dir, refreshKey, onClose, onConfirm }) {
   const [settings, setSettings] = useState(() => readCostSettings(dir));
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState('');
@@ -308,6 +308,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
   const [templateOptions, setTemplateOptions] = useState(null);
   const [templateError, setTemplateError] = useState('');
   const [templateNotice, setTemplateNotice] = useState('');
+  const [templateName, setTemplateName] = useState(null);
   const templateRevision = useRef(0);
   const templatePickPending = useRef(false);
   const request = costRequest(settings);
@@ -324,7 +325,6 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
           if (result?.success) {
             setInfo(result);
             if (revision === templateRevision.current) setTemplateOptions(result.templates || (result.template?.ready ? [result.template] : []));
-            setSettings(current => current.templateId || !result.template?.ready ? current : { ...current, templateId: result.template.id });
             setError('');
           } else setError(result?.error || '算不出来');
         })
@@ -347,7 +347,6 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
       if (!Array.isArray(result?.templates)) return;
       templateRevision.current++;
       setTemplateOptions(result.templates);
-      setSettings(value => value.templateId || !result.templates.length ? value : { ...value, templateId: result.templates[0].id });
     }).catch(error => { if (alive) setTemplateError(error?.message || '无法读取模板列表'); });
     return () => { alive = false; };
   }, [dir]);
@@ -369,8 +368,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
       if (!result.template?.id) throw new Error('没有添加任何模板，请重新选择 DOCX 文件');
       templateRevision.current++;
       setTemplateOptions(result.templates || result.added || [result.template]);
-      setSettings(value => ({ ...value, templateId: result.template.id }));
-      setTemplateNotice(`已添加 ${result.added?.length || 1} 份模板，已选中「${result.template.name || '新模板'}」`);
+      setTemplateNotice(`已添加 ${result.added?.length || 1} 份模板，请选择本次要用的一份`);
     } catch (error) {
       setTemplateError(error?.message || '模板导入失败，请重试');
     } finally {
@@ -379,8 +377,34 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
     }
   };
 
-  const selectedTemplateId = settings.templateId || info?.template?.id || '';
+  const selectedTemplateId = settings.templateId;
   const availableTemplates = templateOptions || info?.templates || (info?.template?.ready ? [info.template] : []);
+  const selectedTemplate = availableTemplates.find((item) => item.id === selectedTemplateId);
+  const viewTemplate = async () => {
+    setTemplateError('');
+    try {
+      const result = await window.electronAPI.costReportTemplateOpen(selectedTemplateId);
+      if (!result?.success) throw new Error(result?.error || '打不开报告模板');
+    } catch (error) {
+      setTemplateError(error?.message || '打不开报告模板');
+    }
+  };
+  const renameTemplate = async () => {
+    setBusy('rename');
+    setTemplateError('');
+    try {
+      const result = await window.electronAPI.costReportTemplateRename({ id: selectedTemplateId, name: templateName });
+      if (!result?.success) throw new Error(result?.error || '模板改名失败');
+      templateRevision.current++;
+      setTemplateOptions(result.templates);
+      setTemplateName(null);
+      setTemplateNotice('已保存模板名称');
+    } catch (error) {
+      setTemplateError(error?.message || '模板改名失败');
+    } finally {
+      setBusy('');
+    }
+  };
   const cost = info?.cost;
   return (
     <div className="lib-mask lib-mask-top" onClick={onClose}>
@@ -400,6 +424,7 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
         <p className="cost-lead">
           勾选「成本配置报告」并点击「开始处理」后，报告会保存到剧集文件夹。报告总投资额按原剧集数填写，AI 生成费用按去重成品估算。
         </p>
+        {onConfirm && <p className="cost-sub" role="status">请先选择一份报告模板，再继续生成。</p>}
         {!info && !error && <p className="cost-sub">正在算…</p>}
         {info && (
           <dl className="cost-grid">
@@ -518,11 +543,15 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
                   className="input-field"
                   aria-label="选择报告模板"
                   value={selectedTemplateId}
-                  onChange={set('templateId')}
+                  onChange={(event) => {
+                    set('templateId')(event);
+                    setTemplateName(null);
+                    setTemplateError('');
+                  }}
                   disabled={!!busy || !availableTemplates.length}
                 >
-                  {!selectedTemplateId && <option value="">请先添加模板</option>}
-                  {selectedTemplateId && !availableTemplates.some(item => item.id === selectedTemplateId) && (
+                  <option value="" disabled>{availableTemplates.length ? '请选择模板' : '请先添加模板'}</option>
+                  {selectedTemplateId && !selectedTemplate && (
                     <option value={selectedTemplateId}>所选模板已不存在，请重新选择</option>
                   )}
                   {availableTemplates.map((item, index) => (
@@ -531,10 +560,39 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
                     </option>
                   ))}
                 </select>
+                <button type="button" className="btn btn-sm" onClick={viewTemplate} disabled={!!busy || !selectedTemplate}>
+                  查看模板
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setTemplateName(selectedTemplate.name)}
+                  disabled={!!busy || !selectedTemplate}
+                >
+                  重命名
+                </button>
                 <button type="button" className="btn btn-sm" onClick={pickTemplate} disabled={!!busy}>
                   {busy === 'template' ? '正在添加…' : '添加模板'}
                 </button>
               </span>
+              {templateName !== null && (
+                <div className="cost-inline">
+                  <input
+                    className="input-field"
+                    aria-label="模板名称"
+                    value={templateName}
+                    onChange={(event) => setTemplateName(event.target.value)}
+                    maxLength={80}
+                    disabled={!!busy}
+                  />
+                  <button type="button" className="btn btn-sm" onClick={renameTemplate} disabled={!!busy || !templateName.trim()}>
+                    保存名称
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => setTemplateName(null)} disabled={!!busy}>
+                    取消改名
+                  </button>
+                </div>
+              )}
               <span className="cost-sub">可添加多份 Word 模板，保存在本机；这部剧使用上面选中的一份。点「确定」保存选择。</span>
               {templateError && <p className="sb-card-error" role="alert">{templateError}</p>}
               {templateNotice && <p className="cost-sub" role="status">{templateNotice}</p>}
@@ -577,12 +635,14 @@ function CostReportDialog({ dir, refreshKey, onClose }) {
           <button
             type="button"
             className="btn btn-primary"
+            disabled={!!busy || (!!onConfirm && !selectedTemplate)}
             onClick={() => {
               saveCostSettings(dir, settings);
               onClose();
+              onConfirm?.();
             }}
           >
-            确定
+            {onConfirm ? '确定并继续' : '确定'}
           </button>
         </div>
       </div>
@@ -893,6 +953,18 @@ export default function SeriesDetail({ folder, active = true }) {
 
   // 点「开始处理」：要去重时先重新读一次「去重」里已有多少成品，已经去重过就在确认窗里强提醒。
   const requestStart = async () => {
+    if (costOn) {
+      const { templateId } = readCostSettings(detail.dir);
+      if (!templateId) return setCostOpen('select');
+      try {
+        const result = await window.electronAPI.costReportTemplateList();
+        if (!result?.success || !Array.isArray(result.templates)) throw new Error(result?.error || '无法读取报告模板');
+        if (!result.templates.some((item) => item.id === templateId)) return setCostOpen('select');
+      } catch (error) {
+        setNotice(error?.message || '无法读取报告模板');
+        return;
+      }
+    }
     if (!dedupOn) return submit(undefined);
     const fresh = await window.electronAPI.libraryEpisodes(detail.dir).catch(() => null);
     setOutputCount(fresh?.success ? fresh.outputCount || 0 : detail?.outputCount || 0);
@@ -1562,7 +1634,7 @@ export default function SeriesDetail({ folder, active = true }) {
                   >
                     {costPngBusy ? '正在导出…' : '导出 PNG'}
                   </button>
-                  <button type="button" className="btn btn-sm" onClick={() => setCostOpen(true)}>
+                  <button type="button" className="btn btn-sm" onClick={() => setCostOpen('settings')}>
                     报告设置
                   </button>
                 </span>
@@ -1571,6 +1643,7 @@ export default function SeriesDetail({ folder, active = true }) {
                 <CostReportDialog
                   dir={detail.dir}
                   onClose={() => setCostOpen(false)}
+                  onConfirm={costOpen === 'select' ? requestStart : undefined}
                   refreshKey={`${outputs.map((output) => `${output.name}:${output.size}`).join('|')}-${publish?.title || ''}-${runningDone}`}
                 />
               )}
