@@ -930,6 +930,11 @@ jobs:
           & 7z x -y -bd $zip "-o$sdkDir" | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $helper = Get-ChildItem $sdkDir -Recurse -Filter hongguo-sdk-playback.exe | Select-Object -First 1
+          if (!$helper) {
+            node scripts/extract-upstream-sdk.cjs $sdkDir
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $helper = Get-ChildItem $sdkDir -Recurse -Filter hongguo-sdk-playback.exe | Select-Object -First 1
+          }
           if (!$helper) { throw 'SDK component missing' }
           New-Item -ItemType Directory -Force src/native/sdk-bin | Out-Null
           Copy-Item $helper.FullName src/native/sdk-bin/win32-x64.bin
