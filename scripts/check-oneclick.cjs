@@ -27,8 +27,8 @@ function fixture({ names = ['剧 1.mp4', '剧 2.mp4', '剧 10.mp4'], runJob, edi
   const events = [];
   const calls = { dedup: [], image: [] };
   const quchong = {
-    validateOptions: (value) => ({ resolution: '1080x1920', ...value }),
-    runJob:
+    deliveryOptions: (value) => ({ resolution: '1080x1920', ...value }),
+    runDeliveryJob:
       runJob ||
       (async (options) => {
         calls.dedup.push(options);

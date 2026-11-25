@@ -893,8 +893,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '海报标题只保留主剧名。旧海报保留底图时，可直接去掉小字并重新排版。'
-      UPDATE_CHECK_SCOPE: poster-title-and-update
+      UPDATE_RELEASE_NOTES: '视频去重固定最高档，成品画面时长至少 60 秒。重新拆分会合并短尾段，素材不足时提示补充。'
+      UPDATE_CHECK_SCOPE: dedup-delivery-and-update
     steps:
       - uses: actions/checkout@v5
         with:
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 45631822851
+          run-id: 45635422573
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Extract the hash-pinned upstream SDK component only
@@ -941,7 +941,7 @@ jobs:
           $sha = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLower()
           @{sha256=$sha;upstream='jackotom/hongguo-drama v8.3';license='GPL-3.0-only'} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM src/native/sdk-bin/win32-x64.bin.json
           Write-Output "Verified SDK component: $($helper.Length) bytes, SHA256 $sha"
-      - name: Build title-only poster application patch
+      - name: Build strongest-tier dedup application patch
         shell: pwsh
         run: |
           git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
@@ -991,7 +991,7 @@ jobs:
           "FFPROBE_PATH=$($probe.FullName)" >> $env:GITHUB_ENV
           $ff.DirectoryName >> $env:GITHUB_PATH
           $probe.DirectoryName >> $env:GITHUB_PATH
-      - name: Check Windows dedup and upgrade from 1.2.61
+      - name: Check 60-second Windows delivery and upgrade from 1.2.62
         shell: pwsh
         run: |
           node scripts/check-dedup-defaults.cjs
@@ -999,6 +999,8 @@ jobs:
           node scripts/check-dedup-timestamps.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-resplit.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-dedup-delivery.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -3091,7 +3091,7 @@ function pumpQuchongBatch(batch) {
       task.episodes?.length ? `开始处理（原第 ${task.episodes.join('、')} 集）` : '开始处理',
     );
     quchong
-      .runJob({
+      .runDeliveryJob({
         ffmpegPath: batch.ffmpegPath,
         ffprobePath: batch.ffprobePath,
         src: task.src,
@@ -3211,8 +3211,7 @@ function cancelAllQuchongBatches() {
   }
 }
 
-ipcMain.handle('quchong-defaults', () => ({
-  ...quchong.DEFAULTS,
+ipcMain.handle('quchong-defaults', () => quchong.deliveryOptions({
   jobs: getCurrentSettings().quchong_jobs,
   // 编码器在应用启动时已经从 Chromium 的显卡信息里选定，这里只读缓存；设置里选了「只用 CPU」就是 cpu。
   encoder: quchong.resolveEncoder(dedupEncoder()),
@@ -3509,12 +3508,12 @@ async function planAndQueueResplit({
   signal = null,
 }) {
   // 并发数和编码方式以「设置」为准：界面里缓存的旧参数不能把它们改回去。
-  const options = quchong.validateOptions({
+  const options = quchong.deliveryOptions({
     ...opts,
     jobs: getCurrentSettings().quchong_jobs,
     encoder: dedupEncoder(),
   });
-  const splitOptions = resplit.validateSplit(split);
+  const splitOptions = resplit.validateDeliverySplit(split);
   const ffmpegPath = resolveFfmpeg('ffmpeg');
   const ffprobePath = resolveFfmpeg('ffprobe');
   if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
@@ -3580,6 +3579,7 @@ async function planAndQueueResplit({
     split: splitOptions,
     speedMin: options.speed_min,
     speedMax: options.speed_max,
+    delivery: true,
   });
   if (!plan.pieces.length) return { success: false, error: plan.warnings.join('；') || '没有可处理的内容' };
   libLog(
@@ -3678,7 +3678,7 @@ async function startQuchongBatch(payload = {}) {
     const outputDir = configuredDir(payload.outputDir, 'dedup_output_dir', '去重输出目录');
     const outputDirs = sources.map(() => outputDir);
     await fsp.mkdir(outputDir, { recursive: true });
-    const opts = quchong.validateOptions({
+    const opts = quchong.deliveryOptions({
       ...payload.opts,
       jobs: getCurrentSettings().quchong_jobs,
       encoder: dedupEncoder(),
@@ -6017,8 +6017,8 @@ ipcMain.handle('library-estimate', async (_event, payload = {}) => {
     if (!episodes.length) return { success: false, error: '请先选择要处理的集' };
     const ffprobePath = resolveFfmpeg('ffprobe');
     if (!ffprobePath) return { success: false, error: '未找到 FFmpeg/ffprobe，请先配置内置 FFmpeg' };
-    const options = quchong.validateOptions({ jobs: getCurrentSettings().quchong_jobs, ...payload.opts });
-    const split = resplit.validateSplit(payload.split);
+    const options = quchong.deliveryOptions({ jobs: getCurrentSettings().quchong_jobs });
+    const split = resplit.validateDeliverySplit(payload.split);
     const sources = [];
     let unreadable = 0;
     // 4 路并行读时长，读过的缓存起来，改参数后重新估算是即时的。
@@ -6035,6 +6035,7 @@ ipcMain.handle('library-estimate', async (_event, payload = {}) => {
       split,
       speedMin: options.speed_min,
       speedMax: options.speed_max,
+      delivery: true,
     });
     const first = episodes[0].index;
     const last = episodes[episodes.length - 1].index;

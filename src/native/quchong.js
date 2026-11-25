@@ -12,6 +12,7 @@ const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const strongPreset = require('./dedup-strong.json');
+const dedupRequirements = require('./dedup-requirements.json');
 const { detectScenes } = require('./resplit');
 
 // Keep the number of FFmpeg processes bounded.  A single x264 process already
@@ -101,6 +102,32 @@ function validateOptions(input = {}) {
   return opts;
 }
 
+function deliveryOptions(input) {
+  const { jobs = DEFAULTS.jobs, encoder = DEFAULTS.encoder } = input || {};
+  return validateOptions({
+    ...DEFAULTS,
+    crop_ratio: 0.88,
+    unsharp_min: 0.35,
+    unsharp_max: 0.75,
+    noise_min: 3,
+    noise_max: 5,
+    pitch_min: 1.02,
+    pitch_max: 1.05,
+    rotation_max: 0.005,
+    rgb_shift: 1,
+    vignette: true,
+    eq_enable: true,
+    jobs,
+    encoder,
+  });
+}
+
+function verifyMinimumDuration(duration, minimum) {
+  if (!(duration >= minimum)) {
+    throw new Error(`视频画面时长 ${Number(duration || 0).toFixed(3)} 秒，至少需要 ${minimum} 秒。请增加原片素材或通过重新拆分合并更多集。`);
+  }
+}
+
 /**
  * 随机裁边的位置（0 = 靠一边，1 = 靠另一边）：避开正中间那一段。
  * exclude 是百分比，20 表示 0.4 ~ 0.6 之间不取，免得有的集正好裁在正中、和原画面几乎没区别。
@@ -123,7 +150,7 @@ function rollParams(opts, random = Math.random) {
     UNSHARP: between(opts.unsharp_min, opts.unsharp_max),
     SPEED: between(opts.speed_min, opts.speed_max),
     PITCH: between(opts.pitch_min, opts.pitch_max),
-    ROT: between(0, opts.rotation_max),
+    ROT: between(opts.rotation_max / 2, opts.rotation_max),
     CX: offAxisCenter(random, opts.center_exclude),
     CY: offAxisCenter(random, opts.center_exclude),
     NOISE: randint(opts.noise_min, opts.noise_max),
@@ -489,7 +516,10 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   const filters = [];
   const videoInput = '[0:V:0]';
   const sourceAudio = '[0:a:0]';
-  if (r.ROT > 0) vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`);
+  if (r.ROT > 0) {
+    const sin = Math.sin(r.ROT).toFixed(6);
+    vf.push(`rotate=${r.ROT.toFixed(6)}:fillcolor=black`, `crop=iw-2*ceil(ih*${sin}/2):ih-2*ceil(iw*${sin}/2)`);
+  }
   // 裁剪和旋转会改变尺寸，这里统一缩回原来的大小。
   vf.push(`scale=${width}:${height}:flags=lanczos`, 'setsar=1');
   // rgbashift 只能在 RGB 里做，噪点也留在 RGB 里加（和以前的画面效果、码率一致），
@@ -928,6 +958,7 @@ async function renderSeparately({
   onProgress,
   onLog,
   onStage,
+  fullEffects,
 }) {
   const work = path.join(path.dirname(output), `.ai-drama-quchong-sep-${randomUUID()}`);
   await fsp.mkdir(work, { recursive: true });
@@ -992,7 +1023,7 @@ async function renderSeparately({
     try {
       await encode(false);
     } catch (error) {
-      if (signal?.aborted) throw error;
+      if (signal?.aborted || fullEffects) throw error;
       onLog?.(`[降级] 分开编码音频仍失败（${keyDiagnostics(error.message)}），改用只变速的最简音频处理`);
       await encode(true);
     }
@@ -1028,6 +1059,7 @@ async function encodeOne({
   dst,
   speed = null,
   thinFrames = true,
+  minimumDuration = 0,
   bgm = null,
   opts,
   signal,
@@ -1048,6 +1080,16 @@ async function encodeOne({
   onStage?.('probing');
   const media = await probeMedia(ffprobePath, src, signal);
   if (!media.has_video) throw new Error(`输入没有可用视频轨：${src}`);
+  const fullEffects = minimumDuration > 0;
+  if (fullEffects) {
+    verifyMinimumDuration(media.video_duration / (speed ?? options.speed_min), minimumDuration);
+    if (speed == null) {
+      options.speed_max = Math.max(
+        options.speed_min,
+        Math.min(options.speed_max, media.video_duration / (minimumDuration + 0.12)),
+      );
+    }
+  }
   if (bgm) {
     const music = await probeMedia(ffprobePath, bgm, signal);
     if (!music.has_audio) throw new Error(`BGM 没有可用音频轨：${bgm}`);
@@ -1067,6 +1109,7 @@ async function encodeOne({
       if (sceneCuts.length) onLog?.(`[构图] 在 ${sceneCuts.length} 处镜头切换时调整水平裁切位置`);
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (fullEffects) throw new Error(`镜头分析失败：${keyDiagnostics(error.message)}`);
       onLog?.(`[构图] 镜头分析失败，本集使用固定裁切：${keyDiagnostics(error.message)}`);
     }
   }
@@ -1159,7 +1202,7 @@ async function encodeOne({
         }
         // 失败在音频编码上（和显卡无关）：同样的参数再来一遍也一样会失败，所以先换一组随机参数，再不行用最简音频链。
         if (isAudioEncoderFailure(error.message)) {
-          if (audioStep < 2) {
+          if (audioStep < (fullEffects ? 1 : 2)) {
             audioStep += 1;
             if (audioStep === 1) {
               rolled = rollParams(options);
@@ -1175,7 +1218,7 @@ async function encodeOne({
             continue;
           }
           // 最后一招：视频和音频分开做。没有原声的素材不会走到这里（失败只可能出在 BGM/编码器上）。
-          if (audioStep === 2 && media.has_audio) {
+          if (audioStep < 3 && media.has_audio) {
             audioStep = 3;
             onProgress?.(0);
             try {
@@ -1192,15 +1235,18 @@ async function encodeOne({
                 onProgress,
                 onLog,
                 onStage,
+                fullEffects,
               });
               break;
             } catch (separateError) {
               if (signal?.aborted) throw new Error('已取消');
+              const attempts = fullEffects ? '换参数、分开编码并保留完整效果' : '换参数、简化音频、分开处理';
               throw new Error(
-                `音频编码失败（已换参数、简化音频、视频音频分开处理后仍失败），与显卡/编码器无关。原因：${keyDiagnostics(error.message)}；分开处理时：${keyDiagnostics(separateError.message)}\n[滤镜] ${command.filters}\n${error.message}`,
+                `音频编码失败（已尝试${attempts}），与显卡/编码器无关。原因：${keyDiagnostics(error.message)}；分开处理时：${keyDiagnostics(separateError.message)}\n[滤镜] ${command.filters}\n${error.message}`,
               );
             }
           }
+          if (fullEffects) throw new Error(`最高档音频编码失败：${keyDiagnostics(error.message)}`);
           throw new Error(
             `音频编码失败（已换参数、简化音频后仍失败），与显卡/编码器无关。原因：${keyDiagnostics(error.message)}\n[滤镜] ${command.filters}\n${error.message}`,
           );
@@ -1239,6 +1285,7 @@ async function encodeOne({
     let result = await probeMedia(ffprobePath, tmp, signal);
     let stat = await fsp.stat(tmp);
     if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
+    if (fullEffects) verifyMinimumDuration(result.video_duration, minimumDuration);
     if (signal?.aborted) throw new Error('已取消');
     // 平台提审要求：分辨率、码率、大小、时长。显卡 / Mac 编出来码率偏低时，改用 CPU 固定码率重编一次（一定够码率）。
     const check = () =>
@@ -1259,6 +1306,7 @@ async function encodeOne({
       result = await probeMedia(ffprobePath, tmp, signal);
       stat = await fsp.stat(tmp);
       if (!stat.size || !result.has_video) throw new Error('输出验证失败：文件为空或没有视频轨');
+      if (fullEffects) verifyMinimumDuration(result.video_duration, minimumDuration);
       problems = check();
     }
     if (problems.length)
@@ -1394,6 +1442,9 @@ async function runJob(args) {
       throw new Error('片段时间无效');
     if (!(part.speed >= 0.5 && part.speed <= 2)) throw new Error('变速倍数无效');
   }
+  if (args.minimumDuration) {
+    verifyMinimumDuration(parts.reduce((seconds, part) => seconds + part.duration / part.speed, 0), args.minimumDuration);
+  }
   const files = [...new Set(parts.map((part) => part.src))];
   if (files.some((file) => !path.isAbsolute(file)) || !path.isAbsolute(dst))
     throw new Error('输入和输出路径必须是绝对路径');
@@ -1467,12 +1518,17 @@ async function runJob(args) {
   }
 }
 
+function runDeliveryJob(args) {
+  return runJob({ ...args, speed: null, opts: deliveryOptions(args.opts), minimumDuration: dedupRequirements.minSeconds });
+}
+
 module.exports = {
   DEFAULTS,
   ENCODER_RETRY_DELAYS,
   keyDiagnostics,
   rootCause,
   validateOptions,
+  deliveryOptions,
   rollParams,
   detectEncoder,
   resolveEncoder,
@@ -1489,6 +1545,7 @@ module.exports = {
   buildCommand,
   probeMedia,
   runJob,
+  runDeliveryJob,
   sweepStaleTemps,
   publishOutput,
 };

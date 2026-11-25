@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './SeriesDetail.css';
 import { Check, ChevronDown, Folder, RefreshCw } from './icons';
 import DedupParams, { rangeProblems } from './DedupParams';
-import strongPreset from '../native/dedup-strong.json';
+import { minSeconds, defaultMaxSeconds } from '../native/dedup-requirements.json';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
 import SeriesProgress, { isActiveBatch } from './SeriesProgress';
@@ -11,14 +11,18 @@ import useDialogKeyboard from './useDialogKeyboard';
 import { clampPage, slicePage } from './pagination';
 
 const STORAGE_KEY = 'library-params-v2';
-const DEDUP_PRESET_VERSION = 1;
 // 旧成品挪去哪里：Mac 叫废纸篓，Windows 叫回收站。
 const TRASH = /Mac/.test((typeof navigator !== 'undefined' && navigator.platform) || '') ? '废纸篓' : '回收站';
 const VIEW_KEY = 'library-view';
 /** 草稿默认做新剧的前 4 集：从「新集编号」起连续 4 个。 */
 const defaultDraftNums = (start) => [0, 1, 2, 3].map((n) => String((Math.floor(Number(start)) || 1) + n));
-const DEFAULT_SPLIT = { min_len: 30, max_len: 65, head_trim: 1.1, tail_trim: 1.2, start_number: 1 };
-const DEFAULT_SPEED = { speed_min: 1.03, speed_max: 1.21 };
+const DEFAULT_SPLIT = { min_len: minSeconds, max_len: defaultMaxSeconds, head_trim: 1.1, tail_trim: 1.2, start_number: 1 };
+function restoreSplit(saved) {
+  const split = { ...DEFAULT_SPLIT, ...saved };
+  split.min_len = Math.max(minSeconds, Number(split.min_len) || minSeconds);
+  split.max_len = Math.max(split.min_len + 1, Number(split.max_len) || defaultMaxSeconds);
+  return split;
+}
 const EPISODE_PAGE_SIZES = [30, 60, 100, 200];
 const DRAFT_MODES = [
   ['simple', '3 分轨', '文案、视频、音频各一条轨道，直接用分镜解析结果切原视频'],
@@ -599,7 +603,7 @@ export default function SeriesDetail({ folder, active = true }) {
   const [foldEpisodes, setFoldEpisodes] = useState(view.foldEpisodes === true);
   const [foldOutputs, setFoldOutputs] = useState(view.foldOutputs === true);
   const [opts, setOpts] = useState(null);
-  const [split, setSplit] = useState({ ...DEFAULT_SPLIT, ...(saved.split || {}) });
+  const [split, setSplit] = useState(() => restoreSplit(saved.split));
   const [dedupOn, setDedupOn] = useState(saved.dedupOn !== false);
   const [draftOn, setDraftOn] = useState(saved.draftOn === true);
   // 成本配置报告：勾上后「开始处理」做完自动生成（去重了就等成品都出来再算）；设置在弹窗里
@@ -740,14 +744,11 @@ export default function SeriesDetail({ folder, active = true }) {
 
   useEffect(() => {
     let alive = true;
-    // 并发数和编码方式只认「设置」，保存的旧参数里的 jobs/encoder 不再盖回去。
-    const { jobs: _jobs, encoder: _encoder, ...savedOpts } = saved.opts || {};
     window.electronAPI
       .quchongDefaults?.()
       .then((defaults) => {
         if (!alive || !defaults) return;
-        const upgrade = saved.dedupPresetVersion !== DEDUP_PRESET_VERSION ? strongPreset : {};
-        setOpts({ ...defaults, ...DEFAULT_SPEED, ...savedOpts, ...upgrade });
+        setOpts(defaults);
       })
       .catch(() => {
         if (alive) setNotice('读取去重参数失败，请重新打开这部剧');
@@ -759,10 +760,8 @@ export default function SeriesDetail({ folder, active = true }) {
 
   useEffect(() => {
     if (opts) {
-      const { jobs: _jobs, encoder: _encoder, ...keep } = opts;
       writeJson(STORAGE_KEY, {
-        dedupPresetVersion: DEDUP_PRESET_VERSION,
-        opts: keep, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn,
+        split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn,
       });
     }
   }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn]);
@@ -772,7 +771,7 @@ export default function SeriesDetail({ folder, active = true }) {
 
   const resetParams = async () => {
     const defaults = await window.electronAPI.quchongDefaults?.().catch(() => null);
-    if (defaults) setOpts({ ...defaults, ...DEFAULT_SPEED });
+    if (defaults) setOpts(defaults);
     setSplit({ ...DEFAULT_SPLIT });
   };
 
@@ -1057,7 +1056,9 @@ export default function SeriesDetail({ folder, active = true }) {
   const estimateText =
     estimate.loading && !est
       ? '正在估算…'
-      : est && est.count > 0
+      : est?.belowMinimum
+        ? `变速和裁剪后不足 ${minSeconds} 秒，请多选几集`
+        : est && est.count > 0
         ? `每集 ${est.finalMin}–${est.finalMax} 秒，预计约 ${est.count} 集`
         : '';
   const startLabel = seriesBusy || submitting ? '处理中…' : dedupOn ? `开始处理（${selectedCount} 集）` : '开始处理';
@@ -1413,7 +1414,7 @@ export default function SeriesDetail({ folder, active = true }) {
                 </label>
                 <span className="proc-summary">
                   {dedupOn
-                    ? `${selectedCount === episodes.length ? `整部 ${selectedCount} 集` : `前 ${selectedCount} 集`} · ${
+                    ? `最高档 · ${selectedCount === episodes.length ? `整部 ${selectedCount} 集` : `前 ${selectedCount} 集`} · ${
                         estimateText || `每集 ${split.min_len}–${split.max_len} 秒`
                       }`
                     : '不去重：直接用「去重处理后」里已有的成品做剪映草稿 / 分镜工程图'}
@@ -1628,7 +1629,6 @@ export default function SeriesDetail({ folder, active = true }) {
             </div>
             <DedupParams
               opts={opts}
-              onChange={(k, v) => setOpts({ ...opts, [k]: v })}
               split={split}
               onSplitChange={(k, v) => {
                 const next = k === 'start_number' ? Math.max(1, Math.floor(v) || 1) : v;
@@ -1673,7 +1673,6 @@ export default function SeriesDetail({ folder, active = true }) {
             </div>
             <DedupParams
               opts={{ ...(opts || {}), ...(detail.lastDedup.opts || {}) }}
-              onChange={() => {}}
               split={{ ...DEFAULT_SPLIT, ...(detail.lastDedup.split || {}) }}
               onSplitChange={() => {}}
               disabled
@@ -1682,15 +1681,13 @@ export default function SeriesDetail({ folder, active = true }) {
               <button
                 className="btn"
                 disabled={submitting || !opts}
-                title="把这组参数填进这次的「去重参数」"
+                title="沿用上次的拆分设置"
                 onClick={() => {
-                  const { jobs: _jobs, encoder: _encoder, ...keep } = detail.lastDedup.opts || {};
-                  setOpts({ ...opts, ...keep });
-                  setSplit({ ...DEFAULT_SPLIT, ...(detail.lastDedup.split || {}) });
+                  setSplit(restoreSplit(detail.lastDedup.split));
                   setShowSaved(false);
                 }}
               >
-                用这组参数
+                沿用拆分设置
               </button>
               <button className="btn btn-primary" onClick={() => setShowSaved(false)}>
                 关闭

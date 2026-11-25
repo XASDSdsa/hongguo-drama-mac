@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import './DedupParams.css';
-import strongPreset from '../native/dedup-strong.json';
+import { minSeconds } from '../native/dedup-requirements.json';
 
 // 去重参数面板：「一键处理」和「管理剧集」共用，参数名与主进程 quchong.validateOptions 一致。
 // 常用的画面参数：每集在「最小值 ~ 最大值」之间随机取一个，都是很便宜的调色和锐化。
@@ -43,8 +43,8 @@ const TIME_GROUPS = [
   {
     title: '成品时长（秒）',
     fields: [
-      ['split', 'min_len', '最短', 1, 30, 600], // 平台要求每集不少于 30 秒
-      ['split', 'max_len', '最长', 1, 31, 900],
+      ['split', 'min_len', '最短', 1, minSeconds, 600],
+      ['split', 'max_len', '最长', 1, minSeconds + 1, 900],
     ],
   },
   {
@@ -92,14 +92,14 @@ function NumberField({ value, step, min, max, disabled, onCommit, ariaLabel }) {
       onChange={(e) => {
         setText(e.target.value);
         const next = parse(e.target.value);
-        if (Number.isFinite(next) && next >= min && next <= max) onCommit(next);
+        if (Number.isFinite(next) && next >= min && next <= max) onCommit?.(next);
       }}
       onBlur={() => {
         const next = parse(text);
         if (!Number.isFinite(next)) return setText(value ?? '');
         const clamped = Math.min(max, Math.max(min, next));
         setText(clamped);
-        if (clamped !== value) onCommit(clamped);
+        if (clamped !== value) onCommit?.(clamped);
       }}
     />
   );
@@ -121,13 +121,12 @@ export function rangeProblems(opts = {}, split = null) {
  * 去重参数面板。传入 split 时分成「时间与速度 / 画面参数」两页（重新拆分用）；
  * 不传 split 时只有画面参数（含变速范围），和以前一样。
  */
-export default function DedupParams({ opts, onChange, disabled = false, split = null, onSplitChange, onReset, onApplyPreset }) {
+export default function DedupParams({ opts, disabled = false, split = null, onSplitChange, onReset }) {
   const [tab, setTab] = useState('time');
   const tabbed = !!split;
   const basic = BASIC_PARAMS.filter(([key]) => !tabbed || !['speed_min', 'speed_max'].includes(key));
   const number = (target, key, label, step, min, max) => {
     const source = target === 'split' ? split : opts;
-    const change = target === 'split' ? onSplitChange : onChange;
     return (
       <label key={key}>
         {label}
@@ -136,27 +135,19 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
           step={step}
           min={min}
           max={max}
-          disabled={disabled}
-          onCommit={(value) => change(key, value)}
+          disabled={disabled || target === 'opts'}
+          onCommit={target === 'split' ? (value) => onSplitChange(key, value) : undefined}
         />
       </label>
     );
   };
   const problems = rangeProblems(opts, split);
-  const strongApplied = Object.entries(strongPreset).every(([key, value]) => opts[key] === value);
   return (
     <div className="dedup-params">
-      {onApplyPreset && (
+      {!disabled && (
         <div className="dedup-preset">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={disabled || strongApplied}
-            onClick={() => onApplyPreset(strongPreset)}
-          >
-            {strongApplied ? '已应用加强' : '应用加强预设'}
-          </button>
-          <span>按镜头调整构图、精简重复帧，另有轻微变调和噪点。</span>
+          <b>最高档固定开启</b>
+          <span>每集成品至少 {minSeconds} 秒。画面、抽帧和音频效果按片源应用。</span>
         </div>
       )}
       {problems.length > 0 && (
@@ -215,8 +206,7 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
                     step={step}
                     min={min}
                     max={max}
-                    disabled={disabled}
-                    onCommit={(value) => onChange(key, value)}
+                      disabled
                   />
                 ))}
               </React.Fragment>
@@ -228,8 +218,7 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
               <select
                 className="input-field"
                 value={opts.quality}
-                onChange={(e) => onChange('quality', e.target.value)}
-                disabled={disabled}
+                disabled
               >
                 <option value="standard">标准</option>
                 <option value="lean">精简</option>
@@ -246,8 +235,7 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
                   <input
                     type="checkbox"
                     checked={!!opts[key]}
-                    onChange={(e) => onChange(key, e.target.checked)}
-                    disabled={disabled}
+                    disabled
                   />
                   {label}
                 </label>

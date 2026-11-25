@@ -43,7 +43,7 @@ async function main() {
     const asar = path.join(unpacked, 'resources', 'app.asar');
     assert.equal(JSON.parse(extractFile(asar, 'package.json').toString()).version, pkg.version);
     verifyProtectedArchive(asar);
-    for (const file of ['src/native/ai-providers.json', 'src/native/dedup-strong.json', 'dist-react/index.html']) {
+    for (const file of ['src/native/ai-providers.json', 'src/native/dedup-strong.json', 'src/native/dedup-requirements.json', 'dist-react/index.html']) {
       assert.deepEqual(extractFile(asar, path.normalize(file)), fs.readFileSync(path.join(root, file)), file);
     }
     const wire = await getCurrentFuseWire(exe);

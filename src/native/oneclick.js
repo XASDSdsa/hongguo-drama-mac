@@ -142,7 +142,7 @@ function createOneclick({ quchong, openai, resolveFfmpeg, getSettings, send }) {
         backup = `${dst}.old-${randomUUID().slice(0, 8)}`;
         await fsp.rename(dst, backup);
       }
-      await quchong.runJob({
+      await quchong.runDeliveryJob({
         ffmpegPath: run.ffmpegPath,
         ffprobePath: run.ffprobePath,
         src: item.path,
@@ -308,7 +308,7 @@ function createOneclick({ quchong, openai, resolveFfmpeg, getSettings, send }) {
     let options = null;
     if (wantDedup) {
       try {
-        options = quchong.validateOptions({ ...(payload.opts || {}), jobs: Number(payload.jobs) || 2 });
+        options = quchong.deliveryOptions({ ...(payload.opts || {}), jobs: Number(payload.jobs) || 2 });
       } catch (error) {
         return { success: false, error: error.message };
       }

@@ -11,6 +11,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
+const dedupRequirements = require('./dedup-requirements.json');
 
 const DETECTOR_VERSION = 1;
 const GRID_STEP = 0.5; // 没有合适切点时，允许在这个精度上硬切，保证总能排得开。
@@ -41,6 +42,12 @@ function validateSplit(input = {}) {
     throw new Error('参数无效：start_number');
   if (split.max_len - split.min_len < 1) throw new Error('成品时长的最长要比最短至少多 1 秒');
   return split;
+}
+
+function validateDeliverySplit(input) {
+  const min_len = Math.max(dedupRequirements.minSeconds, input?.min_len ?? 0);
+  const max_len = Math.max(min_len + 1, input?.max_len ?? dedupRequirements.defaultMaxSeconds);
+  return validateSplit({ ...input, min_len, max_len });
 }
 
 // ---------- 切点检测（FFmpeg） ----------
@@ -273,11 +280,19 @@ function cutCandidates({ pauses = [], scenes = [] }, lo, hi) {
  * 切出来多长，成品就多长，不需要再反推倍数。
  * 每一段 segment 带着自己所属原集的倍数；跨两个原集的新集里，前后两段倍数可以不同。
  */
-function planPieces({ sources, split, speedMin, speedMax, random = Math.random }) {
-  const options = validateSplit(split);
+function planPieces({ sources, split, speedMin, speedMax, random = Math.random, delivery = false }) {
+  const options = delivery ? validateDeliverySplit(split) : validateSplit(split);
   const warnings = [];
   if (options.min_len < PLATFORM_MIN_SECONDS) warnings.push('每集最短时长不到 30 秒：短剧平台要求每集不少于 30 秒');
   const timeline = [];
+  const required = delivery ? dedupRequirements.minSeconds : 0;
+  if (delivery) {
+    const usable = sources.reduce((total, source) => {
+      const duration = source.duration - options.head_trim - options.tail_trim;
+      return total + (duration >= 1 ? duration : 0);
+    }, 0);
+    speedMax = Math.max(speedMin, Math.min(speedMax, usable / (required + 0.12)));
+  }
   let offset = 0;
   for (const source of sources) {
     const from = options.head_trim;
@@ -293,6 +308,9 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
   }
   const total = offset;
   if (!timeline.length) return { pieces: [], warnings: [...warnings, '没有可用的视频'] };
+  if (total < required) {
+    return { pieces: [], warnings: [...warnings, `变速和裁剪后只有 ${total.toFixed(2)} 秒，成品至少需要 ${required} 秒，请多选几集`] };
+  }
 
   // 节点：起点、终点、原集交界、检测到的切点，加上保底的均匀网格。
   const nodes = new Map();
@@ -315,7 +333,9 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
   const scores = [0, ...inner.map((node) => node.score), 1];
 
   const midFinal = (options.min_len + options.max_len) / 2;
-  const lengthMin = options.min_len;
+  // 给 FFmpeg 的帧和分段时间戳取整留少量余量，整段素材刚好够门槛时仍允许尝试。
+  const minDelivery = delivery && total >= required + 0.12 ? required + 0.12 : required;
+  const lengthMin = Math.max(options.min_len, minDelivery);
   const lengthMax = options.max_len;
   if (!(lengthMin > 0)) throw new Error('成品时长太短');
   const preferred = midFinal;
@@ -369,14 +389,14 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
   let route = solve(lengthMin);
   if (!route) {
     // 结尾剩下的内容不够一集：先试着并进最后一集（最后一集可以比最长时长长一些），
-    // 不让最后一集变短——平台要求每集不少于 30 秒。
+    // 在放宽末集上限时，仍优先保留常规最短时长。
     tailAbsorbed = 0;
     route = solve(lengthMin, lengthMax + lengthMin);
     if (route) warnings.push('最后一集比设定的最长时长长一些（结尾剩下的内容并进了最后一集）');
   }
   if (!route) {
     tailAbsorbed = 0;
-    route = solve(Math.max(1, Math.min(lengthMin, PLATFORM_MIN_SECONDS), lengthMin * 0.5));
+    route = solve(Math.max(minDelivery, Math.min(lengthMin, PLATFORM_MIN_SECONDS), lengthMin * 0.5));
     if (route) warnings.push('最后一集比设定的最短时长短一些');
   }
   if (!route) {
@@ -423,8 +443,8 @@ function planPieces({ sources, split, speedMin, speedMax, random = Math.random }
  * sources: [{ file, duration }]，按播放顺序。真正的切法要等分析完切点才定，所以给「大约多少集」和一个范围：
  * 每集大致切在成品时长范围的中间偏长一点，再给 ±10% 的范围。
  */
-function estimatePlan({ sources, split, speedMin, speedMax }) {
-  const options = validateSplit(split);
+function estimatePlan({ sources, split, speedMin, speedMax, delivery = false }) {
+  const options = delivery ? validateDeliverySplit(split) : validateSplit(split);
   let total = 0;
   let used = 0;
   for (const source of sources) {
@@ -436,15 +456,17 @@ function estimatePlan({ sources, split, speedMin, speedMax }) {
   }
   const lengthMin = options.min_len;
   const preferred = (options.min_len + options.max_len) / 2;
+  const belowMinimum = delivery && total / speedMin < dedupRequirements.minSeconds;
   // 变速后的总时长：按倍数区间的中间值估。
   const finalTotal = total / ((speedMin + speedMax) / 2);
-  if (!(total > 0) || !(lengthMin > 0)) {
+  if (!(total > 0) || !(lengthMin > 0) || belowMinimum) {
     return {
       count: 0,
       minCount: 0,
       maxCount: 0,
-      totalSeconds: 0,
-      usedSources: 0,
+      totalSeconds: Number(total.toFixed(1)),
+      usedSources: used,
+      ...(belowMinimum ? { belowMinimum: true } : {}),
       tailSlack: 0,
       finalMin: 0,
       finalMax: 0,
@@ -469,6 +491,7 @@ function estimatePlan({ sources, split, speedMin, speedMax }) {
 module.exports = {
   DEFAULT_SPLIT,
   validateSplit,
+  validateDeliverySplit,
   detectPauses,
   detectScenes,
   sceneMethods,
