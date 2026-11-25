@@ -88,7 +88,9 @@ async function main() {
   execFileSync(nsis.path, ['/V2', `/DVERSION=${pkg.version}`, `/DAPP_GUID=${guid}`, `/DOUTPUT=${installer}`, `/DPAYLOAD=${payload}`, path.join(__dirname, 'app-patch/install.nsi')],
     { env: { ...process.env, ...nsis.env }, stdio: 'inherit' });
   const bytes = fs.statSync(installer).size;
-  assert.ok(bytes < 25 * 1024 * 1024, `Small update exceeds 25 MiB (${bytes}); refuse full-package fallback`);
+  if (pkg.version === '1.2.60') assert.equal(hash(fs.readFileSync(path.join(root,'src/native/sdk-bin/win32-x64.bin'))), 'e928cccef53c6c146f99e490f6d63970a6d55791abd8095ea961e0fc3f839b8d', 'Only the verified new SDK may enlarge this application patch');
+  const limitMiB = pkg.version === '1.2.60' ? 40 : 25;
+  assert.ok(bytes < limitMiB * 1024 * 1024, `Application update exceeds ${limitMiB} MiB (${bytes}); refuse full-package fallback`);
   execFileSync(process.execPath, [path.join(__dirname, 'make-update-release.cjs'), output], { stdio: 'inherit' });
   const releasePath = path.join(output, `release-${pkg.version}.json`);
   const release = JSON.parse(fs.readFileSync(releasePath));
