@@ -1,6 +1,8 @@
 name: Windows build
 
 on:
+  push:
+    branches: [codex/windows-1.2.63-build]
   workflow_dispatch:
     inputs:
       ref:
@@ -501,7 +503,7 @@ jobs:
           exit $failed
 
   build-windows:
-    if: inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true' && inputs.native_verify_run == '' && inputs.installer_verify_run == ''
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_run == '' && inputs.ffmpeg_only != 'true' && inputs.quick != 'true' && inputs.native_verify_run == '' && inputs.installer_verify_run == ''
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
@@ -889,7 +891,7 @@ jobs:
         run: node scripts/check-bundled-transcription.cjs dist/win-unpacked/resources
 
   in-app-fast-update:
-    if: inputs.quick == 'true' && inputs.repack_from_installer_run == 'fast-patch'
+    if: github.event_name == 'push' || (inputs.quick == 'true' && inputs.repack_from_installer_run == 'fast-patch')
     runs-on: windows-latest
     timeout-minutes: 15
     env:
