@@ -927,7 +927,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $zip = Join-Path $sdkDir 'hongguo-downloader-8.3-win-x64.zip'
           if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne '27aeb24624934457a240c7763be830af80611b075631475a562302ddaa0fd06f') { throw 'Upstream release bytes changed' }
-          & 7z x -y -bd $zip '*hongguo-sdk-playback.exe' "-o$sdkDir" -r | Out-Null
+          & 7z x -y -bd $zip "-o$sdkDir" | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $helper = Get-ChildItem $sdkDir -Recurse -Filter hongguo-sdk-playback.exe | Select-Object -First 1
           if (!$helper) { throw 'SDK component missing' }
