@@ -46,3 +46,16 @@ commit d3d4f985d24be3532725aa4d8f2ede164a79960e (2026-11-24), GPL-3.0-only.
 Upstream: https://github.com/jackotom/hongguo-drama/tree/d3d4f985d24be3532725aa4d8f2ede164a79960e
 This application-code update uses official JS routes; it does not redistribute
 the upstream native SDK helper or change the installed runtime.
+
+1.2.60: openhongguo provider adapted from jackotom/hongguo-drama 8.3,
+commit a1b69da5562b9063f3442f3284c3347358f26090 (GPL-3.0-only).
+New dependency openhongguo 0.4.1 by beilunyang (Apache-2.0), its bundled Go
+WASM runtime and licenses are distributed unchanged in node_modules/openhongguo.
+Provider selection retains the existing official JS fallback.
+
+SDK fallback: sdk-playback.js and embedded Windows helper from the official
+jackotom/hongguo-drama v8.3 release, GPL-3.0-only. The source is available at
+https://github.com/jackotom/hongguo-drama/tree/a1b69da5562b9063f3442f3284c3347358f26090/scripts/sdk-playback
+The source release zip SHA256 is 89babe31a5196168c17c4483b05a7b518f20af2c419af164fe719b2d1facec7f.
+All original third-party notices in that source tree apply, including
+N3urda/hongguoTV phone_account and its SDK vendor components.

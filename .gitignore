@@ -90,3 +90,6 @@ build/hongguo-player/
 scripts/hongguo-player/.gradle/
 scripts/hongguo-player/build/
 scripts/hongguo-player/.kotlin/
+
+# Verified SDK helper is extracted from a hash-pinned public release during CI
+src/native/sdk-bin/

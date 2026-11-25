@@ -454,6 +454,10 @@ const DOWNLOAD_MIN_DEFINITION = 720;
  * 下了 360p 还得放大一遍，画面也糊。App 接口取不到时再试旧接口（也只认 720p 以上），都没有就报错，不退回 360p。
  */
 async function fetchDownloadUrl(vid) {
+  return require('./download-source-router').resolveDownloadSource(vid, () => fetchOfficialDownloadUrl(vid));
+}
+
+async function fetchOfficialDownloadUrl(vid) {
   let appError;
   try {
     return await require('./app-source').fetchAppPlayUrl(String(vid));

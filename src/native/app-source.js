@@ -1091,4 +1091,9 @@ function parseAppPlayModel(info, userAgent, requireEncryptionMetadata = false, m
   };
 }
 
-module.exports = { fetchAppPlayUrl };
+async function fetchSdkPlayUrl(vid) {
+  const result = await require('./sdk-playback').resolveSdkPlayback(String(vid));
+  if (!result) return null;
+  return { ...parseAppPlayModel(result.model, result.userAgent, false), sourceProvider:'sdk', sourceRoute:'sdk' };
+}
+module.exports = { fetchAppPlayUrl, fetchSdkPlayUrl };

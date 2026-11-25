@@ -17,7 +17,7 @@ async function verifyDownloadV5Live(root = path.join(__dirname,'..')) {
     const resolved = new Map();
     const tracedHongguo = { ...hongguo, fetchPlayUrlSingle: async (...args) => {
       const info = await hongguo.fetchPlayUrlSingle(...args);
-      if (args[2]?.best) resolved.set(String(args[0]), { sourceProvider: info.sourceProvider, sourceRoute: info.sourceRoute, encrypted: !!info.contentKey });
+      if (args[2]?.best) resolved.set(String(args[0]), { sourceProvider: info.sourceProvider, sourceRoute: info.sourceRoute || info.sourceProvider, encrypted: !!info.contentKey });
       return info;
     } };
     const downloadErrors = require(path.join(root, 'src/native/download-errors'));
@@ -42,8 +42,8 @@ async function verifyDownloadV5Live(root = path.join(__dirname,'..')) {
       await execute(task);
       assert.equal(task.status, 'completed', task.error);
       const origin = resolved.get(vid);
-      assert.equal(origin?.sourceProvider, 'official');
-      assert.ok(['preload_current', 'video_tab', 'player_a', 'player_b', 'model_0', 'model_1'].includes(origin.sourceRoute));
+      assert.ok(['official','openhongguo','sdk'].includes(origin?.sourceProvider));
+      assert.ok(['preload_current', 'video_tab', 'player_a', 'player_b', 'model_0', 'model_1', 'openhongguo', 'sdk'].includes(origin.sourceRoute));
       assert.ok(origin.encrypted, 'verify encrypted official media, not a public preview');
       const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name,width,height', '-of', 'json', task.savePath], { encoding: 'utf8', timeout: 30000 });
       assert.equal(probe.status, 0);

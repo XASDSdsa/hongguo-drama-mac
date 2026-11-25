@@ -893,7 +893,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '同步11月24日上游下载逻辑：优先当前App官方取源，更新签名与备用接口，保留授权、设置和报告模板。'
+      UPDATE_RELEASE_NOTES: '同步11月25日上游8.3：新增本地openhongguo下载通道、匿名限流冷却、SDK及官方接口兜底，保留授权与报告模板。'
       UPDATE_CHECK_SCOPE: download-v5-and-update
     steps:
       - uses: actions/checkout@v5
@@ -913,15 +913,35 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 44690061318
+          run-id: 45353965119
           github-token: ${{ github.token }}
           path: dist/previous-patch
+      - name: Extract the hash-pinned upstream SDK component only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $sdkDir = Join-Path $env:RUNNER_TEMP 'hongguo-sdk-upstream'
+          New-Item -ItemType Directory -Path $sdkDir -Force | Out-Null
+          gh release download v8.3 --repo jackotom/hongguo-drama --pattern 'hongguo-downloader-8.3-win-x64.zip' --dir $sdkDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Join-Path $sdkDir 'hongguo-downloader-8.3-win-x64.zip'
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne '27aeb24624934457a240c7763be830af80611b075631475a562302ddaa0fd06f') { throw 'Upstream release bytes changed' }
+          & 7z x -y -bd $zip '*hongguo-sdk-playback.exe' "-o$sdkDir" -r | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $helper = Get-ChildItem $sdkDir -Recurse -Filter hongguo-sdk-playback.exe | Select-Object -First 1
+          if (!$helper) { throw 'SDK component missing' }
+          New-Item -ItemType Directory -Force src/native/sdk-bin | Out-Null
+          Copy-Item $helper.FullName src/native/sdk-bin/win32-x64.bin
+          $sha = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLower()
+          @{sha256=$sha;upstream='jackotom/hongguo-drama v8.3';license='GPL-3.0-only'} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM src/native/sdk-bin/win32-x64.bin.json
+          Write-Output "Verified SDK component: $($helper.Length) bytes, SHA256 $sha"
       - name: Build v5 download recovery application patch
         shell: pwsh
         run: |
           git diff --exit-code e35bf955f313e33c7d318ab00a6adcc2d884b52d -- scripts/app-patch
           if ($LASTEXITCODE -ne 0) { throw 'Fast release requires the already verified patch engine' }
-          node --test src/native/playback-v5.test.cjs
+          node --test src/native/playback-v5.test.cjs src/native/openhongguo-source.test.cjs src/native/download-source-router.test.cjs src/native/sdk-playback.test.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-app-source.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -959,7 +979,7 @@ jobs:
           "FFMPEG_PATH=$($ff.FullName)" >> $env:GITHUB_ENV
           $ff.DirectoryName >> $env:GITHUB_PATH
           $probe.DirectoryName >> $env:GITHUB_PATH
-      - name: Check 1.2.58 upgrade and real complete downloads from the installed archive
+      - name: Check 1.2.59 upgrade and real complete downloads from the installed archive
         shell: pwsh
         run: |
           & ./node_modules/.bin/electron.cmd scripts/check-app-patch-install.cjs dist/app-patch --focused dist/previous-patch
