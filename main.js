@@ -4323,6 +4323,8 @@ ipcMain.handle('publish-state', (_event, dir) => {
       job: publishSnapshot(context.dir),
       result: publishResultView(context),
       hasCover: !!context.coverPath,
+      posterPrompt: publishMaterials.readPosterPrompt(context.workDir),
+      posterPromptMax: publishMaterials.POSTER_PROMPT_MAX,
       // 原始的剧名和简介（改写之前的样子），页面里和「已保存」的分开显示
       original: { title: context.title, synopsis: context.synopsis },
       styles: posterStyles.STYLES.map((style) => ({ id: style.id, name: style.name })),
@@ -4402,6 +4404,17 @@ ipcMain.handle('publish-cancel', (_event, dir) => {
     return { success: true };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('publish-save-poster-prompt', (_event, payload = {}) => {
+  try {
+    const context = publishContext(payload.dir);
+    if (publishJobs.get(context.dir)?.status === 'running') return { success: false, error: '这部剧正在生成中' };
+    publishMaterials.savePosterPrompt(context.workDir, payload.prompt);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: aiRedact(error) };
   }
 });
 

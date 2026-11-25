@@ -7,6 +7,8 @@ const { promisify } = require('node:util');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
+const { createRequire } = require('node:module');
+const requireQuchongDependency = createRequire(require.resolve('../src/native/quchong'));
 const quchong = require('../src/native/quchong');
 
 const execFileAsync = promisify(execFile);
@@ -64,7 +66,7 @@ async function checkQuietProcess(implementation) {
     }
   };
   const context = {
-    require: (name) => (name === 'node:child_process' ? { ...require(name), spawn: () => child } : require(name)),
+    require: (name) => (name === 'node:child_process' ? { ...require(name), spawn: () => child } : requireQuchongDependency(name)),
     process,
     module: { exports: {} },
     Date: { now: () => now },
@@ -174,7 +176,7 @@ async function checkNvencApiMismatch(implementation) {
               return child;
             },
           }
-        : require(name),
+        : requireQuchongDependency(name),
     process,
     module: { exports: {} },
     setTimeout,

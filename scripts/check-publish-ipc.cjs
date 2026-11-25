@@ -109,9 +109,14 @@ function makeMain(root, userData, settings) {
     console: { log() {}, warn() {}, error() {} },
   });
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
-  vm.runInContext('seriesRegistry=[]', context);
+  const window = { isDestroyed: () => false, webContents: { mainFrame: {} } };
+  context.fixtureWindow = window;
+  vm.runInContext('seriesRegistry = []; mainWindow = fixtureWindow; launchAuthorized = true; licenseSession = { ensure: async () => ({ allowed: true }) };', context);
   context.sendToRenderer = (channel, data) => events.push([channel, data]);
-  return { context, handlers, events };
+  const calls = Object.fromEntries(Object.entries(handlers).map(([channel, handler]) => [
+    channel, (_event, payload) => handler({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, payload),
+  ]));
+  return { context, handlers: calls, rawHandlers: handlers, events };
 }
 
 function relay(handler) {
@@ -309,6 +314,33 @@ const COPY = {
       assert.deepEqual(FakeWindow.rendered.at(-1), { title: '她撕了婚书转身就走', style: 'ink', layout: 'auto' });
       const bad = await handlers['publish-retitle']({}, { dir, styleId: 'nope' });
       assert.equal(bad.success, false);
+    });
+
+    await check('saved per-series poster prompt reaches the image model directly and can be cleared', async () => {
+      const prompt = '远景，蓝色雨夜\n主角举着一盏暖色纸灯';
+      const start = server.log.length;
+      const before = fs.readFileSync(path.join(dir, '新剧集海报.jpg'));
+      const saved = await handlers['publish-save-poster-prompt']({}, { dir, prompt });
+      assert.equal(saved.success, true);
+      assert.equal((await handlers['publish-state']({}, dir)).posterPrompt, prompt);
+      assert.equal(server.log.length, start);
+      assert.deepEqual(fs.readFileSync(path.join(dir, '新剧集海报.jpg')), before);
+      const long = await handlers['publish-save-poster-prompt']({}, { dir, prompt: '雨'.repeat(1601) });
+      assert.equal(long.success, false);
+
+      await runTask('poster');
+      const calls = server.log.slice(start);
+      const draw = calls.find((entry) => entry.url.includes('/images/'));
+      assert.ok(draw.json.prompt.includes(prompt));
+      assert.equal(draw.json.image, undefined);
+      assert.ok(calls.filter((entry) => entry.url.includes('/chat/')).every((entry) => JSON.stringify(entry.json).includes('image_url')));
+
+      const cleared = await handlers['publish-save-poster-prompt']({}, { dir, prompt: ' ' });
+      assert.equal(cleared.success, true);
+      assert.equal((await handlers['publish-state']({}, dir)).posterPrompt, '');
+      await runTask('poster');
+      const automatic = server.log.filter((entry) => entry.url.includes('/images/')).at(-1);
+      assert.match(automatic.json.image, /^data:image\/png;base64,/);
     });
 
     await check('cancel stops a running job', async () => {

@@ -1,5 +1,5 @@
 'use strict';
-// 去重画面参数的默认值：只做便宜的调色、锐化和变速，每集在范围内随机；慢的效果默认关，手动才开。
+// 加强档默认生效，滤镜图包含实际的画面和音频变化。
 const assert = require('node:assert/strict');
 const quchong = require('../src/native/quchong');
 
@@ -31,13 +31,15 @@ assert.deepEqual(
 );
 assert.deepEqual(
   [D.gamma_min, D.gamma_max, D.saturation_min, D.saturation_max, D.hue_min, D.hue_max, D.unsharp_min, D.unsharp_max],
-  [0.8781, 1.1227, 0.7982, 1.2841, -8.6, 7.7, 0, 0.5],
+  [0.8781, 1.1227, 0.7982, 1.2841, -8.6, 7.7, 0.25, 0.65],
 );
 assert.ok(D.unsharp_min >= 0, '默认不做模糊（锐化量为负就是模糊，成品会发糊）');
-for (const key of ['rotation_max', 'rgb_shift', 'noise_min', 'noise_max']) assert.equal(D[key], 0, `${key} 默认关`);
+assert.equal(D.crop_ratio, 0.91);
+assert.deepEqual([D.noise_min, D.noise_max], [2, 4]);
+assert.deepEqual([D.pitch_min, D.pitch_max], [1.01, 1.03]);
+for (const key of ['rotation_max', 'rgb_shift']) assert.equal(D[key], 0, `${key} 默认关`);
 assert.equal(D.vignette, false);
 assert.equal(D.eq_enable, false);
-assert.deepEqual([D.pitch_min, D.pitch_max], [1, 1], '默认不变调');
 
 // 每集在范围内各取一个值。
 for (let i = 0; i < 200; i++) {
@@ -69,20 +71,23 @@ const ends = quchong.rollParams(quchong.validateOptions({}), () => 0);
 assert.equal(ends.BRIGHTNESS, D.brightness_min);
 assert.equal(ends.UNSHARP, D.unsharp_min);
 
-// 默认的滤镜图：调色 + 锐化 + 变速，没有慢的效果。
-const rolled = { ...quchong.rollParams(quchong.validateOptions({})), UNSHARP: -0.5, SPEED: 1.1 };
+// 默认滤镜实际加强裁切、锐化、噪点和音调，同时保留原来的时长处理。
+const rolled = { ...quchong.rollParams(quchong.validateOptions({}), () => 0.5), SPEED: 1.1 };
 const fast = graph({}, rolled);
 assert.match(fast, /eq=brightness=[-\d.]+:contrast=[\d.]+:gamma=[\d.]+:saturation=[\d.]+,hue=h=[-\d.]+/);
-assert.match(fast, /unsharp=3:3:-0\.5000/);
+assert.match(fast, /crop=iw\*0\.91:ih\*0\.91/);
+assert.match(fast, /unsharp=3:3:0\.4500/);
 assert.match(fast, /setpts=\(PTS-STARTPTS\)\/1\.100000/);
-for (const slow of ['rotate=', 'rgbashift', 'noise=', 'vignette', 'asetrate', 'equalizer']) {
-  assert.ok(!fast.includes(slow), `默认不应包含 ${slow}：${fast}`);
+assert.match(fast, /noise=alls=3/);
+assert.match(fast, /asetrate=44100\*1\.020000/);
+assert.match(fast, /atempo=1\.078431/, '变调后补偿速度');
+for (const optional of ['rotate=', 'rgbashift', 'vignette', 'equalizer']) {
+  assert.ok(!fast.includes(optional), `默认不应包含 ${optional}：${fast}`);
 }
-assert.match(fast, /atempo=1\.100000/, '音频只变速');
 // 锐化接近 0 时直接跳过。
 assert.ok(!graph({}, { ...rolled, UNSHARP: 0.01 }).includes('unsharp'));
 
-// 手动打开后才有。
+// 其余效果仍可独立手动打开。
 const slow = graph(
   {
     rotation_max: 0.008,
@@ -124,4 +129,4 @@ assert.throws(() => quchong.validateOptions({ brightness_min: -0.9 }), /brightne
   assert.match(settings, /'quchong_encoder'/);
   assert.match(settings, /只用 CPU/);
 }
-console.log('PASS dedup defaults: cheap colour/sharpen/speed only, heavy effects off until enabled');
+console.log('PASS dedup defaults: enhanced crop, sharpen, noise and pitch with synchronized tempo');

@@ -41,10 +41,12 @@ export default function PublishPanel({ dir, onResult }) {
   const [taglineDraft, setTaglineDraft] = useState('');
   const [styleDraft, setStyleDraft] = useState('');
   const [synopsisDraft, setSynopsisDraft] = useState('');
+  const [posterSettingsOpen, setPosterSettingsOpen] = useState(false);
+  const [promptDraft, setPromptDraft] = useState('');
   const dirRef = useRef(dir);
   dirRef.current = dir;
   // 上一次从磁盘读到的已保存值：编辑框和它一样就是“没动过”，可以安全地刷新；动过的不能被覆盖。
-  const baseRef = useRef({ title: '', tagline: '', style: '', synopsis: '', proposal: '' });
+  const baseRef = useRef({ title: '', tagline: '', style: '', synopsis: '', proposal: '', posterPrompt: '' });
 
   const apply = useCallback((res) => {
     const result = res.result || {};
@@ -54,12 +56,14 @@ export default function PublishPanel({ dir, onResult }) {
       style: result.styleId || '',
       synopsis: result.synopsis || '',
       proposal: result.proposedSynopsis || '',
+      posterPrompt: res.posterPrompt || '',
     };
     const prev = baseRef.current;
     // 没改过的编辑框跟着已保存的值走；改过的保留用户写的内容。
     setTitleDraft((cur) => (cur === prev.title ? next.title : cur));
     setTaglineDraft((cur) => (cur === prev.tagline ? next.tagline : cur));
     setStyleDraft((cur) => (cur === prev.style ? next.style : cur));
+    setPromptDraft((cur) => (cur === prev.posterPrompt ? next.posterPrompt : cur));
     // AI 新写了简介：用户刚点了“改写”，直接放进编辑框（未保存）；其余情况同上。
     setSynopsisDraft((cur) => {
       if (next.proposal && next.proposal !== prev.proposal) return next.proposal;
@@ -77,11 +81,12 @@ export default function PublishPanel({ dir, onResult }) {
         return;
       }
       if (fresh) {
-        baseRef.current = { title: '', tagline: '', style: '', synopsis: '', proposal: '' };
+        baseRef.current = { title: '', tagline: '', style: '', synopsis: '', proposal: '', posterPrompt: '' };
         setTitleDraft('');
         setTaglineDraft('');
         setStyleDraft('');
         setSynopsisDraft('');
+        setPromptDraft('');
       }
       apply(res);
       setState(res);
@@ -94,6 +99,7 @@ export default function PublishPanel({ dir, onResult }) {
     setState(null);
     setJob(null);
     setError('');
+    setPosterSettingsOpen(false);
     load(true);
   }, [load]);
 
@@ -150,6 +156,8 @@ export default function PublishPanel({ dir, onResult }) {
   const cleanTitle = titleDraft.trim();
   const titleDirty = cleanTitle !== savedTitle;
   const posterDirty = styleDraft !== savedStyle || taglineDraft.trim() !== savedTagline;
+  const savedPrompt = state.posterPrompt || '';
+  const promptDirty = promptDraft.trim() !== savedPrompt;
   const synopsisDirty = synopsisDraft.trim() !== savedSynopsis;
 
   // 每件事自己的按钮：这件事在跑就显示进度和取消，别的事在跑时先等一等。
@@ -282,9 +290,18 @@ export default function PublishPanel({ dir, onResult }) {
           <StatusBadge saved={result.hasPoster} dirty={posterDirty} emptyText="还没生成" />
           <span className="pub-row-actions">
             {action('poster', result.hasPoster ? '重新生成' : '生成海报', {
-              disabled: !savedTitle || titleDirty,
-              title: !savedTitle ? '先保存剧名' : titleDirty ? '剧名有改动，先保存' : undefined,
+              disabled: !savedTitle || titleDirty || promptDirty,
+              title: !savedTitle || titleDirty ? '先保存剧名' : promptDirty ? '先保存或还原海报提示词' : undefined,
             })}
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label="海报设置"
+              aria-expanded={posterSettingsOpen}
+              onClick={() => setPosterSettingsOpen(!posterSettingsOpen)}
+            >
+              设置
+            </button>
             {savedTitle && (
               <SaveBar
                 dirty={posterDirty}
@@ -301,12 +318,35 @@ export default function PublishPanel({ dir, onResult }) {
             )}
           </span>
         </div>
+        {posterSettingsOpen && (
+          <div className="pub-poster-settings">
+            <label>
+              海报提示词
+              <textarea
+                className="input-field pub-textarea"
+                value={promptDraft}
+                maxLength={state.posterPromptMax}
+                rows={4}
+                placeholder="描述想要的人物、场景、配色和构图。留空使用自动构思。"
+                disabled={frozen}
+                onChange={(event) => setPromptDraft(event.target.value)}
+              />
+            </label>
+            <SaveBar
+              dirty={promptDirty}
+              busy={frozen}
+              label="保存提示词"
+              onRevert={() => setPromptDraft(savedPrompt)}
+              onSave={() => save(() => window.electronAPI.publishSavePosterPrompt({ dir, prompt: promptDraft }))}
+            />
+          </div>
+        )}
         {!savedTitle ? (
           <p className="pub-empty">海报要先保存剧名：上面选一个候选或直接填，再点「保存剧名」。</p>
         ) : (
           <>
             <p className="pub-empty">
-              {state.hasCover ? '以文件夹里的“封面”为参考重绘，' : ''}标题由程序排版，字不会错。
+              {savedPrompt ? '使用已保存的海报提示词。' : state.hasCover ? '以文件夹里的“封面”为参考重绘。' : ''}标题由程序排版。
               {titleDirty ? '　剧名有未保存的改动，海报现在用的还是已保存的剧名。' : ''}
             </p>
             <div className="pub-style-line">

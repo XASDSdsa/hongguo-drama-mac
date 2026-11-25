@@ -81,6 +81,18 @@
   justify-content: space-between;
   gap: 10px 16px;
 }
+.pub-poster-settings {
+  display: grid;
+  gap: 8px;
+}
+.pub-poster-settings label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.pub-poster-settings .pub-savebar {
+  justify-self: end;
+}
 .pub-synopsis {
   margin: 0;
   font-size: 13px;

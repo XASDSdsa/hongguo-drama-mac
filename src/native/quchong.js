@@ -11,6 +11,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const strongPreset = require('./dedup-strong.json');
+const { detectScenes } = require('./resplit');
 
 // Keep the number of FFmpeg processes bounded.  A single x264 process already
 // uses several codec threads, so running one process per CPU core can make the
@@ -22,10 +24,9 @@ const DEFAULT_ENCODER = process.platform === 'darwin' ? 'videotoolbox' : process
 let windowsAdapters = '';
 let windowsGpuReady = false;
 
-// 默认只做便宜的调色、锐化和变速（每集在范围内随机取值）；旋转、RGB 偏移、噪点、暗角、变调、均衡器
-// 都比较吃时间，默认关闭，需要时在参数面板里手动打开。
+// 裁切、锐化、噪点、变调和旋转按加强预设，其余参数以用户设置为准。
 const DEFAULTS = Object.freeze({
-  crop_ratio: 0.94,
+  ...strongPreset,
   center_exclude: 20,
   speed_min: 1.03,
   speed_max: 1.21,
@@ -39,17 +40,8 @@ const DEFAULTS = Object.freeze({
   saturation_max: 1.2841,
   hue_min: -8.6,
   hue_max: 7.7,
-  // 锐化量为负其实是模糊：以前默认 -0.86 ~ 0.73，六成的集被轻微模糊，再加上裁边放大，成品明显发糊。
-  // 默认改为 0 ~ 0.5：每集仍随机不同，但都是轻微锐化，正好补回裁边放大损失的清晰度。
-  unsharp_min: 0,
-  unsharp_max: 0.5,
-  rotation_max: 0,
   rgb_shift: 0,
-  noise_min: 0,
-  noise_max: 0,
   vignette: false,
-  pitch_min: 1,
-  pitch_max: 1,
   orig_volume: 0.5,
   bgm_volume: 0.15,
   eq_enable: false,
@@ -103,7 +95,7 @@ function validateOptions(input = {}) {
   }
   if (!['auto', 'cpu', 'videotoolbox', 'nvenc', 'amf', 'qsv'].includes(opts.encoder)) throw new Error('编码器无效');
   if (!['standard', 'lean'].includes(opts.quality)) throw new Error('画质选项无效');
-  for (const key of ['vignette', 'eq_enable']) {
+  for (const key of ['vignette', 'eq_enable', 'shot_reframe', 'drop_duplicate_frames']) {
     if (typeof opts[key] !== 'boolean') throw new Error(`参数无效：${key}`);
   }
   return opts;
@@ -432,7 +424,7 @@ function encoderArgs(name, lean, width, height, kbps = lean ? LEAN_VIDEO_KBPS : 
 
 /** 原声的处理链：整条滤镜图里和“分开处理音频”那一步用的是同一份，保证两条路出来的声音一样。 */
 function audioChain({ safe, speed, pitch, eq, volume, audioDelay, padTo }) {
-  // 音调没变（默认）时只需要变速，不用 asetrate 折腾一圈。
+  // 音调设为 1 时只需要变速。
   const shifted = !safe && Math.abs(pitch - 1) > 1e-6;
   const af = shifted
     ? [
@@ -451,7 +443,33 @@ function audioChain({ safe, speed, pitch, eq, volume, audioDelay, padTo }) {
   return af;
 }
 
-function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, audioMode = 'full' }) {
+function videoTimingFilter(speed, sourceFrameRate, sourceDuration, dropDuplicateFrames = false) {
+  const timing = `setpts=(PTS-STARTPTS)/${speed.toFixed(6)}`;
+  // 高帧率片源均匀减约 1/4，超高帧率封顶 60。低帧率和帧率不明的片源保留原有节奏。
+  const target = Math.min(60, Math.round(sourceFrameRate * speed * 0.75));
+  if (sourceFrameRate >= 47.9 && target >= 36) {
+    return `settb=1/90000,${timing},fps=${target}:eof_action=pass`;
+  }
+  if (dropDuplicateFrames && sourceFrameRate >= 23 && sourceFrameRate <= 31 && sourceDuration >= 1) {
+    // 最多跳一帧。末尾补一帧并放回尾帧时间戳，原尾帧仍在时滤掉同一位置的补帧。
+    const lastFrame = (sourceDuration - 1 / sourceFrameRate).toFixed(6);
+    const endTiming = `setpts='min(PTS-STARTPTS,round(${lastFrame}/TB))/${speed.toFixed(6)}'`;
+    const minGap = (0.5 / (sourceFrameRate * speed)).toFixed(6);
+    const select = `select='isnan(prev_selected_t)+gt(t-prev_selected_t,${minGap})'`;
+    return `mpdecimate=max=1:hi=0:lo=0:frac=0,tpad=stop=1:stop_mode=clone,settb=1/90000,${endTiming},${select}`;
+  }
+  return timing;
+}
+
+function sceneCropFilters(ratio, rolled, sceneCuts) {
+  const x = (offset) => `(iw-ow)*${offset.toFixed(6)}`;
+  const size = `iw*${ratio}:ih*${ratio}:x=${x(rolled.CX)}:y=(ih-oh)*${rolled.CY.toFixed(6)}`;
+  if (ratio === 1 || !sceneCuts.length || Math.abs(rolled.CX - 0.5) < 0.04) return [`crop=${size}`];
+  const commands = sceneCuts.map((time, i) => `${time.toFixed(6)} crop@shot x ${x(i % 2 === 0 ? 1 - rolled.CX : rolled.CX)}`);
+  return [`sendcmd='${commands.join(';')}'`, `crop@shot=${size}`];
+}
+
+function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, audioMode = 'full', thinFrames = true, sceneCuts = [] }) {
   const opts = validateOptions(rawOpts);
   const r = rolled || rollParams(opts);
   // 成品尺寸：原视频够 720p 就保持原尺寸；不够就按比例放大到 720p（平台要求），不加黑边、不改横竖屏构图。
@@ -466,9 +484,8 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   const audioDelay = Math.max(0, (media.audio_start - origin) / speed);
   const sourceDuration = media.video_duration > 0 ? media.video_duration : media.duration;
   const outputDuration = sourceDuration / speed + videoDelay;
-  const vf = [
-    `crop=iw*${opts.crop_ratio}:ih*${opts.crop_ratio}:x=(iw-ow)*${r.CX.toFixed(6)}:y=(ih-oh)*${r.CY.toFixed(6)}`,
-  ];
+  const vf = sceneCropFilters(opts.crop_ratio, r, opts.shot_reframe ? sceneCuts : []);
+  vf.push(videoTimingFilter(speed, thinFrames ? media.video_frame_rate : 0, sourceDuration, opts.drop_duplicate_frames));
   const filters = [];
   const videoInput = '[0:V:0]';
   const sourceAudio = '[0:a:0]';
@@ -482,7 +499,6 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   if (opts.rgb_shift > 0) vf.push('format=yuv420p');
   // 锐化量为负是轻微模糊；接近 0 时等于什么都没做，直接跳过省时间。3×3 比 5×5 快三成。
   if (Math.abs(r.UNSHARP) >= 0.05) vf.push(`unsharp=3:3:${r.UNSHARP.toFixed(4)}`);
-  vf.push(`setpts=(PTS-STARTPTS)/${speed.toFixed(6)}`);
   vf.push(
     `eq=brightness=${r.BRIGHTNESS.toFixed(4)}:contrast=${r.CONTRAST.toFixed(4)}:gamma=${r.GAMMA.toFixed(4)}:saturation=${r.SATURATION.toFixed(4)},hue=h=${r.HUE.toFixed(2)}`,
   );
@@ -536,7 +552,7 @@ function buildCommand({ src, dst, bgm, opts: rawOpts, rolled, media, encoder, au
   ];
   if (audioOutput) args.push('-map', '[a]', '-shortest');
   else args.push('-an');
-  // vfr：正常的帧原样保留；时间戳和上一帧重复或倒退的帧丢掉。片源里偶尔有这种坏时间戳，
+  // vfr：保留滤镜输出的正常帧；时间戳和上一帧重复或倒退的帧丢掉。片源里偶尔有这种坏时间戳，
   // 原样带进成品后，剪映草稿那一步会因为「时间戳重复或倒退」建不了时间轴。
   // 时间刻度放细到 1/90000 秒：加速后帧比原帧率密，按原帧率的刻度算会把正常的帧也当成「重复」丢掉。
   args.push(
@@ -592,7 +608,7 @@ async function probeMedia(ffprobePath, file, signal) {
       '-v',
       'error',
       '-show_entries',
-      'format=duration,start_time:stream=codec_type,start_time,duration,width,height,sample_aspect_ratio:stream_disposition=attached_pic:stream_side_data=rotation:stream_tags=rotate',
+      'format=duration,start_time:stream=codec_type,start_time,duration,width,height,sample_aspect_ratio,avg_frame_rate,r_frame_rate:stream_disposition=attached_pic:stream_side_data=rotation:stream_tags=rotate',
       '-of',
       'json',
       file,
@@ -618,6 +634,12 @@ async function probeMedia(ffprobePath, file, signal) {
   const sar = sarNum > 0 && sarDen > 0 ? sarNum / sarDen : 1;
   const codedWidth = Math.round((Number(videos[0]?.width) || 0) * sar);
   const codedHeight = Number(videos[0]?.height) || 0;
+  const frameRate = (value) => {
+    const [num, den] = String(value).split('/').map(Number);
+    return num > 0 && den > 0 ? num / den : 0;
+  };
+  const nominalRate = frameRate(videos[0]?.r_frame_rate);
+  const averageRate = frameRate(videos[0]?.avg_frame_rate);
   return {
     duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
     video_duration:
@@ -628,6 +650,8 @@ async function probeMedia(ffprobePath, file, signal) {
     has_audio: audios.length > 0,
     video_width: turned ? codedHeight : codedWidth,
     video_height: turned ? codedWidth : codedHeight,
+    // 名义和平均帧率相差明显的片源，保持原先的可变帧率处理。
+    video_frame_rate: Math.abs(nominalRate - averageRate) <= nominalRate * 0.01 ? averageRate : 0,
     video_start: start(videos),
     audio_start: start(audios),
   };
@@ -1003,6 +1027,7 @@ async function encodeOne({
   src,
   dst,
   speed = null,
+  thinFrames = true,
   bgm = null,
   opts,
   signal,
@@ -1026,6 +1051,24 @@ async function encodeOne({
   if (bgm) {
     const music = await probeMedia(ffprobePath, bgm, signal);
     if (!music.has_audio) throw new Error(`BGM 没有可用音频轨：${bgm}`);
+  }
+  let sceneCuts = [];
+  if (options.shot_reframe && options.crop_ratio < 1 && media.video_duration >= 2) {
+    try {
+      // 在最终编码读取的那条时间线上检测。重分集用合并后的刻度，避免各段倍速和音轨填充使切点漂移。
+      const detected = await detectScenes(ffmpegPath, src, signal);
+      for (const time of detected) {
+        if (time < (sceneCuts.at(-1) ?? 0) + 0.25) continue;
+        sceneCuts.push(time);
+      }
+      // FFmpeg 命令随进程参数传入，均匀取样以兼顾长视频和 Windows 的命令行长度限制。
+      const step = Math.ceil(sceneCuts.length / 180);
+      if (step > 1) sceneCuts = sceneCuts.filter((_, index) => index % step === 0);
+      if (sceneCuts.length) onLog?.(`[构图] 在 ${sceneCuts.length} 处镜头切换时调整水平裁切位置`);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      onLog?.(`[构图] 镜头分析失败，本集使用固定裁切：${keyDiagnostics(error.message)}`);
+    }
   }
   await fsp.mkdir(path.dirname(dst), { recursive: true });
   const tmp = path.join(path.dirname(dst), `.ai-drama-quchong-${randomUUID()}.mp4`);
@@ -1054,6 +1097,8 @@ async function encodeOne({
         media,
         encoder: useEncoder,
         audioMode,
+        thinFrames,
+        sceneCuts,
       });
     let command = build('full');
     onLog?.(`[开始] ${path.basename(dst)} 编码器=${encoder} 参数=${JSON.stringify(rolled)}`);
@@ -1250,7 +1295,7 @@ async function encodeOne({
  * 视频用高质量 x264，声音存成 PCM（不经过 AAC），所以这一步不会碰到 AAC 编码；
  * 后面的去重特效和重新编码只面对这一个干净的文件。
  */
-function buildPrepareCommand({ segments, media, dst }) {
+function buildPrepareCommand({ segments, media, dst, dropDuplicateFrames }) {
   const even = (value) => Math.max(2, Math.floor(Number(value) / 2) * 2);
   const width = even(media.video_width);
   const height = even(media.video_height);
@@ -1264,7 +1309,8 @@ function buildPrepareCommand({ segments, media, dst }) {
     filters.push(
       `[${index}:V:0]scale=trunc(iw*sar/2)*2:ih,setsar=1,` +
         `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
-        `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=(PTS-STARTPTS)/${speed.toFixed(6)}[sv${index}]`,
+        `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,` +
+        `${videoTimingFilter(speed, segment.video_frame_rate, segment.duration, dropDuplicateFrames)}[sv${index}]`,
     );
     labels.push(`[sv${index}]`);
     if (media.has_audio) {
@@ -1361,7 +1407,11 @@ async function runJob(args) {
   for (const [file, info] of probed) if (!info.has_video) throw new Error(`输入没有可用视频轨：${file}`);
   // 个别集没有音轨时，那几段补静音（见 buildPrepareCommand），不让整集失败。
   const withAudio = [...probed.values()].filter((info) => info.has_audio).length;
-  for (const part of parts) part.has_audio = probed.get(part.src).has_audio;
+  for (const part of parts) {
+    const media = probed.get(part.src);
+    part.has_audio = media.has_audio;
+    part.video_frame_rate = media.video_frame_rate;
+  }
   // 成片画幅按第一段的比例；同比例的集里有更清晰的（比如前几集是以前下的 360p、后面是 1080p），按最清晰的那集的尺寸，
   // 不把 1080p 的集缩成 360p。
   const first0 = probed.get(parts[0].src);
@@ -1380,6 +1430,7 @@ async function runJob(args) {
       segments: parts,
       media: { has_audio: withAudio > 0, video_width: first.video_width, video_height: first.video_height },
       dst: middle,
+      dropDuplicateFrames: validateOptions(args.opts).drop_duplicate_frames,
     });
     onStage?.('merging');
     onLog?.(`[合并] ${parts.length} 段按各自的倍数变速并接成一集（去重前），再统一加去重特效重新编码`);
@@ -1406,6 +1457,8 @@ async function runJob(args) {
       src: middle,
       segments: undefined,
       speed: 1,
+      // 每段已经按各自的片源帧率处理，合并后保留各段节奏。
+      thinFrames: false,
       onProgress: (value) => onProgress?.(25 + value * 0.75),
     });
     return { ...done, mergeSeconds };

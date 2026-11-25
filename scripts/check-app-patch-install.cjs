@@ -181,6 +181,20 @@ async function main() {
       downloadedEpisodes = await require('./check-download-v5-live.cjs').verifyDownloadV5Live(archive);
       await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
     }
+    else if (focusedScope === 'poster-dedup-and-update') {
+      assert.equal(fromVersion, '1.2.60');
+      require('./protect-app.cjs').verifyProtectedArchive(archive);
+      await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
+      const poster = require(archive + '/src/native/publish-materials.js');
+      const folder = path.join(userData, '海报提示词验收');
+      poster.savePosterPrompt(folder, '蓝色雨夜\n暖色纸灯');
+      assert.equal(poster.readPosterPrompt(folder), '蓝色雨夜\n暖色纸灯');
+      poster.savePosterPrompt(folder, '');
+      assert.equal(poster.readPosterPrompt(folder), '');
+      const { DEFAULTS } = require(archive + '/src/native/quchong.js');
+      assert.equal(DEFAULTS.shot_reframe, true);
+      assert.equal(DEFAULTS.drop_duplicate_frames, true);
+    }
     else if (focusedScope === 'license-protection-and-update') {
       require('./protect-app.cjs').verifyProtectedArchive(archive);
       await require('./check-license-protection.cjs').verifyLicenseProtection(archive);
@@ -193,7 +207,7 @@ async function main() {
       assert.equal(ai.copyWritingConfig({ ai_copy_provider: 'doubao', ark_api_key: 'test' }).ai_text_model, 'doubao-seed-2-1-turbo-260628');
     }
   }
-  const limitBytes = (manifest.version === '1.2.60' ? 40 : 25) * 1024 * 1024;
+  const limitBytes = (['1.2.60', '1.2.61'].includes(manifest.version) ? 40 : 25) * 1024 * 1024;
   assert.ok(paths.bytes < limitBytes && servedBytes < limitBytes);
   const evidence = { from: fromVersion, to: manifest.version, type: 'application-patch', bytes: paths.bytes, servedBytes,
     downloadVerified: true, installed: true, chinesePath: true, busyBlocked: true, requestedQuit,
@@ -201,7 +215,7 @@ async function main() {
     ...(downloadedEpisodes ? { downloadV5RecoveryChecked: true, downloadedEpisodes } : {}),
     runtimeMismatchRejected: !focused, restarted: true, startup,
     ...(focused ? { scope: focusedScope, engineRegressionRun: '43561340463',
-      ...(focusedScope === 'report-protection-and-update' ? {reportProtectionChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
+      ...(focusedScope === 'report-protection-and-update' ? {reportProtectionChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'download-v5-and-update' ? {downloadV5Checked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'poster-dedup-and-update' ? {posterPromptChecked:true,dedupChecked:true,licenseProtectionChecked:true,obfuscatedArchiveChecked:true} : focusedScope === 'license-protection-and-update' ? {licenseProtectionChecked:true, obfuscatedArchiveChecked:true} : focusedScope === 'template-import-and-update' ? {templateImportChecked:true} : {modelPreset:'doubao-seed-2-1-turbo-260628'}) } : {}) };
   fs.writeFileSync(path.join(output, 'automatic-update-acceptance.json'), JSON.stringify(evidence, null, 2));
   console.log('PASS actual updater → small patch:', evidence);
 }

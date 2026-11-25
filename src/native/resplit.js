@@ -156,7 +156,7 @@ async function detectScenes(ffmpegPath, file, signal, { hwaccel = true, platform
     try {
       const text = await capture(
         ffmpegPath,
-        ['-hide_banner', '-nostdin', ...method.input, '-i', file, '-an', '-vf', method.vf, '-f', 'null', '-'],
+        ['-hide_banner', '-nostdin', ...method.input, '-i', file, '-map', '0:V:0', '-an', '-vf', method.vf, '-f', 'null', '-'],
         signal,
         'stdout',
       );

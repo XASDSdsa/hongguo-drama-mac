@@ -19,6 +19,8 @@ const seriesLayout = require('./series-layout');
 const OUTPUT_INFO = seriesLayout.NEW_INFO;
 const OUTPUT_POSTER = seriesLayout.NEW_POSTER;
 const STATE_FILE = 'state.json';
+const POSTER_PROMPT_FILE = 'poster-prompt.txt';
+const POSTER_PROMPT_MAX = 1600;
 
 const TITLE_MIN = 3;
 const TITLE_MAX = 10;
@@ -344,6 +346,22 @@ function writeState(workDir, state) {
   writeAtomic(path.join(workDir, STATE_FILE), JSON.stringify(state, null, 2));
 }
 
+function readPosterPrompt(workDir) {
+  try {
+    return fs.readFileSync(path.join(workDir, POSTER_PROMPT_FILE), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  }
+}
+
+function savePosterPrompt(workDir, prompt) {
+  if (typeof prompt !== 'string') throw new Error('海报提示词需要是文字');
+  const text = prompt.replace(/\r\n?/g, '\n').trim();
+  if (text.length > POSTER_PROMPT_MAX) throw new Error(`海报提示词最多 ${POSTER_PROMPT_MAX} 字`);
+  writeAtomic(path.join(workDir, POSTER_PROMPT_FILE), text);
+}
+
 function outputPaths(outputDir) {
   return {
     dir: outputDir,
@@ -509,19 +527,24 @@ async function makePoster({
   const paths = outputPaths(outputDir);
   const report = (stage, message) => onProgress?.({ stage, message });
 
-  report('scene', '正在构思海报画面');
-  const sceneRaw = await openai.chatJson(
-    buildSceneMessages({ title: chosen.title, synopsis: savedSynopsis(paths) || synopsis }),
-    { signal },
-    copyConfig || config,
-  );
-  state.copy.scene = clip(sceneRaw?.scene, 300);
-  if (!state.copy.scene) throw new Error('模型没有给出海报画面，请重试');
+  const customPrompt = readPosterPrompt(workDir);
+  if (customPrompt) {
+    state.copy.scene = customPrompt;
+  } else {
+    report('scene', '正在构思海报画面');
+    const sceneRaw = await openai.chatJson(
+      buildSceneMessages({ title: chosen.title, synopsis: savedSynopsis(paths) || synopsis }),
+      { signal },
+      copyConfig || config,
+    );
+    state.copy.scene = clip(sceneRaw?.scene, 300);
+    if (!state.copy.scene) throw new Error('模型没有给出海报画面，请重试');
+  }
 
   report('art', '正在画海报底图');
   const art = await makeArt({
     copy: state.copy,
-    coverPath,
+    coverPath: customPrompt ? null : coverPath,
     config,
     visionConfig,
     openai,
@@ -655,6 +678,9 @@ module.exports = {
   makePoster,
   retitle,
   saveSynopsis,
+  POSTER_PROMPT_MAX,
+  readPosterPrompt,
+  savePosterPrompt,
   readResult,
   outputPaths,
 };

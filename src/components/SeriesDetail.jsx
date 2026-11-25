@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './SeriesDetail.css';
 import { Check, ChevronDown, Folder, RefreshCw } from './icons';
 import DedupParams, { rangeProblems } from './DedupParams';
+import strongPreset from '../native/dedup-strong.json';
 import PublishPanel from './PublishPanel';
 import Pager from './Pager';
 import SeriesProgress, { isActiveBatch } from './SeriesProgress';
@@ -9,8 +10,8 @@ import useLiveData from './useLiveData';
 import useDialogKeyboard from './useDialogKeyboard';
 import { clampPage, slicePage } from './pagination';
 
-// 画面参数的项目和默认值换过一版：换个键，旧的保存值不再覆盖新默认值。
 const STORAGE_KEY = 'library-params-v2';
+const DEDUP_PRESET_VERSION = 1;
 // 旧成品挪去哪里：Mac 叫废纸篓，Windows 叫回收站。
 const TRASH = /Mac/.test((typeof navigator !== 'undefined' && navigator.platform) || '') ? '废纸篓' : '回收站';
 const VIEW_KEY = 'library-view';
@@ -744,7 +745,9 @@ export default function SeriesDetail({ folder, active = true }) {
     window.electronAPI
       .quchongDefaults?.()
       .then((defaults) => {
-        if (alive && defaults) setOpts({ ...defaults, ...DEFAULT_SPEED, ...savedOpts });
+        if (!alive || !defaults) return;
+        const upgrade = saved.dedupPresetVersion !== DEDUP_PRESET_VERSION ? strongPreset : {};
+        setOpts({ ...defaults, ...DEFAULT_SPEED, ...savedOpts, ...upgrade });
       })
       .catch(() => {
         if (alive) setNotice('读取去重参数失败，请重新打开这部剧');
@@ -757,7 +760,10 @@ export default function SeriesDetail({ folder, active = true }) {
   useEffect(() => {
     if (opts) {
       const { jobs: _jobs, encoder: _encoder, ...keep } = opts;
-      writeJson(STORAGE_KEY, { opts: keep, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn });
+      writeJson(STORAGE_KEY, {
+        dedupPresetVersion: DEDUP_PRESET_VERSION,
+        opts: keep, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn,
+      });
     }
   }, [opts, split, dedupOn, draftOn, draftMode, draftPrompts, draftNums, costOn]);
   useEffect(() => {

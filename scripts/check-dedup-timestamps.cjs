@@ -37,12 +37,9 @@ function timeline(file) {
       { maxBuffer: 1 << 28 },
     ).toString(),
   ).frames;
-  let bad = 0;
-  frames.forEach((frame, index) => {
-    const t = Number(frame.best_effort_timestamp_time);
-    if (!Number.isFinite(t) || (index && !(t > Number(frames[index - 1].best_effort_timestamp_time)))) bad += 1;
-  });
-  return { count: frames.length, bad };
+  const times = frames.map((frame) => Number(frame.best_effort_timestamp_time));
+  const bad = times.filter((t, index) => !Number.isFinite(t) || (index > 0 && !(t > times[index - 1]))).length;
+  return { count: times.length, bad, times };
 }
 
 (async () => {
@@ -134,6 +131,103 @@ function timeline(file) {
       `PASS ${label}: plain ${a.count} frames, re-split ${b.count} frames, no repeated or backward timestamps`,
     );
   }
+
+  const highRate = path.join(tmp, '60fps.mp4');
+  execFileSync(ffmpeg, [
+    '-v',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=size=320x568:rate=60:duration=4',
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:duration=4',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-c:a',
+    'aac',
+    '-shortest',
+    highRate,
+  ]);
+
+  const thin = path.join(tmp, 'thinned.mp4');
+  const mixed = path.join(tmp, 'mixed.mp4');
+  const base = { ffmpegPath: ffmpeg, ffprobePath: ffprobe, opts: options };
+  await quchong.runJob({ ...base, src: highRate, dst: thin, speed: 1.2 });
+  const thinned = timeline(thin);
+  assert.equal(thinned.bad, 0);
+  assert.ok(Math.abs(thinned.count - 180) <= 1, `60 fps input should lose about 25% of 240 frames (${thinned.count})`);
+  assert.ok(Math.abs((await quchong.probeMedia(ffprobe, thin)).video_duration - 4 / 1.2) < 0.04);
+
+  await quchong.runJob({
+    ...base,
+    dst: mixed,
+    segments: [
+      { src: good, start: 0, duration: 2, speed: 1 },
+      { src: highRate, start: 0, duration: 2, speed: 1 },
+    ],
+  });
+  const combined = timeline(mixed);
+  assert.equal(combined.bad, 0);
+  const lowRateFrames = combined.times.filter((time) => time < 2).length;
+  assert.ok(Math.abs(lowRateFrames - 50) <= 1, `25 fps segment should keep its frames (${lowRateFrames})`);
+  const highRateFrames = combined.count - lowRateFrames;
+  assert.ok(Math.abs(highRateFrames - 90) <= 1, `60 fps segment should be thinned once (${highRateFrames})`);
+  execFileSync(ffmpeg, [
+    '-v',
+    'error',
+    '-xerror',
+    '-i',
+    mixed,
+    '-fps_mode',
+    'passthrough',
+    '-enc_time_base:v',
+    '1:90000',
+    '-f',
+    'null',
+    '-',
+  ]);
+  console.log(`PASS frame thinning: 60 fps ${thinned.count}/240 frames; mixed ${lowRateFrames} + ${highRateFrames} frames`);
+
+  const repeated = path.join(tmp, 'repeated.mp4');
+  const encoded = path.join(tmp, 'repeated-encoded.mp4');
+  execFileSync(ffmpeg, [
+    '-v',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    "color=blue:size=320x568:rate=25:duration=4,drawbox=w=iw:h=ih:color=white:t=fill:enable='gte(t,2)'",
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:duration=4',
+    '-c:v',
+    'libx264',
+    '-c:a',
+    'aac',
+    '-shortest',
+    repeated,
+  ]);
+  const logs = [];
+  await quchong.runJob({ ...base, src: repeated, dst: encoded, speed: 1, onLog: (line) => logs.push(line) });
+  const still = timeline(encoded);
+  assert.equal(still.bad, 0);
+  assert.ok(still.count >= 50 && still.count <= 52, `the repeated clip should retain about half its frames (${still.count})`);
+  const output = await quchong.probeMedia(ffprobe, encoded);
+  assert.ok(Math.abs(output.video_duration - 4) < 0.015, 'keep the full still-frame hold at the end');
+  const audioDuration = Number(execFileSync(ffprobe, [
+    '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=duration', '-of', 'csv=p=0', encoded,
+  ]));
+  assert.ok(Math.abs(output.video_duration - audioDuration) < 0.03, 'video and audio should end within one source frame');
+  assert.ok(logs.some((line) => line.includes('在 1 处镜头切换')), 'runJob should detect the hard cut');
+  console.log(`PASS repeated frames: ${still.count}/100 frames, full length kept, hard cut found`);
 })().catch((error) => {
   console.error(error);
   process.exit(1);

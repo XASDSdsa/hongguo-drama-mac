@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import './DedupParams.css';
+import strongPreset from '../native/dedup-strong.json';
 
 // 去重参数面板：「一键处理」和「管理剧集」共用，参数名与主进程 quchong.validateOptions 一致。
 // 常用的画面参数：每集在「最小值 ~ 最大值」之间随机取一个，都是很便宜的调色和锐化。
@@ -32,6 +33,8 @@ export const HEAVY_PARAMS = [
 ];
 
 const FLAGS = [
+  ['shot_reframe', '按镜头调整构图'],
+  ['drop_duplicate_frames', '精简重复帧'],
   ['vignette', '暗角（较慢）'],
   ['eq_enable', '均衡器'],
 ];
@@ -118,7 +121,7 @@ export function rangeProblems(opts = {}, split = null) {
  * 去重参数面板。传入 split 时分成「时间与速度 / 画面参数」两页（重新拆分用）；
  * 不传 split 时只有画面参数（含变速范围），和以前一样。
  */
-export default function DedupParams({ opts, onChange, disabled = false, split = null, onSplitChange, onReset }) {
+export default function DedupParams({ opts, onChange, disabled = false, split = null, onSplitChange, onReset, onApplyPreset }) {
   const [tab, setTab] = useState('time');
   const tabbed = !!split;
   const basic = BASIC_PARAMS.filter(([key]) => !tabbed || !['speed_min', 'speed_max'].includes(key));
@@ -140,8 +143,22 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
     );
   };
   const problems = rangeProblems(opts, split);
+  const strongApplied = Object.entries(strongPreset).every(([key, value]) => opts[key] === value);
   return (
     <div className="dedup-params">
+      {onApplyPreset && (
+        <div className="dedup-preset">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={disabled || strongApplied}
+            onClick={() => onApplyPreset(strongPreset)}
+          >
+            {strongApplied ? '已应用加强' : '应用加强预设'}
+          </button>
+          <span>按镜头调整构图、精简重复帧，另有轻微变调和噪点。</span>
+        </div>
+      )}
       {problems.length > 0 && (
         <p className="dedup-problem" role="alert">
           参数需要调整：{problems.join('；')}
@@ -221,7 +238,7 @@ export default function DedupParams({ opts, onChange, disabled = false, split = 
             {basic.map(([key, label, step, min, max]) => number('opts', key, label, step, min, max))}
           </div>
           <details className="dedup-heavy">
-            <summary>更多效果（较慢，默认关闭）</summary>
+            <summary>更多画面与音频效果</summary>
             <div className="dedup-grid">
               {HEAVY_PARAMS.map(([key, label, step, min, max]) => number('opts', key, label, step, min, max))}
               {FLAGS.map(([key, label]) => (

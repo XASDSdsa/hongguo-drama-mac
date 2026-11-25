@@ -191,6 +191,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   publishCancel: (dir) => ipcRenderer.invoke('publish-cancel', dir),
   publishRetitle: (payload) => ipcRenderer.invoke('publish-retitle', payload),
   publishSaveSynopsis: (payload) => ipcRenderer.invoke('publish-save-synopsis', payload),
+  publishSavePosterPrompt: (payload) => ipcRenderer.invoke('publish-save-poster-prompt', payload),
   onPublishUpdate: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on('publish-update', listener);

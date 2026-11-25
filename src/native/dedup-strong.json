@@ -1,0 +1,12 @@
+{
+  "crop_ratio": 0.91,
+  "unsharp_min": 0.25,
+  "unsharp_max": 0.65,
+  "noise_min": 2,
+  "noise_max": 4,
+  "pitch_min": 1.01,
+  "pitch_max": 1.03,
+  "rotation_max": 0,
+  "shot_reframe": true,
+  "drop_duplicate_frames": true
+}
