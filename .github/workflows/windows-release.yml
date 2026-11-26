@@ -893,7 +893,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '导入已有剧集时须提供有效海报和简介。缺少文件、名称错误、格式不符、简介为空时会弹窗列明原因。'
+      UPDATE_RELEASE_NOTES: '左侧导航新增「视频处理」功能：选择剧集文件夹并勾选集数后，自动并发反推全剧共享 AI 资产图（原片帧图生图+透明背景道具）、逐镜中文动态提示词，并自动导出《剧名AI资产图.png》《剧名操作视频.mp4》与每集《剧名第N集.png》。'
       UPDATE_CHECK_SCOPE: license-protection-and-update
     steps:
       - uses: actions/checkout@v5
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 45655731251
+          run-id: 45660105068
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Extract the hash-pinned upstream SDK component only
@@ -972,7 +972,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check imports, report templates and upgrade from 1.2.64
+      - name: Check imports, report templates and upgrade from 1.2.65
         shell: pwsh
         run: |
           node scripts/check-series-library.cjs 'flat MP4'

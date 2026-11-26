@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
-import { Settings, Play, Home, Search, Folder, ChevronRight } from './components/icons';
+import { Settings, Play, Home, Search, Folder, Film, ChevronRight } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import SettingsPage from './components/Settings';
 import Browse from './components/Browse';
 import SeriesLibrary from './components/SeriesLibrary';
+import VideoStudio from './components/VideoStudio';
 import AppUpdate from './components/AppUpdate';
 import LicenseStatus from './components/LicenseStatus';
 
@@ -12,6 +13,7 @@ const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
   { id: 'download', label: '搜索与下载', icon: Search },
   { id: 'library', label: '管理剧集', icon: Folder },
+  { id: 'video-process', label: '视频处理', icon: Film },
   { id: 'settings', label: '设置', icon: Settings },
 ];
 
@@ -71,6 +73,8 @@ export default function App() {
             onBackChange={changeLibraryBack}
           />
         );
+      case 'video-process':
+        return <VideoStudio active={page === id} />;
       case 'settings':
         return <SettingsPage active={page === id} />;
       case 'download':

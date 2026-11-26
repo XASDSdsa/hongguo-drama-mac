@@ -3729,6 +3729,174 @@ async function startQuchongBatch(payload = {}) {
 }
 ipcMain.handle('quchong-start', (_event, payload) => startQuchongBatch(payload));
 
+// ===== 视频处理：选择剧文件夹 → 勾选集数（默认4集）→ AI反推资产图 + 录制操作视频 + 每集分镜截图 =====
+const { fork: forkVideoStudio } = require('child_process');
+const videoStudioScanner = require('./src/native/video-studio/folder-scanner');
+const videoStudioEngine = require('./src/native/video-studio/reverse-engine');
+const videoStudioExporter = require('./src/native/video-studio/capture-exporter');
+
+let videoStudioAbort = null;
+let videoStudioWorker = null;
+
+function runReverseInWorker(options, onProgress, signal) {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, 'src/native/video-studio/reverse-worker.js');
+    const child = forkVideoStudio(workerPath, [], {
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+    videoStudioWorker = child;
+    let settled = false;
+
+    const cleanup = () => {
+      if (videoStudioWorker === child) videoStudioWorker = null;
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      try { child.send({ type: 'cancel' }); } catch {}
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 200);
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(new Error('任务已取消'));
+      }
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+
+    child.on('message', (msg) => {
+      if (!msg) return;
+      if (msg.type === 'progress') {
+        onProgress(msg.data);
+      } else if (msg.type === 'done' && !settled) {
+        settled = true;
+        cleanup();
+        resolve(msg.result);
+      } else if (msg.type === 'error' && !settled) {
+        settled = true;
+        cleanup();
+        reject(new Error(msg.error || '视频反推失败'));
+      }
+    });
+    child.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(err);
+      }
+    });
+    child.on('exit', (code) => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(new Error(signal?.aborted ? '任务已取消' : `视频处理子进程异常退出 (code ${code})`));
+      }
+    });
+
+    child.send({ type: 'start', options });
+  });
+}
+
+ipcMain.handle('video-studio-select-folder', async () => {
+  try {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '选择整部剧集所在文件夹',
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const scanned = videoStudioScanner.scanDramaFolder(res.filePaths[0]);
+    if (!scanned.episodes.length) {
+      return { success: false, error: '该文件夹下未找到任何视频文件（.mp4/.mov/.mkv）' };
+    }
+    return { success: true, ...scanned };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('video-studio-cancel', async () => {
+  if (videoStudioAbort) {
+    videoStudioAbort.abort();
+    videoStudioAbort = null;
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('video-studio-open-path', async (_event, targetPath) => {
+  if (!targetPath || !fs.existsSync(targetPath)) return { ok: false };
+  await shell.openPath(path.resolve(String(targetPath)));
+  return { ok: true };
+});
+
+ipcMain.handle('video-studio-start', async (_event, payload) => {
+  if (videoStudioAbort) {
+    return { success: false, error: '当前已有视频处理任务正在运行，请等待完成或先取消。' };
+  }
+  const ffmpegPath = resolveFfmpeg('ffmpeg');
+  const ffprobePath = resolveFfmpeg('ffprobe');
+  if (!ffmpegPath || !ffprobePath) {
+    return { success: false, error: '未找到内置 FFmpeg / ffprobe，请先检查运行库配置。' };
+  }
+  const selectedEpisodes = Array.isArray(payload?.selectedEpisodes) ? payload.selectedEpisodes : [];
+  if (!selectedEpisodes.length) {
+    return { success: false, error: '请至少勾选 1 集视频。' };
+  }
+
+  const seriesTitle = videoStudioScanner.sanitizeFilename(payload?.seriesTitle || '未命名短剧');
+  const outputDir = path.resolve(String(payload?.outputDir || payload?.folderPath || app.getPath('downloads')));
+  const workDir = path.join(app.getPath('userData'), 'video-studio-work', `${Date.now()}`);
+  const settings = getCurrentSettings();
+  const arkApiKey = String(payload?.arkApiKey || settings?.ark_api_key || '').trim();
+  const outputPaths = videoStudioScanner.buildOutputPaths(
+    outputDir,
+    seriesTitle,
+    selectedEpisodes.map((e) => e.number),
+  );
+
+  const emitProgress = (data) => {
+    try {
+      mainWindow?.webContents?.send('video-studio-progress', data);
+    } catch {}
+  };
+
+  videoStudioAbort = new AbortController();
+  try {
+    const studioResult = await runReverseInWorker(
+      {
+        ffmpegPath,
+        ffprobePath,
+        seriesTitle,
+        selectedEpisodes,
+        workDir,
+        arkApiKey,
+        visionModel: payload?.visionModel || videoStudioEngine.DEFAULT_ARK_VISION_MODEL,
+        imageModel: payload?.imageModel || videoStudioEngine.DEFAULT_ARK_IMAGE_MODEL,
+      },
+      emitProgress,
+      videoStudioAbort.signal,
+    );
+
+    const outputs = await videoStudioExporter.exportStudioMediaArtifacts({
+      ffmpegPath,
+      studioResult,
+      outputPaths,
+      signal: videoStudioAbort.signal,
+      onProgress: emitProgress,
+    });
+
+    emitProgress({ stage: 'done', percent: 100, message: '全部导出完成！' });
+    return { success: true, outputs, stats: studioResult.stats };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  } finally {
+    videoStudioAbort = null;
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
 // ===== 管理剧集：一个文件夹就是一部剧，集以文件夹里实际存在的视频为准 =====
 let libraryFolderList = null;
 function libraryFolders() {

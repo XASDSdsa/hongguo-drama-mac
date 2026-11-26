@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>即梦短剧工坊 · 《记忆回响》四模式一体化创作台</title>
+  <link rel="stylesheet" href="./studio.css" />
+  <style>
+    #embedded-dag-stage { position: absolute; inset: 0; overflow: hidden; background: radial-gradient(circle, rgba(148,163,184,0.14) 1px, transparent 1px) 0 0 / 24px 24px, #090c12; }
+    #embedded-dag-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; transition: transform 0.55s cubic-bezier(.22,.61,.36,1); }
+    #embedded-dag-svg { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+    .edag-node { position: absolute; background: #101729; border: 1px solid rgba(148,163,184,0.26); border-radius: 10px; overflow: hidden; box-shadow: 0 10px 28px rgba(0,0,0,0.48); }
+    .edag-node.hl { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.5), 0 12px 30px rgba(0,0,0,0.65); }
+    .edag-nh { padding: 6px 10px; font-size: 11px; font-weight: 700; background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(148,163,184,0.16); color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .edag-nb { padding: 8px 10px; font-size: 11px; line-height: 1.48; color: #cbd5e1; }
+    .edag-img { width: 100%; height: 118px; object-fit: contain; background: #05080f; display: block; }
+    .edag-tl { display: flex; gap: 6px; padding: 8px; overflow: hidden; }
+    .edag-tl img { width: 72px; height: 96px; object-fit: cover; border-radius: 5px; border: 1px solid rgba(148,163,184,0.2); }
+    #demo-cursor { position: fixed; left: -40px; top: -40px; width: 22px; height: 22px; border-radius: 50%; background: rgba(56,189,248,0.28); border: 2px solid #38bdf8; box-shadow: 0 0 14px rgba(56,189,248,0.85); pointer-events: none; z-index: 9999; transition: left 0.4s ease, top 0.4s ease, opacity 0.25s; opacity: 0; }
+    #demo-cursor.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="studio-app" class="studio-shell">
+    <!-- Top Header Bar -->
+    <header class="studio-topbar">
+      <div class="topbar-left">
+        <div class="brand-mark" title="即梦短剧工坊">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M4 17V7m4 12V5m4 10V9m4 8V6m4 9V10" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round"/>
+            <defs>
+              <linearGradient id="g" x1="4" y1="5" x2="20" y2="19" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#60a5fa"/><stop offset="1" stop-color="#38bdf8"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <button id="episode-dropdown-btn" class="episode-title-pill" type="button">
+          <span id="header-episode-title">记忆回响-第1集</span>
+          <span class="chev">▾</span>
+        </button>
+        <span id="header-node-count" class="meta-chip">节点 13</span>
+        <span class="save-badge"><i class="dot"></i><span id="save-status-text">已保存</span></span>
+      </div>
+
+      <!-- Center 4-Mode Glowing Pill Switcher -->
+      <nav class="mode-switcher" role="tablist" aria-label="短剧工作台模式切换">
+        <button class="mode-tab" data-mode="assets" role="tab" aria-selected="false">AI资产图</button>
+        <button class="mode-tab" data-mode="canvas" role="tab" aria-selected="false">节点画布 + 生成面板</button>
+        <button class="mode-tab active" data-mode="pipeline" role="tab" aria-selected="true">分镜流水线</button>
+        <button class="mode-tab" data-mode="splice" role="tab" aria-selected="false">分镜视频拼接</button>
+      </nav>
+
+      <div class="topbar-right">
+        <button id="btn-open-native-canvas" class="icon-pill" title="新窗口打开全屏原生画布">↗ 原生画布</button>
+        <button id="btn-share" class="icon-pill">↗ 分享</button>
+        <div class="credits-pill" title="创作积分">
+          <span class="star">✦</span>
+          <span id="header-credits">5280</span>
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='20' fill='%232563eb'/%3E%3Ctext x='50%25' y='54%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-size='16' font-weight='700' font-family='sans-serif'%3EAI%3C/text%3E%3C/svg%3E" alt="创作者头像" class="avatar" />
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Body: Persistent Left Episode Sidebar + Active Mode Workspace -->
+    <div class="studio-body">
+      <aside class="episode-sidebar" aria-label="创作列表">
+        <div class="series-picker-box">
+          <label class="series-picker-label" for="series-select">🎬 当前剧目</label>
+          <select id="series-select" class="series-select" aria-label="切换剧目"></select>
+        </div>
+        <div class="sidebar-header">
+          <span class="sidebar-title">▦ 剧集列表</span>
+          <span id="episode-total-badge" class="count-pill">1集</span>
+        </div>
+        <div id="episode-list" class="episode-list"></div>
+        <div class="sidebar-footer">
+          <button id="btn-add-episode" class="add-ep-btn" type="button">+ 新建下一集（复用资产）</button>
+        </div>
+      </aside>
+
+      <main class="workspace-stage">
+        <!-- MODE 1: AI资产图（全剧共享资产库） -->
+        <section id="view-assets" class="mode-view" hidden>
+          <div class="assets-toolbar">
+            <div class="filter-group" id="asset-category-pills">
+              <button class="filter-pill active" data-cat="all">全部资产</button>
+              <button class="filter-pill" data-cat="character">角色·<span data-count="character">2</span></button>
+              <button class="filter-pill" data-cat="prop">道具·<span data-count="prop">1</span></button>
+              <button class="filter-pill" data-cat="scene">场景·<span data-count="scene">1</span></button>
+              <span class="toolbar-sep"></span>
+              <button id="btn-scope-series" class="scope-pill active" data-scope="series" type="button">🌐 全剧共享库</button>
+              <button id="btn-scope-episode" class="scope-pill" data-scope="episode" type="button">🎬 仅看本集引用</button>
+            </div>
+            <div class="action-group">
+              <button id="btn-sync-subjects" class="subtle-btn" type="button">全部同步主体库</button>
+              <button id="btn-batch-prompts" class="gold-cta-btn" type="button">⚡ 一键生成提示词</button>
+              <button id="btn-go-pipeline-from-assets" class="subtle-btn" type="button">进入分镜流水线 ▸</button>
+            </div>
+          </div>
+
+          <div class="assets-layout">
+            <aside class="assets-subnav">
+              <div class="subnav-section">
+                <div class="subnav-heading">资产分类</div>
+                <button class="subnav-item active" data-cat="all"><span>• 全部核心资产</span><b id="sub-count-all">4</b></button>
+                <button class="subnav-item" data-cat="character"><span>• 主角三视图</span><b id="sub-count-char">2</b></button>
+                <button class="subnav-item" data-cat="scene"><span>• 核心场景</span><b id="sub-count-scene">1</b></button>
+                <button class="subnav-item" data-cat="prop"><span>• 关键道具</span><b id="sub-count-prop">1</b></button>
+              </div>
+              <div class="subnav-section">
+                <div class="subnav-heading">属性维度</div>
+                <div class="attr-tag">情绪状态</div>
+                <div class="attr-tag">动作姿态</div>
+                <div class="attr-tag">服化造型</div>
+                <div class="attr-tag">时代设定</div>
+                <div class="attr-tag">声音设定</div>
+                <div class="attr-tag">逻辑关系</div>
+              </div>
+            </aside>
+            <div id="asset-cards-container" class="asset-cards-scroll"></div>
+          </div>
+        </section>
+
+        <!-- MODE 2: 节点画布 + 生成面板 (Embedded 100% Native Jimeng AI Canvas + Omni Reference Drawer) -->
+        <section id="view-canvas" class="mode-view canvas-mode-view" hidden>
+          <div class="canvas-floating-bar">
+            <button class="cbar-btn" data-caction="crop">✂ 裁剪画板</button>
+            <button class="cbar-btn" data-caction="layout">▤ 自动布局</button>
+            <button class="cbar-btn" data-caction="storyboard">✧ 分镜描</button>
+            <button class="cbar-btn" data-caction="history">❐ 生成回溯</button>
+            <button class="cbar-btn" data-caction="share">∞ 分镜共享</button>
+            <span class="cbar-sep"></span>
+            <button id="btn-toggle-omni" class="cbar-btn active" type="button">✦ 全能参考面板</button>
+          </div>
+
+          <div id="embedded-dag-stage">
+            <div id="embedded-dag-inner">
+              <svg id="embedded-dag-svg" width="2600" height="2400"></svg>
+              <div id="embedded-dag-nodes"></div>
+            </div>
+          </div>
+          <iframe
+            id="native-canvas-iframe"
+            class="native-canvas-frame"
+            style="display:none"
+            src="/ai-tool/ai-canvas/49933fd7-0fb5-4f9e-8fb2-35ea18202df6?enter_from=create_new&from_page=canvas-home"
+            title="原生即梦AI无限画布"
+          ></iframe>
+
+          <!-- Bottom-Right Omni Reference Generation Panel (matching reference screenshot 3) -->
+          <aside id="omni-panel" class="omni-panel">
+            <div class="omni-tabs">
+              <button class="omni-tab active" data-otab="omni">全能参考</button>
+              <button class="omni-tab" data-otab="i2v">图生视频</button>
+              <button class="omni-tab" data-otab="flf">首尾帧</button>
+              <button class="omni-tab" data-otab="edit">视频编辑</button>
+              <button class="omni-tab" data-otab="t2v">文生视频</button>
+              <button id="btn-close-omni" class="omni-close" title="收起面板">✕</button>
+            </div>
+            <div class="omni-notice">
+              <span>⚡ 点击下方资产缩略图可快速插入 @主体参考，一键驱动多镜视频生成</span>
+            </div>
+            <div id="omni-ref-strip" class="omni-ref-strip"></div>
+            <textarea id="omni-prompt-input" class="omni-textarea" rows="8"></textarea>
+            <div class="omni-footer">
+              <div class="omni-params">
+                <span class="param-pill">🎬 视频生成</span>
+                <span class="param-pill">Seedance 2.0 Fast</span>
+                <span class="param-pill">16:9 / 16S / 1080P</span>
+              </div>
+              <button id="btn-omni-generate" class="omni-go-btn" type="button">↑ 一键生成</button>
+            </div>
+          </aside>
+        </section>
+
+        <!-- MODE 3: 分镜流水线 (matching reference screenshots 4-7) -->
+        <section id="view-pipeline" class="mode-view">
+          <div class="pipeline-scroll">
+            <!-- Top Script Summary Card -->
+            <div class="script-summary-card">
+              <div class="summary-kicker">≡ 剧本摘要</div>
+              <h1 id="pipeline-drama-title" class="summary-title">剧名：记忆回响 · 第1集《雨夜重逢》</h1>
+              <p id="pipeline-synopsis" class="summary-synopsis"></p>
+              <div class="summary-actions">
+                <button id="btn-generate-shot" class="summary-add-btn" type="button">+ 生成分镜</button>
+                <button id="btn-jump-canvas" class="summary-ghost-btn" type="button">打开节点画布 ↗</button>
+                <button id="btn-jump-splice" class="summary-ghost-btn" type="button">进入视频拼接 ▶</button>
+              </div>
+            </div>
+
+            <!-- Decorative SVG Flow Connector -->
+            <div class="pipeline-connectors" aria-hidden="true">
+              <svg viewBox="0 0 1200 44" preserveAspectRatio="none">
+                <path d="M600 0 L600 20 M190 20 L1010 20 M190 20 L190 44 M600 20 L600 44 M1010 20 L1010 44"
+                      stroke="rgba(148,163,184,0.22)" stroke-width="1.5" fill="none" />
+              </svg>
+            </div>
+
+            <!-- 3-Column Storyboard Pipeline (Col 1 assets + paired rows for Prompt ↔ Video) -->
+            <div class="pipeline-grid">
+              <!-- Column 1: 角色卡 / 资产卡 -->
+              <div class="pipeline-col">
+                <div class="col-header">
+                  <span>▣ 角色与资产卡</span>
+                  <span id="col-count-assets" class="col-badge">5/25</span>
+                </div>
+                <div id="pipeline-assets-col" class="col-stack"></div>
+              </div>
+
+              <!-- Columns 2 & 3 Paired Rows: 分镜提示词 ↔ 分镜成片 (equal height per shot) -->
+              <div class="pipeline-shots-paired">
+                <div class="pipeline-paired-headers">
+                  <div class="col-header">
+                    <span>≡ 分镜提示词</span>
+                    <span id="col-count-prompts" class="col-badge">8/12</span>
+                  </div>
+                  <div class="col-header">
+                    <span>▶ 分镜成片</span>
+                    <span id="col-count-videos" class="col-badge">8/12</span>
+                  </div>
+                </div>
+                <div id="pipeline-shot-rows" class="pipeline-shot-rows"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- MODE 4: 分镜视频拼接 -->
+        <section id="view-splice" class="mode-view" hidden>
+          <div class="splice-layout">
+            <div class="splice-player-wrap">
+              <div class="splice-monitor">
+                <video id="splice-video" playsinline preload="metadata"></video>
+                <div id="splice-shot-badge" class="splice-badge">分镜 #1 / 4 · 00:00 - 00:04</div>
+                <div id="splice-subtitle" class="splice-subtitle"></div>
+              </div>
+              <div class="splice-controls">
+                <div class="splice-transport">
+                  <button id="btn-splice-prev" class="subtle-btn" type="button">⏮ 上一镜</button>
+                  <button id="btn-splice-play" class="gold-cta-btn" type="button">▶ 连播整集成片</button>
+                  <button id="btn-splice-next" class="subtle-btn" type="button">下一镜 ⏭</button>
+                </div>
+                <div class="splice-meta">
+                  <span id="splice-total-time" class="meta-chip">总时长 00:16 · 4 镜</span>
+                  <button id="btn-splice-export" class="primary-blue-btn" type="button">⬇ 一键导出拼接成片</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="splice-timeline-box">
+              <div class="timeline-track-row">
+                <div class="track-label">🎬 视频轨 V1</div>
+                <div id="splice-video-track" class="track-clips"></div>
+              </div>
+              <div class="timeline-track-row">
+                <div class="track-label">🎙 旁白轨 A1</div>
+                <div class="track-audio-bar">
+                  <div class="audio-wave-block">林深悬疑独白 + 雨夜环境音 · 00:00 - 00:16</div>
+                </div>
+              </div>
+              <div class="timeline-track-row">
+                <div class="track-label">💬 字幕轨 T1</div>
+                <div id="splice-sub-track" class="track-subs"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="studio-toast" class="studio-toast" hidden></div>
+  </div>
+  <div id="demo-cursor"></div>
+  <script src="./capture-bridge.js"></script>
+  <script src="./studio.js"></script>
+</body>
+</html>

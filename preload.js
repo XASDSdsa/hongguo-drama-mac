@@ -300,4 +300,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('download-queue-changed', listener);
     return () => ipcRenderer.removeListener('download-queue-changed', listener);
   },
+
+  // 视频处理：剧集文件夹反推 AI资产图 + 操作视频 + 每集分镜截图
+  videoStudioSelectFolder: () => ipcRenderer.invoke('video-studio-select-folder'),
+  videoStudioStart: (payload) => ipcRenderer.invoke('video-studio-start', payload),
+  videoStudioCancel: () => ipcRenderer.invoke('video-studio-cancel'),
+  videoStudioOpenPath: (targetPath) => ipcRenderer.invoke('video-studio-open-path', targetPath),
+  onVideoStudioProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('video-studio-progress', listener);
+    return () => ipcRenderer.removeListener('video-studio-progress', listener);
+  },
 });
