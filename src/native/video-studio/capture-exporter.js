@@ -75,6 +75,7 @@ async function recordWalkthroughVideo({ win, ffmpegPath, outMp4Path, episodes, o
     ],
     { stdio: ['pipe', 'ignore', 'ignore'] },
   );
+  ffmpegProc.stdin?.on('error', () => {});
 
   let lastFrameBuf = null;
   let recording = true;

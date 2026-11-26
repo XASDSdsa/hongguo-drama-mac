@@ -9,7 +9,7 @@ const obfuscator = require('javascript-obfuscator');
 const root = path.join(__dirname, '..');
 // These functions are serialized into another JS realm; they must have no build-time closures.
 const SERIALIZED_REPORT_FILES = new Set(['src/native/cost-report/png.js', 'src/native/cost-report/page-look.js', 'src/native/cost-report/font-check.js']);
-const shouldObfuscate = name => !name.startsWith('dist-react/') && !SERIALIZED_REPORT_FILES.has(name);
+const shouldObfuscate = name => !name.startsWith('dist-react/') && !name.startsWith('src/native/video-studio/studio/') && !SERIALIZED_REPORT_FILES.has(name);
 const sha = data => createHash('sha256').update(data).digest('hex');
 function transform(source, name) {
   return Buffer.from(obfuscator.obfuscate(source.toString(), {

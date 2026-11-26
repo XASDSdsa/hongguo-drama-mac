@@ -3730,20 +3730,29 @@ async function startQuchongBatch(payload = {}) {
 ipcMain.handle('quchong-start', (_event, payload) => startQuchongBatch(payload));
 
 // ===== 视频处理：选择剧文件夹 → 勾选集数（默认4集）→ AI反推资产图 + 录制操作视频 + 每集分镜截图 =====
-const { fork: forkVideoStudio } = require('child_process');
-const videoStudioScanner = require('./src/native/video-studio/folder-scanner');
-const videoStudioEngine = require('./src/native/video-studio/reverse-engine');
-const videoStudioExporter = require('./src/native/video-studio/capture-exporter');
+let _videoStudioDeps = null;
+function getVideoStudioDeps() {
+  if (!_videoStudioDeps) {
+    _videoStudioDeps = {
+      scanner: require('./src/native/video-studio/folder-scanner'),
+      engine: require('./src/native/video-studio/reverse-engine'),
+      exporter: require('./src/native/video-studio/capture-exporter'),
+    };
+  }
+  return _videoStudioDeps;
+}
 
 let videoStudioAbort = null;
 let videoStudioWorker = null;
 
 function runReverseInWorker(options, onProgress, signal) {
   return new Promise((resolve, reject) => {
+    const { utilityProcess } = require('electron');
     const workerPath = path.join(__dirname, 'src/native/video-studio/reverse-worker.js');
-    const child = forkVideoStudio(workerPath, [], {
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    // 必须用 utilityProcess.fork：打包版启用了 runAsNode=false fuse，child_process.fork + ELECTRON_RUN_AS_NODE 会失效
+    const child = utilityProcess.fork(workerPath, [], {
+      stdio: 'ignore',
+      serviceName: 'video-studio-reverse-worker',
     });
     videoStudioWorker = child;
     let settled = false;
@@ -3753,9 +3762,9 @@ function runReverseInWorker(options, onProgress, signal) {
       if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     };
     const onAbort = () => {
-      try { child.send({ type: 'cancel' }); } catch {}
+      try { child.postMessage({ type: 'cancel' }); } catch {}
       setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch {}
+        try { child.kill(); } catch {}
       }, 200);
       if (!settled) {
         settled = true;
@@ -3779,13 +3788,6 @@ function runReverseInWorker(options, onProgress, signal) {
         reject(new Error(msg.error || '视频反推失败'));
       }
     });
-    child.on('error', (err) => {
-      if (!settled) {
-        settled = true;
-        cleanup();
-        reject(err);
-      }
-    });
     child.on('exit', (code) => {
       if (!settled) {
         settled = true;
@@ -3794,7 +3796,7 @@ function runReverseInWorker(options, onProgress, signal) {
       }
     });
 
-    child.send({ type: 'start', options });
+    child.postMessage({ type: 'start', options });
   });
 }
 
@@ -3805,6 +3807,7 @@ ipcMain.handle('video-studio-select-folder', async () => {
       properties: ['openDirectory'],
     });
     if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const { scanner: videoStudioScanner } = getVideoStudioDeps();
     const scanned = videoStudioScanner.scanDramaFolder(res.filePaths[0]);
     if (!scanned.episodes.length) {
       return { success: false, error: '该文件夹下未找到任何视频文件（.mp4/.mov/.mkv）' };
@@ -3843,6 +3846,7 @@ ipcMain.handle('video-studio-start', async (_event, payload) => {
     return { success: false, error: '请至少勾选 1 集视频。' };
   }
 
+  const { scanner: videoStudioScanner, engine: videoStudioEngine, exporter: videoStudioExporter } = getVideoStudioDeps();
   const seriesTitle = videoStudioScanner.sanitizeFilename(payload?.seriesTitle || '未命名短剧');
   const outputDir = path.resolve(String(payload?.outputDir || payload?.folderPath || app.getPath('downloads')));
   const workDir = path.join(app.getPath('userData'), 'video-studio-work', `${Date.now()}`);
