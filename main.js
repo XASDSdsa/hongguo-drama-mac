@@ -3881,9 +3881,14 @@ ipcMain.handle('video-studio-start', async (_event, payload) => {
       videoStudioAbort.signal,
     );
 
+    const allEpisodes = Array.isArray(payload?.allEpisodes) && payload.allEpisodes.length
+      ? payload.allEpisodes
+      : selectedEpisodes;
+
     const outputs = await videoStudioExporter.exportStudioMediaArtifacts({
       ffmpegPath,
       studioResult,
+      allEpisodes,
       outputPaths,
       signal: videoStudioAbort.signal,
       onProgress: emitProgress,
@@ -6657,7 +6662,32 @@ async function fetchCoverImage(url) {
     maxContentLength: 15 * 1024 * 1024,
     headers: { 'User-Agent': hongguo.UA },
   });
-  return Buffer.from(response.data);
+  const buf = Buffer.from(response.data);
+  // 红果 openhongguo/App 接口返回的原剧海报常为 HEIC/HEIF/AVIF（ISO BMFF ftyp 头），
+  // Electron <img> 与 series-info.js 只认 JPG/PNG/WebP；自动用内置 FFmpeg 转为高质量 JPG。
+  if (buf.length >= 12 && buf.subarray(4, 8).toString('latin1') === 'ftyp') {
+    const ffmpegPath = resolveFfmpeg('ffmpeg');
+    if (ffmpegPath) {
+      const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cover-heic-'));
+      try {
+        const src = path.join(tmpDir, 'cover.heic');
+        const dst = path.join(tmpDir, 'cover.jpg');
+        await fsp.writeFile(src, buf);
+        await new Promise((resolve, reject) => {
+          require('node:child_process').execFile(
+            ffmpegPath,
+            ['-y', '-i', src, '-frames:v', '1', '-q:v', '2', dst],
+            { timeout: 15000, windowsHide: true },
+            (err) => (err ? reject(err) : resolve()),
+          );
+        });
+        return await fsp.readFile(dst);
+      } finally {
+        await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  }
+  return buf;
 }
 
 /** 把来源平台的海报和简介存进剧文件夹（已有的不覆盖），失败只记日志，不影响下载。 */
@@ -6671,7 +6701,7 @@ function writeSeriesInfoFiles(seriesId, dir, coverHint) {
   return seriesInfo
     .saveSeriesInfo({
       dir: target,
-      cover: coverHint || entry?.cover || '',
+      cover: entry?.cover || coverHint || '',
       synopsis: entry?.synopsis || '',
       fetchImage: fetchCoverImage,
       facts: seriesFacts(target),

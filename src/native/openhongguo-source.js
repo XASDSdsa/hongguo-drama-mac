@@ -283,7 +283,7 @@ function createOpenhongguoSource({
         title: item.title || '',
         series_id: sid,
         series_title: series.title || '未命名短剧',
-        cover: safeCoverUrl(item.cover_url) || seriesCover,
+        cover: seriesCover || safeCoverUrl(item.cover_url),
         content_type: contentType,
         web_available: null,
         locked: item.playable === false,

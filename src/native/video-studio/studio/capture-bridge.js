@@ -137,7 +137,7 @@
           {
             id: seriesId,
             title: payload.seriesTitle,
-            activeEpisodeId: payload.episodes[0]?.id || 'ep-1',
+            activeEpisodeId: payload.activeEpisodeId || payload.episodes[0]?.id || 'ep-1',
             sharedAssets: (payload.sharedAssets || []).map((a) => ({
               ...a,
               image: a.imageUrl || a.image,
@@ -172,7 +172,10 @@
     },
     selectEpisode(i) {
       const btns = document.querySelectorAll('#episode-list .ep-item');
-      if (btns[i]) btns[i].click();
+      if (btns[i]) {
+        btns[i].scrollIntoView({ block: 'nearest' });
+        btns[i].click();
+      }
       setTimeout(renderEmbeddedDag, 80);
     },
     clickFilter(cat) {
@@ -197,6 +200,7 @@
       const btns = document.querySelectorAll('#episode-list .ep-item');
       const el = btns[i];
       if (!el) return { x: 105, y: 180 + i * 40 };
+      el.scrollIntoView({ block: 'nearest' });
       const r = el.getBoundingClientRect();
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     },

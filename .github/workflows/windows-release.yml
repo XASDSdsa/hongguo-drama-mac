@@ -893,7 +893,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '「视频处理」新增自动导出《剧名节点画布.png》静态高清截图，与 AI 资产图、操作视频及每集分镜截图一起一键输出并支持在结果列表直接查看。'
+      UPDATE_RELEASE_NOTES: '修复红果下载时误存单集视频帧及 HEIC 原剧海报无法保存的问题（优先保存官方主海报并自动转高清 JPG）；「视频处理」左侧剧集菜单支持展示整个文件夹的全部集数（仅菜单展示，仍按勾选集数处理）。'
       UPDATE_CHECK_SCOPE: license-protection-and-update
     steps:
       - uses: actions/checkout@v5
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 45930606505
+          run-id: 45944873857
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Extract the hash-pinned upstream SDK component only
@@ -972,7 +972,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check imports, report templates and upgrade from 1.2.67
+      - name: Check imports, report templates and upgrade from 1.2.68
         shell: pwsh
         run: |
           node scripts/check-series-library.cjs 'flat MP4'

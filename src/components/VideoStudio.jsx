@@ -98,6 +98,7 @@ export default function VideoStudio({ active }) {
         folderPath,
         seriesTitle: seriesTitle.trim(),
         selectedEpisodes,
+        allEpisodes: episodes.map((e) => ({ number: e.number, label: e.label, fileName: e.fileName })),
         outputDir: outputDir || folderPath,
         arkApiKey: arkApiKey.trim(),
         visionModel: visionModel.trim(),
