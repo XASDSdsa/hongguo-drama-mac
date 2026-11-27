@@ -198,16 +198,22 @@ async function fetchEpisodeListFromWeb(seriesId) {
   const m = html.match(/"vid_list"\s*:\s*\[([^\]]*)\]/);
   if (!m) throw new Error('官网页面未找到分集数据（vid_list）');
 
-  const vids = m[1]
+  const rawList = m[1]
     .split(',')
     .map((s) => s.trim().replace(/^"|"$/g, ''))
-    .filter((s) => /^\d+$/.test(s));
-  if (!vids.length) throw new Error('官网分集列表为空');
+    .filter(Boolean);
+  const vids = rawList.filter((s) => /^\d+$/.test(s));
+  if (!vids.length) throw new Error('官网分集列表为空或已混淆为预览令牌');
 
   const seriesTitle = pickJsonString(html, 'series_name') || '未命名短剧';
   const cover = pickJsonString(html, 'series_cover');
   const accessible = html.match(/"accessible_episode_cnt"\s*:\s*(\d+)/);
   const webAccessibleEpisodes = accessible ? Math.min(Number(accessible[1]), vids.length) : null;
+  const epCntMatch = html.match(/"episode_cnt"\s*:\s*(\d+)/);
+  const episodeCount = epCntMatch ? Number(epCntMatch[1]) : null;
+  if (episodeCount && vids.length < episodeCount) {
+    throw new Error(`官网页面仅返回 ${vids.length}/${episodeCount} 集预览，不是完整分集`);
+  }
 
   const episodes = vids.map((vid, i) => ({
     vid,
@@ -224,6 +230,8 @@ async function fetchEpisodeListFromWeb(seriesId) {
     series_title: seriesTitle,
     cover: cover || (episodes[0] && episodes[0].cover) || '',
     total: episodes.length,
+    episode_count: episodeCount,
+    complete: episodeCount == null || episodes.length >= episodeCount,
     web_accessible_episodes: webAccessibleEpisodes,
     synopsis: pickSynopsisFromText(html),
     episodes,
@@ -309,16 +317,49 @@ async function fetchEpisodeList(seriesId, options = {}) {
   // 但已经完成的 60 秒缓存必须先失效，避免显示旧总集数。
   const cacheKey = `episodes:${seriesId}`;
   if (options?.forceRefresh) responseCache.delete(cacheKey);
-  return cachedRequest(cacheKey, 60000, () => fetchEpisodeListFresh(seriesId));
+  return cachedRequest(cacheKey, 60000, () => fetchEpisodeListFresh(seriesId, options));
 }
 
-async function fetchEpisodeListFresh(seriesId) {
-  let webError;
+const OPENHONGGUO_LIST_TIMEOUT_MS = 9000;
+const APP_DETAIL_LIST_TIMEOUT_MS = 9000;
+
+async function fetchEpisodeListFresh(seriesId, options = {}) {
+  const errors = [];
+  // 1. 优先 openhongguo getSeriesBatch（v8.5 恢复完整数字分集，规避官网 3 集预览与 v1_ 混淆）
+  try {
+    const ohg = require('./openhongguo-source');
+    if (typeof ohg?.fetchEpisodeList === 'function') {
+      return await ohg.fetchEpisodeList(seriesId, {
+        content_type: options?.content_type || options?.contentType,
+        signal: AbortSignal.timeout(OPENHONGGUO_LIST_TIMEOUT_MS),
+      });
+    }
+  } catch (error) {
+    errors.push(`openhongguo（${error?.message || '暂不可用'}）`);
+  }
+
+  // 2. 次选签名 App video_detail/v1（保留 64 位整数精度）
+  try {
+    const appSource = require('./app-source');
+    if (typeof appSource?.fetchAppEpisodeList === 'function') {
+      return await appSource.fetchAppEpisodeList(seriesId, {
+        deadline: Date.now() + APP_DETAIL_LIST_TIMEOUT_MS,
+        content_type: options?.content_type || options?.contentType,
+        signal: AbortSignal.timeout(APP_DETAIL_LIST_TIMEOUT_MS),
+      });
+    }
+  } catch (error) {
+    errors.push(`App详情（${error?.message || '暂不可用'}）`);
+  }
+
+  // 3. 官网网页数据源（自动拒绝仅 3 集预览或 v1_ 混淆列表）
   try {
     return await fetchEpisodeListFromWeb(seriesId);
   } catch (error) {
-    webError = error;
+    errors.push(`官网数据源（${error?.message || '暂不可用'}）`);
   }
+
+  // 4. 旧 preload 备用接口兜底
   const body = {
     biz_param: DETAIL_BIZ_PARAM,
     dr_scene: 'preload',
@@ -328,7 +369,8 @@ async function fetchEpisodeListFresh(seriesId) {
   try {
     j = await apiCall('/novel/player/multi_video_detail/preload/v1', body);
   } catch (e) {
-    throw new Error(`获取分集失败：官网数据源（${webError.message}），备用接口（${e.message}）`);
+    errors.push(`备用接口（${e.message}）`);
+    throw new Error(`获取分集失败：${errors.join('，')}`);
   }
   if (!j || j.code !== 0) {
     throw new Error('detail API 失败: ' + JSON.stringify(j || {}).slice(0, 200));

@@ -88,7 +88,7 @@ async function main() {
   execFileSync(nsis.path, ['/V2', `/DVERSION=${pkg.version}`, `/DAPP_GUID=${guid}`, `/DOUTPUT=${installer}`, `/DPAYLOAD=${payload}`, path.join(__dirname, 'app-patch/install.nsi')],
     { env: { ...process.env, ...nsis.env }, stdio: 'inherit' });
   const bytes = fs.statSync(installer).size;
-  const carriesVerifiedSdk = ['1.2.60', '1.2.61', '1.2.62', '1.2.63', '1.2.64', '1.2.65', '1.2.66'].includes(pkg.version);
+  const carriesVerifiedSdk = ['1.2.60', '1.2.61', '1.2.62', '1.2.63', '1.2.64', '1.2.65', '1.2.66', '1.2.67'].includes(pkg.version);
   if (carriesVerifiedSdk) assert.equal(hash(fs.readFileSync(path.join(root,'src/native/sdk-bin/win32-x64.bin'))), 'e928cccef53c6c146f99e490f6d63970a6d55791abd8095ea961e0fc3f839b8d', 'Only the verified SDK may enlarge this application patch');
   const limitMiB = carriesVerifiedSdk ? 40 : 25;
   assert.ok(bytes < limitMiB * 1024 * 1024, `Application update exceeds ${limitMiB} MiB (${bytes}); refuse full-package fallback`);

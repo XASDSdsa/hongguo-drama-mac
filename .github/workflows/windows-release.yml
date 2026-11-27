@@ -893,7 +893,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      UPDATE_RELEASE_NOTES: '左侧导航新增「视频处理」功能：选择剧集文件夹并勾选集数后，自动并发反推全剧共享 AI 资产图（原片帧图生图+透明背景道具）、逐镜中文动态提示词，并自动导出《剧名AI资产图.png》《剧名操作视频.mp4》与每集《剧名第N集.png》。'
+      UPDATE_RELEASE_NOTES: '同步红果上游 v8.5 下载修复（恢复完整数字分集列表，兼容双栈 Fake-IP 代理，升级内置下载 SDK 至 v8.5，坚持 720p/1080p 高清下载不降级 360p）；完善成本配置报告打印扫描件细节（红章实体压印微孔、高亮彩打柔化与扫边阴影）。'
       UPDATE_CHECK_SCOPE: license-protection-and-update
     steps:
       - uses: actions/checkout@v5
@@ -913,7 +913,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: windows-in-app-update-release
-          run-id: 45660105068
+          run-id: 45834125874
           github-token: ${{ github.token }}
           path: dist/previous-patch
       - name: Extract the hash-pinned upstream SDK component only
@@ -923,10 +923,10 @@ jobs:
         run: |
           $sdkDir = Join-Path $env:RUNNER_TEMP 'hongguo-sdk-upstream'
           New-Item -ItemType Directory -Path $sdkDir -Force | Out-Null
-          gh release download v8.3 --repo jackotom/hongguo-drama --pattern 'hongguo-downloader-8.3-win-x64.zip' --dir $sdkDir
+          gh release download v8.5 --repo jackotom/hongguo-drama --pattern 'hongguo-downloader-8.5-win-x64.zip' --dir $sdkDir
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $zip = Join-Path $sdkDir 'hongguo-downloader-8.3-win-x64.zip'
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne '27aeb24624934457a240c7763be830af80611b075631475a562302ddaa0fd06f') { throw 'Upstream release bytes changed' }
+          $zip = Join-Path $sdkDir 'hongguo-downloader-8.5-win-x64.zip'
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne 'df4369c06c149716e29b4747f8ef20021e7e9d3cf216d8a102e851eaeafc83a7') { throw 'Upstream release bytes changed' }
           & 7z x -y -bd $zip "-o$sdkDir" | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $helper = Get-ChildItem $sdkDir -Recurse -Filter hongguo-sdk-playback.exe | Select-Object -First 1
@@ -939,7 +939,7 @@ jobs:
           New-Item -ItemType Directory -Force src/native/sdk-bin | Out-Null
           Copy-Item $helper.FullName src/native/sdk-bin/win32-x64.bin
           $sha = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLower()
-          @{sha256=$sha;upstream='jackotom/hongguo-drama v8.3';license='GPL-3.0-only'} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM src/native/sdk-bin/win32-x64.bin.json
+          @{sha256=$sha;upstream='jackotom/hongguo-drama v8.5';license='GPL-3.0-only'} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM src/native/sdk-bin/win32-x64.bin.json
           Write-Output "Verified SDK component: $($helper.Length) bytes, SHA256 $sha"
       - name: Build the verified application patch
         shell: pwsh
@@ -972,7 +972,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/make-app-patch.cjs dist/patch-base dist/code-update dist/app-patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check imports, report templates and upgrade from 1.2.65
+      - name: Check imports, report templates and upgrade from 1.2.66
         shell: pwsh
         run: |
           node scripts/check-series-library.cjs 'flat MP4'

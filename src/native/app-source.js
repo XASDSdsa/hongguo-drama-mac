@@ -13,6 +13,7 @@ const { registerPlaybackDevice } = require('./playback-device');
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
 const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
+const VIDEO_DETAIL_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_detail/v1/';
 const PRELOAD_API = 'https://reading.snssdk.com/novel/player/multi_video_model/preload/v1';
 const PLAYER_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/player/v1';
 const MODEL_APIS = ['https://api5-normal-sinfonlinea.fqnovel.com/novel/player/video_model/v1/',
@@ -921,7 +922,9 @@ async function requestJson(url, options, deadline, signal) {
     if (typeof response.data === 'string' && !response.data.trim()) {
       throw Object.assign(new Error('App 接口返回空响应'), { code: 'EMPTY_RESPONSE', status: 200 });
     }
-    const parsed = typeof response.data === 'string' ? jsonBody(response.data) : response.data;
+    const parsed = typeof response.data === 'string'
+      ? jsonBody(options.preserveLargeIntegerFields ? preserveLargeJsonIntegers(response.data, options.preserveLargeIntegerFields) : response.data)
+      : response.data;
     if (!parsed || typeof parsed !== 'object') {
       throw Object.assign(new Error('App 接口未返回有效数据'), { code: 'INVALID_RESPONSE' });
     }
@@ -1091,9 +1094,125 @@ function parseAppPlayModel(info, userAgent, requireEncryptionMetadata = false, m
   };
 }
 
+function preserveLargeJsonIntegers(text, fields) {
+  if (typeof text !== 'string' || !Array.isArray(fields) || !fields.length) return text;
+  const escaped = fields.map((f) => String(f).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return text.replace(new RegExp(`("(?:${escaped})"\\s*:\\s*)(\\d{16,30})\\b`, 'g'), '$1"$2"');
+}
+
+function videoDetailRequest(identity, seriesId) {
+  const payload = JSON.stringify({
+    series_id: String(seriesId),
+    biz_param: {
+      caller_scene: 'single_col',
+      detail_page_version: 0,
+      from_video_id: '',
+      need_all_video_definition: false,
+      need_mp4_align: false,
+      source: 4,
+      video_id_type: 1,
+    },
+  });
+  const body = gzipSync(Buffer.from(payload));
+  const signed = signPlaybackV5({
+    base: VIDEO_DETAIL_API,
+    values: {
+      aid: '8662', app_name: 'novelread', version_code: '74532', version_name: '7.4.5.32',
+      update_version_code: '74532', manifest_version_code: '74532', os: 'android', ssmix: 'a',
+      channel: 'update_64', device_platform: 'android', device_type: '25053RT47C',
+      device_brand: 'Redmi', os_version: '16', os_api: '36', ac: 'wifi', language: 'zh',
+      host_abi: 'arm64-v8a', iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
+    },
+    body,
+    now: Date.now(),
+    field21: 312,
+  });
+  return {
+    ...signed,
+    body,
+    method: 'POST',
+    headers: {
+      ...signed.headers,
+      'User-Agent': 'okhttp/4.12.0',
+      Accept: 'application/json',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Encoding': 'gzip',
+    },
+  };
+}
+
+function safeDetailCover(value) {
+  const url = str(value).trim();
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
+function detailContentType(value, fallback = '1004') {
+  const normalized = String(value ?? '');
+  return ['1001', '1004'].includes(normalized) ? normalized : fallback;
+}
+
+async function fetchAppEpisodeList(seriesId, options = {}) {
+  const sid = String(seriesId || '');
+  if (!/^\d{1,30}$/.test(sid)) throw Object.assign(new Error('红果剧集编号无效'), { code: 'INVALID_OPTIONS' });
+  const deadline = Number(options.deadline) || (Date.now() + 9000);
+  if (deadline <= Date.now()) throw Object.assign(new Error('App 详情请求超时'), { code: 'ETIMEDOUT' });
+  const signal = options.signal || AbortSignal.timeout(Math.max(1000, deadline - Date.now()));
+  const identity = await registerPlaybackDevice(requestJson);
+  const req = videoDetailRequest(identity, sid);
+  const response = await requestJson(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    data: req.body,
+    maxContentLength: 8 * 1024 * 1024,
+    preserveLargeIntegerFields: ['series_id', 'vid'],
+  }, deadline, signal);
+  if (!response || Number(response.code) !== 0) {
+    throw Object.assign(new Error('App 详情接口拒绝请求'), { code: 'BUSINESS_REJECTED' });
+  }
+  const vd = response.data?.video_data;
+  if (!vd || String(vd.series_id || '') !== sid) {
+    throw Object.assign(new Error('App 详情返回的剧集与请求不一致'), { code: 'INVALID_RESPONSE' });
+  }
+  const rows = Array.isArray(vd.video_list) ? vd.video_list : [];
+  if (!rows.length) throw Object.assign(new Error('App 详情分集列表为空'), { code: 'INVALID_RESPONSE' });
+  const requestedType = detailContentType(options.content_type || options.contentType, '');
+  const seriesType = detailContentType(vd.content_type, '');
+  const seriesTitle = typeof vd.series_title === 'string' && vd.series_title ? vd.series_title : '未命名短剧';
+  const seriesCover = safeDetailCover(vd.series_cover || vd.cover_url);
+  const episodes = rows.map((item, index) => {
+    const vid = String(item?.vid || '');
+    if (!/^\d{1,30}$/.test(vid) || (item?.series_id != null && String(item.series_id) !== sid)) {
+      throw Object.assign(new Error('App 详情分集数据异常'), { code: 'INVALID_RESPONSE' });
+    }
+    const contentType = requestedType || detailContentType(item?.content_type, seriesType || '1004');
+    return {
+      vid,
+      vid_index: Number(item.vid_index) > 0 ? Number(item.vid_index) : index + 1,
+      title: typeof item.title === 'string' ? item.title : '',
+      series_id: sid,
+      series_title: seriesTitle,
+      cover: safeDetailCover(item.cover_url) || seriesCover,
+      content_type: contentType,
+      web_available: null,
+      locked: item.playable === false || item.lock_status === 1,
+    };
+  }).sort((a, b) => a.vid_index - b.vid_index);
+  return {
+    series_id: sid,
+    series_title: seriesTitle,
+    cover: seriesCover || (episodes[0] && episodes[0].cover) || '',
+    synopsis: typeof vd.series_intro === 'string' ? vd.series_intro : (typeof vd.abstract === 'string' ? vd.abstract : ''),
+    content_type: requestedType || seriesType || episodes[0]?.content_type || '1004',
+    total: episodes.length,
+    web_accessible_episodes: null,
+    episodes,
+    source: 'app',
+  };
+}
+
 async function fetchSdkPlayUrl(vid) {
   const result = await require('./sdk-playback').resolveSdkPlayback(String(vid));
   if (!result) return null;
   return { ...parseAppPlayModel(result.model, result.userAgent, false), sourceProvider:'sdk', sourceRoute:'sdk' };
 }
-module.exports = { fetchAppPlayUrl, fetchSdkPlayUrl };
+module.exports = { fetchAppPlayUrl, fetchAppEpisodeList, fetchSdkPlayUrl };

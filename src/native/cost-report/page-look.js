@@ -75,8 +75,12 @@ function finishReportPage(context, width, height, textBoxes, variation = 0, text
 
   // Grade the page after the geometry so the paper texture runs to every edge.
   const output = new Uint8ClampedArray(pixels);
+  const shadowRight = (variation & 2) !== 0;
+  const edgeBand = Math.max(8, Math.round(width * 0.006));
+  const topBand = Math.max(8, Math.round(height * 0.004));
   for (let y = 0; y < height; y++) {
     const v = y / height;
+    const topEdge = y < topBand ? (1 - y / topBand) * 9.0 : 0;
     for (let x = 0; x < width; x++) {
       const index = y * width + x;
       const at = index * 4;
@@ -85,12 +89,36 @@ function finishReportPage(context, width, height, textBoxes, variation = 0, text
       const b = pixels[at + 2];
       const low = Math.min(r, g, b);
       const chroma = Math.max(r, g, b) - low;
+      const sideDist = shadowRight ? width - 1 - x : x;
+      const sideEdge = sideDist < edgeBand ? (1 - sideDist / edgeBand) * 10.0 : 0;
+      const edgeShade = topEdge + sideEdge;
       if (low > 228 && chroma < 12) {
         const strength = 0.86 + 0.29 * v + 0.26 * mottling(x, y, 235, 47);
         const grain = 9.5 * grainAt(x, y, 101) + 7.5 * mottling(x, y, 3, 83) + 4.8 * mottling(x, y, 15, 59);
-        const shade = Math.max(0, 7.5 + 2.1 * v + 0.9 * x / width + 3.4 * mottling(x, y, 135, 19) - strength * grain);
+        const shade = Math.max(0, 7.5 + 2.1 * v + 0.9 * x / width + 3.4 * mottling(x, y, 135, 19) + edgeShade - strength * grain);
         const paper = shade * ((low - 228) / 27) * (1 - chroma / 12);
         for (let c = 0; c < 3; c++) output[at + c] -= paper;
+      } else if (edgeShade > 0) {
+        for (let c = 0; c < 3; c++) output[at + c] -= edgeShade * 0.55;
+      }
+      // Soften overly neon yellow highlighter so it reads like color-laser print + scan on A4 paper.
+      if (r > 185 && g > 175 && b < 145 && r - b > 65 && g - b > 55) {
+        const yellowStrength = Math.min(1, ((r - 185) / 60) * ((g - 175) / 65) * ((145 - b) / 110));
+        const yGrain = 5.5 * grainAt(x, y, 101) + 4.0 * mottling(x, y, 4, 83);
+        output[at] = Math.max(0, Math.min(255, output[at] - yellowStrength * 6 + yGrain));
+        output[at + 1] = Math.max(0, Math.min(255, output[at + 1] - yellowStrength * 16 + yGrain));
+        output[at + 2] = Math.max(0, Math.min(255, output[at + 2] + yellowStrength * 34 + yGrain * 0.6));
+      }
+      // Add natural physical stamp pressure variation and fine paper-fiber ink pores inside red seal ink.
+      if (r > 110 && r - g > 42 && r - b > 34) {
+        const redStrength = Math.min(1, ((r - g) - 42) / 70);
+        const pressure = mottling(x, y, 28, 137) * 26 + mottling(x, y, 9, 149) * 14;
+        const finePore = grainAt(x, y, 163) > 0.36 ? (grainAt(x, y, 163) - 0.36) * 195 : 0;
+        const fiber = mottling(x, y, 3.2, 173) * 14;
+        const lift = Math.max(-8, Math.min(48, pressure + finePore + fiber)) * redStrength;
+        output[at] = Math.max(0, Math.min(255, output[at] + lift * 0.45 - 4 * redStrength));
+        output[at + 1] = Math.max(0, Math.min(255, output[at + 1] + lift * 0.92 + 6 * redStrength));
+        output[at + 2] = Math.max(0, Math.min(255, output[at + 2] + lift * 0.92 + 8 * redStrength));
       }
       // Share the paper grain with neutral ink, including text WPS rasterizes.
       if (low < 200 && chroma < 16) {
