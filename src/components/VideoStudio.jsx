@@ -76,6 +76,7 @@ export default function VideoStudio({ active }) {
     const title = (seriesTitle || '剧名').trim() || '剧名';
     return [
       `${title}AI资产图.png`,
+      `${title}节点画布.png`,
       `${title}操作视频.mp4`,
       ...selectedEpisodes.map((e) => `${title}第${e.number}集.png`),
     ];
@@ -315,6 +316,18 @@ export default function VideoStudio({ active }) {
                 查看
               </button>
             </div>
+            {result.outputs.canvasScreenshot && (
+              <div className="vs-out-item">
+                <span>🕸 节点画布截图</span>
+                <code>{result.outputs.canvasScreenshot}</code>
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => window.electronAPI.videoStudioOpenPath(result.outputs.canvasScreenshot)}
+                >
+                  查看
+                </button>
+              </div>
+            )}
             <div className="vs-out-item">
               <span>🎬 操作查看视频</span>
               <code>{result.outputs.operationVideo}</code>

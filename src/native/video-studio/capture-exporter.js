@@ -211,12 +211,21 @@ async function exportStudioMediaArtifacts({
     await sleep(500);
 
     // 1. Capture <剧名>AI资产图.png
-    onProgress({ stage: 'capture_assets', percent: 76, message: `正在导出「${path.basename(outputPaths.assetScreenshot)}」...` });
+    onProgress({ stage: 'capture_assets', percent: 75, message: `正在导出「${path.basename(outputPaths.assetScreenshot)}」...` });
     await win.webContents.executeJavaScript(`window.__studio.setMode('assets'); window.__studio.scrollAssets(0);`);
     await sleep(450);
     await captureWindowPng(win, outputPaths.assetScreenshot);
 
-    // 2. Capture <剧名>第N集.png for each selected episode (Mode 3 分镜流水线)
+    // 2. Capture <剧名>节点画布.png (Mode 2 centered 4-column DAG canvas)
+    if (outputPaths.canvasScreenshot) {
+      onProgress({ stage: 'capture_canvas', percent: 77, message: `正在导出「${path.basename(outputPaths.canvasScreenshot)}」...` });
+      await win.webContents.executeJavaScript(`window.__studio.selectEpisode(0); window.__studio.setMode('canvas'); window.__studio.toggleOmni(false);`);
+      await win.webContents.executeJavaScript(`window.__studio.waitForImages()`);
+      await sleep(550);
+      await captureWindowPng(win, outputPaths.canvasScreenshot);
+    }
+
+    // 3. Capture <剧名>第N集.png for each selected episode (Mode 3 分镜流水线)
     const epOutputs = [];
     for (let i = 0; i < studioResult.episodes.length; i += 1) {
       const ep = studioResult.episodes[i];
@@ -249,6 +258,7 @@ async function exportStudioMediaArtifacts({
 
     return {
       assetScreenshot: outputPaths.assetScreenshot,
+      canvasScreenshot: outputPaths.canvasScreenshot || null,
       operationVideo: outputPaths.operationVideo,
       episodeScreenshots: epOutputs,
     };

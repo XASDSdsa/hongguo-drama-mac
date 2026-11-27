@@ -142,6 +142,7 @@ function buildOutputPaths(outputDir, seriesTitle, episodeNumbers = []) {
   return {
     outputDir: dir,
     assetScreenshot: path.join(dir, `${safeTitle}AI资产图.png`),
+    canvasScreenshot: path.join(dir, `${safeTitle}节点画布.png`),
     operationVideo: path.join(dir, `${safeTitle}操作视频.mp4`),
     episodeScreenshots: episodeNumbers.map((num) => ({
       number: Number(num),
